@@ -1,0 +1,45 @@
+# LiveKit server — LOCAL DEVELOPMENT / R2 PoC configuration.
+# HTTP/WebSocket signalling binds to loopback only. The RTC TCP/UDP sockets bind to all interfaces
+# (LiveKit behaviour on every OS); Windows Defender Firewall blocks them inbound unless a rule is added.
+# API keys are NOT stored here: they come from LIVEKIT_KEYS (config/dev.local.env, git-ignored).
+# Production settings live in livekit.production.template.yaml and require the network team's approval
+# (documentation/NETWORK_FIREWALL_REQUIREMENTS.md).
+
+port: 7880
+bind_addresses:
+  - 127.0.0.1
+
+rtc:
+  tcp_port: 7881
+  # Single UDP port with ICE/UDP multiplexing (one firewall rule instead of a range).
+  udp_port: 7882
+  use_external_ip: false
+  node_ip: 127.0.0.1
+  # Loopback is excluded from ICE by default; development on one machine needs it.
+  enable_loopback_candidate: true
+  # Pin ICE to loopback. Without this LiveKit advertised every interface (hotspot IPv6, Hyper-V vEthernet)
+  # and browsers picked a public IPv6 path with 1.5–2.4 s RTT spikes. Production must pin to the media NIC.
+  ips:
+    includes:
+      - 127.0.0.1/32
+
+room:
+  empty_timeout: 300
+  departure_timeout: 20
+  # Recordings are produced by the separate OneInsure recorder component (R2), never by the SFU.
+  enabled_codecs:
+    - mime: audio/opus
+    - mime: video/vp8
+    - mime: video/h264
+
+logging:
+  level: info
+  json: false
+
+prometheus:
+  port: 6789
+
+# Webhooks (Phase 4 attendance + room lifecycle) are appended by start-dev.ps1 at start-up, because the block must name
+# the API key, which is kept out of this file. Target: the API's loopback-only development listener
+# (LiveKit:WebhookListenUrl, default http://127.0.0.1:5080/api/v1/webhooks/livekit). Starting the binary directly with
+# --config (as the R2 harness does) runs LiveKit without webhooks.

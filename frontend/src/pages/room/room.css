@@ -1,0 +1,338 @@
+/* ============================================================
+   OneInsure Connect — video meeting room (Phase 4)
+   Dark meeting canvas built on the brand tokens (styles/theme.css). Overrides the LiveKit component
+   theme (@livekit/components-styles, scoped to [data-lk-theme]) so the room reads as part of the product.
+   Loaded only with the lazy room chunk.
+   ============================================================ */
+
+.oic-room[data-lk-theme],
+.oic-room-canvas {
+  --lk-bg: #0b1e31;
+  --lk-bg2: #102a43;
+  --lk-bg3: #17385a;
+  --lk-bg4: #1f4a73;
+  --lk-bg5: #24578a;
+  --lk-fg: #ffffff;
+  --lk-fg2: rgb(255 255 255 / 0.92);
+  --lk-fg3: rgb(255 255 255 / 0.84);
+  --lk-fg4: rgb(255 255 255 / 0.72);
+  --lk-fg5: rgb(255 255 255 / 0.6);
+  --lk-border-color: rgb(255 255 255 / 0.09);
+  --lk-accent-fg: #ffffff;
+  --lk-accent-bg: #2878e5;
+  --lk-accent2: #1f6fd0;
+  --lk-accent3: #1769aa;
+  --lk-accent4: #17385a;
+  --lk-danger: #dc2626;
+  --lk-danger2: #e24343;
+  --lk-danger3: #e85e5e;
+  --lk-danger4: #ee7a7a;
+  --lk-success: #16a34a;
+  --lk-connection-excellent: #22c55e;
+  --lk-connection-good: #f59e0b;
+  --lk-connection-poor: #ef4444;
+  --lk-font-family: "Plus Jakarta Sans Variable", "Segoe UI", system-ui, sans-serif;
+  --lk-font-size: 14px;
+  --lk-line-height: 1.5;
+  --lk-border-radius: 14px;
+  --lk-grid-gap: 10px;
+  --lk-speaking-indicator-width: 2.5px;
+  --lk-control-bg: rgb(255 255 255 / 0.08);
+  --lk-control-hover-bg: rgb(255 255 255 / 0.14);
+  --lk-control-active-bg: rgb(255 255 255 / 0.18);
+  --lk-control-active-hover-bg: rgb(255 255 255 / 0.22);
+  color: #fff;
+  color-scheme: dark;
+  background:
+    radial-gradient(1200px 700px at 88% -12%, rgb(40 120 229 / 0.2), transparent 60%),
+    radial-gradient(900px 620px at -12% 112%, rgb(32 196 216 / 0.12), transparent 55%),
+    #0b1e31;
+}
+
+/* LiveKit's stylesheet is unlayered, so it beats Tailwind utilities (layered) on its own elements: position the
+   room container here instead of with utility classes. */
+.oic-room[data-lk-theme].lk-room-container {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  width: auto;
+  height: auto;
+  overflow: hidden;
+}
+.oic-room .lk-grid-layout-wrapper,
+.oic-room .lk-focus-layout-wrapper {
+  height: 100%;
+}
+
+/* ---- Tiles ---------------------------------------------------------------- */
+
+.oic-room .lk-participant-tile {
+  position: relative;
+  overflow: hidden;
+  border-radius: 14px;
+  background: linear-gradient(160deg, #17385a 0%, #102a43 70%);
+  border: 1px solid rgb(255 255 255 / 0.06);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.22);
+  padding: 0;
+}
+.oic-room .lk-participant-tile::after {
+  border-radius: 14px;
+}
+.oic-room .lk-participant-tile[data-lk-speaking="true"]:not([data-lk-source="screen_share"])::after {
+  box-shadow: inset 0 0 0 var(--lk-speaking-indicator-width) #20c4d8, 0 0 24px rgb(32 196 216 / 0.25);
+}
+.oic-room .lk-participant-media-video {
+  border-radius: 14px;
+  background: #0b1e31;
+}
+.oic-room .lk-participant-media-video[data-lk-source="screen_share"] {
+  object-fit: contain;
+}
+
+.oic-tile-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.oic-tile-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(56px, 22%, 112px);
+  aspect-ratio: 1;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, #1769aa, #2878e5 60%, #20c4d8);
+  color: #fff;
+  font-weight: 700;
+  font-size: clamp(18px, 3.2vw, 34px);
+  letter-spacing: 0.02em;
+  box-shadow: 0 0 0 6px rgb(255 255 255 / 0.05), 0 10px 30px rgb(0 0 0 / 0.3);
+}
+.oic-tile-meta {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.oic-tile-chip {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 9999px;
+  background: rgb(11 30 49 / 0.72);
+  backdrop-filter: blur(8px);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #fff;
+}
+.oic-tile-chip .lk-participant-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.oic-tile-hand {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 9999px;
+  background: #f59e0b;
+  color: #0b1e31;
+  font-size: 12.5px;
+  font-weight: 700;
+  box-shadow: 0 6px 18px rgb(245 158 11 / 0.35);
+  animation: oic-fade-in 240ms var(--ease-out) both;
+}
+.oic-room .lk-connection-quality {
+  width: 22px;
+  height: 22px;
+}
+
+/* ---- Layouts ---------------------------------------------------------------- */
+
+.oic-room .lk-grid-layout {
+  height: 100%;
+  padding: 0;
+}
+.oic-room .lk-focus-layout {
+  height: 100%;
+  gap: 10px;
+}
+.oic-room .lk-carousel {
+  gap: 10px;
+}
+.oic-room .lk-pagination-control {
+  background: rgb(11 30 49 / 0.8);
+  border-color: rgb(255 255 255 / 0.12);
+}
+
+/* ---- Controls --------------------------------------------------------------- */
+
+.oic-ctl {
+  position: relative;
+  display: inline-flex;
+  height: 48px;
+  min-width: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 0.08);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background-color 150ms var(--ease-out), transform 150ms var(--ease-out), box-shadow 150ms var(--ease-out);
+}
+.oic-ctl:hover {
+  background: rgb(255 255 255 / 0.15);
+}
+.oic-ctl:active {
+  transform: scale(0.97);
+}
+.oic-ctl:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.oic-ctl[data-off="true"] {
+  background: #dc2626;
+}
+.oic-ctl[data-off="true"]:hover {
+  background: #b91c1c;
+}
+.oic-ctl[data-on="true"] {
+  background: #2878e5;
+  box-shadow: 0 6px 18px rgb(40 120 229 / 0.35);
+}
+.oic-ctl[data-on="true"]:hover {
+  background: #1f6fd0;
+}
+.oic-ctl[data-variant="leave"] {
+  background: #dc2626;
+  padding: 0 18px;
+}
+.oic-ctl[data-variant="leave"]:hover {
+  background: #b91c1c;
+}
+.oic-ctl-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: flex;
+  height: 19px;
+  min-width: 19px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: 9999px;
+  background: #f59e0b;
+  color: #0b1e31;
+  font-size: 10.5px;
+  font-weight: 800;
+  box-shadow: 0 0 0 2px #0b1e31;
+}
+.oic-room .lk-start-audio-button {
+  background: #2878e5;
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+/* ---- Panels ---------------------------------------------------------------- */
+
+.oic-panel {
+  background: rgb(16 42 67 / 0.88);
+  border: 1px solid rgb(255 255 255 / 0.07);
+  backdrop-filter: blur(14px);
+}
+.oic-input {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgb(255 255 255 / 0.12);
+  background: rgb(11 30 49 / 0.7);
+  color: #fff;
+  padding: 10px 12px;
+  font-size: 13.5px;
+  outline: none;
+  transition: border-color 150ms, box-shadow 150ms;
+}
+.oic-input::placeholder {
+  color: rgb(255 255 255 / 0.45);
+}
+.oic-input:focus {
+  border-color: #2878e5;
+  box-shadow: 0 0 0 3px rgb(40 120 229 / 0.35);
+}
+.oic-select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, rgb(255 255 255 / 0.7) 50%), linear-gradient(135deg, rgb(255 255 255 / 0.7) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 55%, calc(100% - 13px) 55%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 34px;
+}
+.oic-select option {
+  background: #102a43;
+  color: #fff;
+}
+.oic-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.2) transparent;
+}
+
+/* ---- Waiting room animation ------------------------------------------------- */
+
+.oic-pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: rgb(32 196 216 / 0.35);
+  animation: oic-pulse-ring 2.6s var(--ease-out) infinite;
+}
+.oic-pulse.delay {
+  animation-delay: 1.3s;
+}
+
+/* ---- Phones and tablets (Android, iOS) ------------------------------------------------------------------------------
+   viewport-fit=cover (index.html) lets the room use the whole screen; the safe-area insets keep the header and the
+   toolbar clear of the notch, the rounded corners and the iOS home indicator. */
+.oic-room[data-lk-theme].lk-room-container {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+}
+.oic-controls {
+  padding-top: 10px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+}
+@media (min-width: 640px) {
+  .oic-controls {
+    padding-top: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+.oic-controls[data-compact] .oic-ctl {
+  height: 46px;
+  min-width: 46px;
+  padding: 0 11px;
+}
+.oic-sheet {
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+}
+/* Touch devices: no hover-only affordances, no grey tap flash, no double-tap zoom delay on controls. */
+.oic-ctl {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}

@@ -1,0 +1,18 @@
+import { ensureLiveKit, joinParticipant, startRecorder, rooms, sleep, log, closeParticipantBrowser, analyseMp4 } from './lib.mjs'
+await ensureLiveKit()
+const room = `smoke-${Date.now().toString(36)}`
+await rooms.createRoom({ name: room, emptyTimeout: 60 })
+const a = await joinParticipant(room, 0, 'Ananya Rao')
+const b = await joinParticipant(room, 1, 'Customer Test')
+log('participants joined')
+const rec = startRecorder({ room, title: 'Smoke test' })
+log('recorder started?', await rec.waitStarted())
+await sleep(30_000)
+log('status', JSON.stringify(await a.call('status'))); log('iceServers', JSON.stringify(await a.page.evaluate(() => window.__iceServers)))
+await rooms.deleteRoom(room)
+log('room deleted; exit code', await rec.waitExit())
+const r = rec.result()
+console.log(JSON.stringify(r, null, 2).slice(0, 3000))
+await closeParticipantBrowser()
+if (r?.file) console.log(JSON.stringify(await analyseMp4(r.file), null, 2))
+console.log(rec.lines.filter(l => /error|fail|warn/i.test(l)).slice(0, 20).join('\n'))

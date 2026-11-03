@@ -1,0 +1,165 @@
+@import "tailwindcss";
+
+/* Height-based variants (login/auth screens fit short laptop viewports without scrolling). */
+@custom-variant short (@media (max-height: 820px));
+@custom-variant tiny (@media (max-height: 700px));
+
+/* ============================================================
+   OneInsure Connect — design tokens (single source of truth)
+   Mirrored for JS in src/design/tokens.ts. See documentation/UI_DESIGN_SYSTEM.md
+   ============================================================ */
+@theme {
+  --font-sans: "Plus Jakarta Sans Variable", "Segoe UI", system-ui, sans-serif;
+
+  /* Brand */
+  --color-navy-950: #0B1E31;
+  --color-navy-900: #102A43;
+  --color-navy-800: #17385A;
+  --color-navy-700: #1F4A73;
+  --color-brand-50: #EEF5FE;
+  --color-brand-100: #D9E8FC;
+  --color-brand-200: #B5D1F8;
+  --color-brand-500: #2878E5;
+  --color-brand-600: #1F6FD0;
+  --color-brand-700: #1769AA;
+  --color-cyan-400: #20C4D8;
+  --color-cyan-50: #E6F9FB;
+
+  /* Surfaces & text */
+  --color-canvas: #F4F7FB;
+  --color-surface: #FFFFFF;
+  --color-surface-muted: #F8FAFD;
+  --color-line: #E3E9F2;
+  --color-line-strong: #CBD5E1;
+  --color-ink: #172B4D;
+  --color-ink-secondary: #64748B;
+  --color-ink-muted: #94A3B8;
+
+  /* Status */
+  --color-success: #16A34A;
+  --color-success-soft: #E8F7EE;
+  --color-warning: #F59E0B;
+  --color-warning-ink: #B45309;
+  --color-warning-soft: #FEF5E3;
+  --color-danger: #DC2626;
+  --color-danger-soft: #FDECEC;
+  --color-info: #0284C7;
+  --color-info-soft: #E6F4FB;
+
+  /* Meeting categories */
+  --color-cat-internal: #2878E5;
+  --color-cat-customer: #0EA5A4;
+  --color-cat-training: #7C3AED;
+  --color-cat-review: #F59E0B;
+  --color-cat-management: #102A43;
+
+  /* Radius */
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  /* Elevation */
+  --shadow-card: 0 1px 2px rgb(16 42 67 / 0.04), 0 1px 3px rgb(16 42 67 / 0.06);
+  --shadow-raised: 0 4px 12px rgb(16 42 67 / 0.08), 0 2px 4px rgb(16 42 67 / 0.04);
+  --shadow-overlay: 0 16px 40px rgb(16 42 67 / 0.16), 0 4px 12px rgb(16 42 67 / 0.08);
+  --shadow-focus: 0 0 0 3px rgb(40 120 229 / 0.35);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --duration-fast: 150ms;
+  --duration-base: 220ms;
+  --duration-slow: 400ms;
+
+  /* Animations (ambient: login only) */
+  --animate-float: oic-float 9s var(--ease-in-out) infinite;
+  --animate-float-slow: oic-float 13s var(--ease-in-out) infinite;
+  --animate-dash: oic-dash 3.2s linear infinite;
+  --animate-pulse-ring: oic-pulse-ring 2.8s var(--ease-out) infinite;
+  --animate-spin-slow: oic-spin 60s linear infinite;
+  --animate-gradient: oic-gradient 18s ease infinite;
+  --animate-fade-up: oic-fade-up 600ms var(--ease-out) both;
+  --animate-fade-in: oic-fade-in 700ms var(--ease-out) both;
+  --animate-rec: oic-rec 1.6s ease-in-out infinite;
+}
+
+:root {
+  --gradient-brand: linear-gradient(135deg, #102A43 0%, #17385A 40%, #1769AA 75%, #2878E5 100%);
+  --gradient-accent: linear-gradient(90deg, #2878E5 0%, #20C4D8 100%);
+  --gradient-canvas: radial-gradient(1200px 600px at 100% 0%, #E7F0FD 0%, transparent 60%),
+    radial-gradient(900px 500px at 0% 100%, #E6F8FB 0%, transparent 55%), #F4F7FB;
+  color-scheme: light;
+}
+
+@keyframes oic-float {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -14px, 0); }
+}
+@keyframes oic-dash { to { stroke-dashoffset: -40; } }
+@keyframes oic-pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.55; }
+  80%, 100% { transform: scale(1.9); opacity: 0; }
+}
+@keyframes oic-spin { to { transform: rotate(360deg); } }
+@keyframes oic-gradient {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+@keyframes oic-fade-up {
+  from { opacity: 0; transform: translate3d(0, 14px, 0); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes oic-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes oic-rec { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+    font-size: 14px;
+    line-height: 22px;
+    font-feature-settings: "cv11", "ss01";
+  }
+  :focus-visible { outline: none; box-shadow: var(--shadow-focus); border-radius: 6px; }
+  ::selection { background: #D9E8FC; }
+  /* Notched phones (viewport-fit=cover, and the installed app): keep content out of the notch / home-indicator areas. */
+  body {
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* iOS Safari zooms the page when a field under 16 px gets focus: fields are 16 px there (iOS only). */
+  @supports (-webkit-touch-callout: none) {
+    input, select, textarea { font-size: 16px !important; }
+  }
+}
+
+@layer utilities {
+  .text-gradient-accent {
+    background: var(--gradient-accent);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .bg-gradient-brand { background-image: var(--gradient-brand); }
+  .bg-gradient-accent { background-image: var(--gradient-accent); }
+  .bg-gradient-canvas { background: var(--gradient-canvas); }
+  .eyebrow { @apply text-[11px] font-semibold uppercase tracking-[0.12em]; }
+  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: #CBD5E1 transparent; }
+}
+
+/* Phones: the bottom tab bar (layouts/MobileTabBar.tsx) sits above the iOS home indicator; page content clears it. */
+.oic-tabbar { padding-bottom: env(safe-area-inset-bottom); }
+@media (max-width: 767px) {
+  .oic-main { padding-bottom: calc(5.5rem + env(safe-area-inset-bottom)); }
+}
+
+/* Accessibility: honour the OS "reduce motion" preference everywhere. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

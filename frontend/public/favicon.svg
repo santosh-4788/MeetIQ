@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" role="img" aria-label="OneInsure Connect">
+  <defs>
+    <linearGradient id="bg" x1="4" y1="2" x2="38" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#102A43"/><stop offset="0.55" stop-color="#1769AA"/><stop offset="1" stop-color="#2878E5"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="10" y1="10" x2="28" y2="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#C7F1F6"/>
+    </linearGradient>
+  </defs>
+  <rect width="40" height="40" rx="11" fill="url(#bg)"/>
+  <path d="M27.28 13.89 A9.5 9.5 0 1 0 27.28 26.11" fill="none" stroke="url(#ring)" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M17.7 16.4 L23.4 20 L17.7 23.6 Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round"/>
+  <circle cx="27.28" cy="13.89" r="2.3" fill="#20C4D8"/>
+  <circle cx="27.28" cy="26.11" r="2.3" fill="#20C4D8"/>
+  <circle cx="32.6" cy="20" r="1.5" fill="#20C4D8" fill-opacity="0.85"/>
+</svg>

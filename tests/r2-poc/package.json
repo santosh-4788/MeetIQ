@@ -1,0 +1,20 @@
+{
+  "name": "oneinsure-connect-r2-poc-tests",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "R2 recorder proof-of-concept test harness (synthetic participants, scenarios, analysis).",
+  "scripts": {
+    "build:participant": "vite build participant",
+    "test": "node harness/run.mjs"
+  },
+  "dependencies": {
+    "livekit-client": "2.23.0",
+    "livekit-server-sdk": "2.19.2",
+    "playwright-core": "1.64.1"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
+  }
+}

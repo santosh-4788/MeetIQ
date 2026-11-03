@@ -1,0 +1,23 @@
+node_modules/
+dist/
+logs/
+backups/
+*.local
+.env.*.local
+bin/
+obj/
+.vs/
+video-server/bin/*.exe
+video-server/config/*.local.env
+recording/spool/
+recording/output/
+tests/**/results/
+recording/library/
+recording/e2e/
+backend/.artifacts/
+
+# LAN test mode certificate and passphrase (scripts/lan/start-lan.ps1)
+scripts/lan/.local/
+
+# Release packages (deployment/build-release.ps1)
+deployment/out/

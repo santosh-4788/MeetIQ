@@ -1,0 +1,11 @@
+{
+  "_Status": "PROPOSED — pending confirmation of domain ownership, DNS control and IT approval. Change these values (not code) to switch domains.",
+  "PublicEndpoints": {
+    "WebBaseUrl": "https://meet.oneinsure.com",
+    "CustomerJoinPath": "/join/{token}",
+    "ApiBaseUrl": "https://meet.oneinsure.com/api/v1",
+    "LiveKitPublicUrl": "wss://media.meet.oneinsure.com",
+    "TurnHostname": "turn.meet.oneinsure.com",
+    "RequireHttps": true
+  }
+}
