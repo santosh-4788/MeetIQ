@@ -12,7 +12,10 @@ const apiTarget = env.OIC_API_TARGET || 'https://localhost:7180'
 // More can be added without editing this file: OIC_ALLOWED_HOSTS="a.example,b.example".
 const allowedHosts = ['startling-affair-constrict.ngrok-free.dev', ...(env.OIC_ALLOWED_HOSTS ?? '').split(',').map((h) => h.trim()).filter(Boolean)]
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // Production build is served under https://www.oneinsure.com/meet/ (IIS sub-application);
+  // dev server keeps serving from the origin root.
+  base: command === 'build' ? '/meet/' : '/',
   plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
@@ -26,4 +29,4 @@ export default defineConfig({
     },
     host: '0.0.0.0',
   },
-})
+}))

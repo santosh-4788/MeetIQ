@@ -9,9 +9,9 @@
    Mirrored for JS in src/design/tokens.ts. See documentation/UI_DESIGN_SYSTEM.md
    ============================================================ */
 @theme {
-  --font-sans: "Plus Jakarta Sans Variable", "Segoe UI", system-ui, sans-serif;
+  --font-sans: "Inter Variable", -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
 
-  /* Brand */
+  /* Brand (approved palette, HDMI-audio round) */
   --color-navy-950: #0B1E31;
   --color-navy-900: #102A43;
   --color-navy-800: #17385A;
@@ -19,11 +19,14 @@
   --color-brand-50: #EEF5FE;
   --color-brand-100: #D9E8FC;
   --color-brand-200: #B5D1F8;
-  --color-brand-500: #2878E5;
-  --color-brand-600: #1F6FD0;
-  --color-brand-700: #1769AA;
-  --color-cyan-400: #20C4D8;
+  --color-brand-300: #6FA8F0;
+  --color-brand-400: #3B82F6;
+  --color-brand-500: #3B82F6;
+  --color-brand-600: #2D6FE0;
+  --color-brand-700: #2463D3;
+  --color-cyan-400: #22D3EE;
   --color-cyan-50: #E6F9FB;
+  --color-teal-500: #14B8A6;
 
   /* Surfaces & text */
   --color-canvas: #F4F7FB;
@@ -36,21 +39,21 @@
   --color-ink-muted: #94A3B8;
 
   /* Status */
-  --color-success: #16A34A;
-  --color-success-soft: #E8F7EE;
-  --color-warning: #F59E0B;
+  --color-success: #16B879;
+  --color-success-soft: #E6F9F1;
+  --color-warning: #F5A623;
   --color-warning-ink: #B45309;
   --color-warning-soft: #FEF5E3;
-  --color-danger: #DC2626;
+  --color-danger: #F04452;
   --color-danger-soft: #FDECEC;
-  --color-info: #0284C7;
+  --color-info: #3B82F6;
   --color-info-soft: #E6F4FB;
 
   /* Meeting categories */
-  --color-cat-internal: #2878E5;
-  --color-cat-customer: #0EA5A4;
+  --color-cat-internal: #3B82F6;
+  --color-cat-customer: #14B8A6;
   --color-cat-training: #7C3AED;
-  --color-cat-review: #F59E0B;
+  --color-cat-review: #F5A623;
   --color-cat-management: #102A43;
 
   /* Radius */
@@ -82,11 +85,13 @@
   --animate-fade-up: oic-fade-up 600ms var(--ease-out) both;
   --animate-fade-in: oic-fade-in 700ms var(--ease-out) both;
   --animate-rec: oic-rec 1.6s ease-in-out infinite;
+  --animate-sparkle: oic-sparkle 5.5s ease-in-out infinite;
+  --animate-shine: oic-shine 3.4s ease-in-out infinite;
 }
 
 :root {
-  --gradient-brand: linear-gradient(135deg, #102A43 0%, #17385A 40%, #1769AA 75%, #2878E5 100%);
-  --gradient-accent: linear-gradient(90deg, #2878E5 0%, #20C4D8 100%);
+  --gradient-brand: linear-gradient(135deg, #0B1E31 0%, #17385A 45%, #2463D3 100%);
+  --gradient-accent: linear-gradient(90deg, #3B82F6 0%, #22D3EE 100%);
   --gradient-canvas: radial-gradient(1200px 600px at 100% 0%, #E7F0FD 0%, transparent 60%),
     radial-gradient(900px 500px at 0% 100%, #E6F8FB 0%, transparent 55%), #F4F7FB;
   color-scheme: light;
@@ -112,6 +117,11 @@
 }
 @keyframes oic-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes oic-rec { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes oic-sparkle {
+  0%, 100% { opacity: 0; transform: translate3d(0, 0, 0) scale(0.6); }
+  50% { opacity: 0.9; transform: translate3d(0, -14px, 0) scale(1); }
+}
+@keyframes oic-shine { 0% { transform: translateX(-160%); } 35% { transform: translateX(260%); } 100% { transform: translateX(260%); } }
 
 @layer base {
   html { -webkit-text-size-adjust: 100%; }
@@ -140,6 +150,17 @@
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+  }
+  /* A light sweep across a primary CTA, looping gently - used sparingly (one or two buttons per screen, never every button). */
+  .btn-shine { position: relative; overflow: hidden; }
+  .btn-shine::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    width: 40%;
+    background: linear-gradient(100deg, transparent, rgb(255 255 255 / 0.5), transparent);
+    animation: var(--animate-shine);
+    pointer-events: none;
   }
   .bg-gradient-brand { background-image: var(--gradient-brand); }
   .bg-gradient-accent { background-image: var(--gradient-accent); }

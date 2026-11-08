@@ -3,26 +3,28 @@
 
 export const colors = {
   navy900: '#102A43',
-  brand700: '#1769AA',
-  brand500: '#2878E5',
+  brand700: '#2463D3',
+  brand500: '#3B82F6',
+  brand400: '#6FA8F0',
   brand200: '#B5D1F8',
-  cyan400: '#20C4D8',
+  cyan400: '#22D3EE',
+  teal500: '#14B8A6',
   canvas: '#F4F7FB',
   line: '#E3E9F2',
   ink: '#172B4D',
   inkSecondary: '#64748B',
   inkMuted: '#94A3B8',
-  success: '#16A34A',
-  warning: '#F59E0B',
-  danger: '#DC2626',
-  info: '#0284C7',
+  success: '#16B879',
+  warning: '#F5A623',
+  danger: '#F04452',
+  info: '#3B82F6',
 } as const
 
 export const meetingCategoryColors = {
-  internal: '#2878E5',
-  customer: '#0EA5A4',
+  internal: '#3B82F6',
+  customer: '#14B8A6',
   training: '#7C3AED',
-  review: '#F59E0B',
+  review: '#F5A623',
   management: '#102A43',
 } as const
 

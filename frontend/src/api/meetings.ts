@@ -32,6 +32,9 @@ export type MeetingListItem = {
   status: MeetingState
   startUtc: string
   endUtc: string
+  /** Set once the meeting actually started/ended - may differ from the scheduled window above. */
+  actualStartUtc: string | null
+  actualEndUtc: string | null
   timeZoneId: string
   organiser: string
   hostId: string
@@ -96,6 +99,8 @@ export type MeetingDetail = {
   kind: MeetingKind
   /** Nobody can publish a camera (enforced by the video server). */
   audioOnly: boolean
+  /** Set when this meeting is one occurrence of a recurring series. */
+  series: { id: string; seq: number } | null
   reminders: { pending: number; sent: number; failed: number; cancelled: number; nextDueUtc: string | null }
   my: {
     participantId: string | null
@@ -144,6 +149,51 @@ export type MeetingCreateInput = {
   policyNumber?: string | null
   overrideConflicts?: boolean
   overrideReason?: string | null
+}
+
+export type Weekday = 'MON' | 'TUE' | 'WED' | 'THU' | 'FRI' | 'SAT' | 'SUN'
+export const WEEKDAYS: { code: Weekday; label: string }[] = [
+  { code: 'MON', label: 'Mon' }, { code: 'TUE', label: 'Tue' }, { code: 'WED', label: 'Wed' }, { code: 'THU', label: 'Thu' },
+  { code: 'FRI', label: 'Fri' }, { code: 'SAT', label: 'Sat' }, { code: 'SUN', label: 'Sun' },
+]
+/** At most 52 occurrences, within one year - matches the server's Recurrence.MaxOccurrences / MaxHorizon. */
+export const MAX_RECURRENCE_OCCURRENCES = 52
+
+export type RecurrenceRule = {
+  pattern: 'DAILY' | 'WEEKLY' | 'MONTHLY'
+  interval: number
+  byWeekdays?: Weekday[]
+  endType: 'COUNT' | 'UNTIL'
+  endCount?: number
+  endUntilUtc?: string
+}
+
+export type RecurringMeetingCreateInput = Omit<MeetingCreateInput, 'status'> & { recurrence: RecurrenceRule }
+
+export type RecurringMeetingResult = {
+  seriesId: string
+  occurrences: { id: string; meetingCode: string; startUtc: string; endUtc: string }[]
+  overriddenConflicts: number
+}
+
+/** One occurrence's conflicts, from a 409 on POST /meetings/recurring. */
+export type OccurrenceConflict = { seq: number; startUtc: string; endUtc: string; conflicts: Conflict[] }
+
+export function occurrenceConflicts(e: unknown): OccurrenceConflict[] {
+  if (!(e instanceof ApiError) || e.code !== 'CONFLICT') return []
+  const raw = e.details.occurrenceConflicts
+  return Array.isArray(raw) ? (raw as OccurrenceConflict[]) : []
+}
+
+export type MeetingSeries = {
+  seriesId: string
+  pattern: RecurrenceRule['pattern']
+  interval: number
+  byWeekdays: Weekday[] | null
+  endType: RecurrenceRule['endType']
+  endCount: number | null
+  endUntilUtc: string | null
+  occurrences: { id: string; seq: number; startUtc: string; endUtc: string; status: MeetingState }[]
 }
 
 export type MeetingUpdateInput = {
@@ -200,6 +250,10 @@ export const meetingsApi = {
     http<{ id: string; meetingCode: string; status: string; warnings: Conflict[]; overriddenConflicts: number }>('/meetings', { method: 'POST', body }),
   update: (id: string, body: MeetingUpdateInput) =>
     http<{ id: string; status: string; rescheduled: boolean; warnings: Conflict[]; overriddenConflicts: number }>(one(id), { method: 'PUT', body }),
+  createRecurring: (body: RecurringMeetingCreateInput) => http<RecurringMeetingResult>('/meetings/recurring', { method: 'POST', body }),
+  series: (id: string) => http<MeetingSeries>(`${one(id)}/series`),
+  cancelSeries: (id: string, reason: string, scope: 'following' | 'all') =>
+    http<{ cancelled: number }>(`${one(id)}/series/cancel`, { method: 'POST', body: { reason, scope } }),
   cancel: (id: string, reason: string) => http<void>(`${one(id)}/cancel`, { method: 'POST', body: { reason } }),
   respond: (id: string, response: Exclude<ResponseStatus, 'PENDING'>) => http<void>(`${one(id)}/respond`, { method: 'POST', body: { response } }),
   addParticipants: (id: string, body: { employeeIds: string[]; guests: GuestInput[]; overrideConflicts?: boolean; overrideReason?: string | null }) =>

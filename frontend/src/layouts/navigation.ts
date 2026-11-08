@@ -1,6 +1,6 @@
 ﻿import type { LucideIcon } from 'lucide-react'
 import {
-  Bell, Building, CalendarDays, CalendarPlus, ChartColumn, Clapperboard, Handshake, IdCard, LayoutDashboard, Settings, ShieldCheck, Users, Video,
+  Bell, Building, CalendarDays, CalendarPlus, ChartColumn, Clapperboard, Handshake, IdCard, LayoutDashboard, ScrollText, Settings, ShieldCheck, Users, Video,
 } from 'lucide-react'
 
 export type NavItem = {
@@ -35,8 +35,7 @@ export const navigation: NavSection[] = [
     items: [
       { to: '/recordings', label: 'Recording Library', icon: Clapperboard, permission: 'recordings.view.own' },
       { to: '/notifications', label: 'Notifications', icon: Bell, permission: 'notifications.view' },
-      { to: '/reports', label: 'Reports', icon: ChartColumn, permission: 'reports.view', phase: 5,
-        planned: ['Daily, monthly, employee and department reports', 'Internal vs customer meetings', 'Attendance, recording and failed-recording reports', 'Reminder delivery report', 'CSV / Excel export'] },
+      { to: '/reports', label: 'Reports', icon: ChartColumn, permission: 'reports.view' },
     ],
   },
   {
@@ -50,7 +49,8 @@ export const navigation: NavSection[] = [
     title: 'System',
     items: [
       { to: '/admin', label: 'Administration', icon: ShieldCheck, permission: 'admin.settings', phase: 5,
-        planned: ['Users, roles and permission matrix', 'SMTP, meeting, recording, security and retention settings', 'System health and background service status', 'Audit log viewer'] },
+        planned: ['Users, roles and permission matrix', 'SMTP, meeting, recording, security and retention settings', 'System health and background service status'] },
+      { to: '/audit-log', label: 'Audit Log', icon: ScrollText, permission: 'audit.view' },
       { to: '/settings', label: 'Settings', icon: Settings },
     ],
   },

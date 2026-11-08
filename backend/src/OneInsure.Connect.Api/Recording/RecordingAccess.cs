@@ -12,7 +12,7 @@ namespace OneInsure.Connect.Api.Recording;
 
 /// <summary>The signed-in user as the recording library sees them: employee link, role codes and recording permissions.</summary>
 internal sealed record Viewer(long UserId, long? EmployeeId, string[] Roles, bool ViewOwn, bool ViewTeam, bool ViewDepartment, bool ViewAll,
-    bool Download, bool LegalHold, bool AuditView, bool Ops)
+    bool Download, bool LegalHold, bool AuditView, bool Ops, bool Delete)
 {
     public static async Task<Viewer> LoadAsync(IDbConnection c, ClaimsPrincipal u)
     {
@@ -22,7 +22,7 @@ internal sealed record Viewer(long UserId, long? EmployeeId, string[] Roles, boo
             """, new { id });
         var roles = (await c.QueryAsync<string>("SELECT r.Code FROM auth.UserRoles ur JOIN auth.Roles r ON r.RoleId = ur.RoleId WHERE ur.UserId = @id", new { id })).ToArray();
         return new Viewer(id, emp, roles, u.Can("recordings.view.own"), u.Can("recordings.view.team"), u.Can("recordings.view.department"),
-            u.Can("recordings.view.all"), u.Can("recordings.download"), u.Can("recordings.legalhold"), u.Can("audit.view"), u.Can("admin.ops"));
+            u.Can("recordings.view.all"), u.Can("recordings.download"), u.Can("recordings.legalhold"), u.Can("audit.view"), u.Can("admin.ops"), u.Can("recordings.delete"));
     }
 
     public object Sql => new

@@ -41,7 +41,9 @@ public sealed class Passwords
 /// <summary>Server-side password policy (authoritative). Mirrors passwordRules in frontend/src/lib/validation.ts.</summary>
 public static class PasswordPolicy
 {
-    public const int MinLength = 12;
+    // OWASP ASVS L1 minimum (8) rather than L2 (12): still enforces upper/lower/number/symbol, just a shorter
+    // minimum length, per an explicit product decision to prioritise convenience over the stricter L2 bar.
+    public const int MinLength = 8;
     public const int MaxLength = 128;
 
     public static List<string> Violations(string password, params string?[] personalValues)

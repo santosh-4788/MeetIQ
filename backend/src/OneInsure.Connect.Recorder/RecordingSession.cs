@@ -25,6 +25,11 @@ public sealed class RecordingSession(RecorderOptions options, RecordingJob job, 
 
     public IReadOnlyList<SegmentWriter> Segments => _segments;
     public int Restarts => _restarts;
+    /// <summary>The canvas size the browser session actually chose (see main.ts's orientation detection for a 1:1
+    /// call) - 0 until the first attempt's "start" call returns. Falls back to the configured landscape default
+    /// when a job never got this far (e.g. every attempt failed before the page could report in).</summary>
+    public int ActualWidth { get; private set; }
+    public int ActualHeight { get; private set; }
 
     public void PostCommand(string command) => _commands.Writer.TryWrite(command);
 
@@ -148,7 +153,12 @@ public sealed class RecordingSession(RecorderOptions options, RecordingJob job, 
             await page.GotoAsync($"{Origin}/index.html", new PageGotoOptions { Timeout = 30_000 });
             var start = await page.EvaluateAsync<JsonElement>("() => window.oicControl.start()");
             started = true;
-            log.Write("attempt_started", new { attempt, mime = start.GetProperty("mimeType").GetString() });
+            // The page decides the actual canvas size (it may differ from the launch config for a 1:1 call where a
+            // camera was portrait) - only the first attempt's choice counts, since every later attempt (crash/stall
+            // restart) must produce a segment the same size as the rest of this job for the concat step to work.
+            if (ActualWidth == 0 && start.TryGetProperty("width", out var w) && start.TryGetProperty("height", out var h))
+                (ActualWidth, ActualHeight) = (w.GetInt32(), h.GetInt32());
+            log.Write("attempt_started", new { attempt, mime = start.GetProperty("mimeType").GetString(), width = ActualWidth, height = ActualHeight });
 
             var poll = TimeSpan.FromSeconds(options.Health.PollSeconds);
             var deadline = _jobStartedUtc + job.MaxDuration;

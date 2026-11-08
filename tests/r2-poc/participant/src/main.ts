@@ -6,7 +6,7 @@
  */
 import { LocalVideoTrack, LocalAudioTrack, Room, RoomEvent, Track, type SimulationScenario } from 'livekit-client'
 
-type Cfg = { url: string; token: string; name: string; color: string; beepHz: number }
+type Cfg = { url: string; token: string; name: string; color: string; beepHz: number; orientation?: 'landscape' | 'portrait' }
 declare global {
   interface Window {
     __P__: Cfg
@@ -34,29 +34,45 @@ function frameTrack(canvas: HTMLCanvasElement) {
 }
 
 // --- Camera ---------------------------------------------------------------
+// Landscape 640x360 (16:9) by default; cfg.orientation: 'portrait' swaps it to 360x640 (9:16) before the first
+// frame is published, simulating a phone held upright. rotate() below swaps it again mid-call (device rotation).
 const cam = document.getElementById('cam') as HTMLCanvasElement
+function setCamOrientation(o: 'landscape' | 'portrait') {
+  const [w, h] = o === 'portrait' ? [360, 640] : [640, 360]
+  cam.width = w
+  cam.height = h
+}
+setCamOrientation(cfg.orientation ?? 'landscape')
 const cx = cam.getContext('2d')!
 const camOut = frameTrack(cam)
 let frame = 0
 setInterval(() => {
   const now = Date.now()
+  const W = cam.width, H = cam.height
   frame++
   if (now % PERIOD < FLASH_MS) {
     cx.fillStyle = '#FFFFFF'
-    cx.fillRect(0, 0, 640, 360)
+    cx.fillRect(0, 0, W, H)
     camOut.push()
     return
   }
   cx.fillStyle = cfg.color
-  cx.fillRect(0, 0, 640, 360)
+  cx.fillRect(0, 0, W, H)
   cx.fillStyle = 'rgba(255,255,255,0.85)'
-  cx.fillRect(((now / 8) % 700) - 60, 300, 60, 18) // moving bar: proves the video is live
+  cx.fillRect(((now / 8) % (W + 60)) - 60, H - 60, 60, 18) // moving bar: proves the video is live
   cx.fillStyle = '#FFFFFF'
   cx.font = 'bold 34px Segoe UI, sans-serif'
   cx.fillText(cfg.name, 24, 60)
   cx.font = '22px Consolas, monospace'
   cx.fillText(new Date(now).toISOString().slice(11, 23), 24, 110)
   cx.fillText(`frame ${frame}`, 24, 145)
+  // Corner markers: with contain-mode rendering these four squares must all stay visible (even letterboxed);
+  // cover-mode cropping would clip one or more of them off the tile.
+  cx.fillStyle = '#FF2D55'
+  cx.fillRect(0, 0, 14, 14)
+  cx.fillRect(W - 14, 0, 14, 14)
+  cx.fillRect(0, H - 14, 14, 14)
+  cx.fillRect(W - 14, H - 14, 14, 14)
   camOut.push()
 }, 40)
 
@@ -135,6 +151,9 @@ window.p = {
     if (pub?.track) await (m ? pub.mute() : pub.unmute())
   },
   simulate: (s: SimulationScenario) => room.simulateScenario(s),
+  // Simulates a phone being rotated mid-call: resizes the published track's frames without replacing the
+  // track or reconnecting, matching how a real browser keeps one camera track across an orientation change.
+  rotate: (o: 'landscape' | 'portrait') => setCamOrientation(o),
   disconnect: () => room.disconnect(),
   stats: async () => {
     const pub = room.localParticipant.getTrackPublication(Track.Source.Camera)

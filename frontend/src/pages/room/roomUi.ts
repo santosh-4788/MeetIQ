@@ -18,8 +18,14 @@ export type RoomBackend = {
     admit: (entryId: string) => Promise<void>
     reject: (entryId: string) => Promise<void>
     mute: (identity: string, source: MuteSource) => Promise<void>
+    /** No browser lets a host force a remote mic back on - this asks the participant to unmute themselves. */
+    requestUnmute: (identity: string) => Promise<void>
     remove: (identity: string, block?: boolean) => Promise<void>
     end: () => Promise<void>
+    /** Present only for the literal host (not a co-host): hands host privileges to another employee participant. */
+    transferHost?: (identity: string) => Promise<void>
+    /** Locked: nobody who hasn't already attended can join. Never disconnects anyone already in. */
+    setLocked: (locked: boolean) => Promise<void>
   }
 }
 

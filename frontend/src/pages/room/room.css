@@ -7,46 +7,88 @@
 
 .oic-room[data-lk-theme],
 .oic-room-canvas {
-  --lk-bg: #0b1e31;
-  --lk-bg2: #102a43;
-  --lk-bg3: #17385a;
+  /* Immersive meeting-room palette (deliberately distinct from the light dashboard theme in styles/theme.css). */
+  --oic-midnight: #081525;
+  --oic-deep-navy: #10243a;
+  --oic-charcoal: #172333;
+  --oic-enterprise-blue: #2463d3;
+  --oic-electric-blue: #3b82f6;
+  --oic-cyan: #22d3ee;
+  --oic-teal: #14b8a6;
+  --oic-glass: rgb(255 255 255 / 0.08);
+  --oic-text: #f8fafc;
+  --oic-text-secondary: #a9b8cb;
+  --oic-danger: #e5484d;
+  --oic-success: #20b875;
+
+  --lk-bg: var(--oic-midnight);
+  --lk-bg2: var(--oic-deep-navy);
+  --lk-bg3: var(--oic-charcoal);
   --lk-bg4: #1f4a73;
   --lk-bg5: #24578a;
-  --lk-fg: #ffffff;
-  --lk-fg2: rgb(255 255 255 / 0.92);
-  --lk-fg3: rgb(255 255 255 / 0.84);
-  --lk-fg4: rgb(255 255 255 / 0.72);
-  --lk-fg5: rgb(255 255 255 / 0.6);
+  --lk-fg: var(--oic-text);
+  --lk-fg2: rgb(248 250 252 / 0.92);
+  --lk-fg3: rgb(248 250 252 / 0.84);
+  --lk-fg4: var(--oic-text-secondary);
+  --lk-fg5: rgb(169 184 203 / 0.8);
   --lk-border-color: rgb(255 255 255 / 0.09);
   --lk-accent-fg: #ffffff;
-  --lk-accent-bg: #2878e5;
-  --lk-accent2: #1f6fd0;
+  --lk-accent-bg: var(--oic-electric-blue);
+  --lk-accent2: var(--oic-enterprise-blue);
   --lk-accent3: #1769aa;
-  --lk-accent4: #17385a;
-  --lk-danger: #dc2626;
-  --lk-danger2: #e24343;
-  --lk-danger3: #e85e5e;
-  --lk-danger4: #ee7a7a;
-  --lk-success: #16a34a;
-  --lk-connection-excellent: #22c55e;
+  --lk-accent4: var(--oic-charcoal);
+  --lk-danger: var(--oic-danger);
+  --lk-danger2: #f0525e;
+  --lk-danger3: #f37b84;
+  --lk-danger4: #f7a3a9;
+  --lk-success: var(--oic-success);
+  --lk-connection-excellent: var(--oic-success);
   --lk-connection-good: #f59e0b;
-  --lk-connection-poor: #ef4444;
-  --lk-font-family: "Plus Jakarta Sans Variable", "Segoe UI", system-ui, sans-serif;
+  --lk-connection-poor: var(--oic-danger);
+  --lk-font-family: "Inter Variable", -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   --lk-font-size: 14px;
   --lk-line-height: 1.5;
   --lk-border-radius: 14px;
   --lk-grid-gap: 10px;
   --lk-speaking-indicator-width: 2.5px;
-  --lk-control-bg: rgb(255 255 255 / 0.08);
+  --lk-control-bg: var(--oic-glass);
   --lk-control-hover-bg: rgb(255 255 255 / 0.14);
   --lk-control-active-bg: rgb(255 255 255 / 0.18);
   --lk-control-active-hover-bg: rgb(255 255 255 / 0.22);
-  color: #fff;
+  color: var(--oic-text);
   color-scheme: dark;
   background:
-    radial-gradient(1200px 700px at 88% -12%, rgb(40 120 229 / 0.2), transparent 60%),
-    radial-gradient(900px 620px at -12% 112%, rgb(32 196 216 / 0.12), transparent 55%),
-    #0b1e31;
+    radial-gradient(1200px 700px at 88% -12%, rgb(55 135 245 / 0.22), transparent 60%),
+    radial-gradient(900px 620px at -12% 112%, rgb(32 196 216 / 0.14), transparent 55%),
+    var(--oic-midnight);
+  background-size: 140% 140%, 140% 140%, 100% 100%;
+  animation: oic-ambient-drift 26s ease-in-out infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+  .oic-room[data-lk-theme],
+  .oic-room-canvas {
+    animation: none;
+  }
+}
+@keyframes oic-ambient-drift {
+  0% { background-position: 0% 0%, 100% 100%, 0 0; }
+  100% { background-position: 10% 6%, 94% 92%, 0 0; }
+}
+
+/* Header status chips (network quality, participant count, elapsed timer): one consistent pill treatment. */
+.oic-chip {
+  display: inline-flex;
+  height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: 9999px;
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.09), rgb(255 255 255 / 0.05));
+  border: 1px solid rgb(255 255 255 / 0.08);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: rgb(255 255 255 / 0.85);
 }
 
 /* LiveKit's stylesheet is unlayered, so it beats Tailwind utilities (layered) on its own elements: position the
@@ -66,26 +108,65 @@
   height: 100%;
 }
 
+/* ---- Header: a floating glass "island", mirroring the bottom toolbar (iOS Dynamic Island-style) rather than a
+   bar flush with the screen edge. */
+
+.oic-room header {
+  position: relative;
+  margin: max(8px, env(safe-area-inset-top)) 10px 10px;
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgb(31 45 63 / 0.72), rgb(18 28 42 / 0.62));
+  backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgb(255 255 255 / 0.09);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 0.12) inset, 0 0 0 1px rgb(32 196 216 / 0.07), 0 16px 36px -14px rgb(0 0 0 / 0.5);
+}
+@media (min-width: 640px) {
+  .oic-room header {
+    margin: 14px 16px 14px;
+  }
+}
+
 /* ---- Tiles ---------------------------------------------------------------- */
 
 .oic-room .lk-participant-tile {
   position: relative;
   overflow: hidden;
-  border-radius: 14px;
-  background: linear-gradient(160deg, #17385a 0%, #102a43 70%);
-  border: 1px solid rgb(255 255 255 / 0.06);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.22);
+  border-radius: 24px;
+  background: linear-gradient(160deg, var(--oic-charcoal) 0%, var(--oic-deep-navy) 70%);
+  border: 1px solid rgb(255 255 255 / 0.08);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 14px 34px -10px rgb(0 0 0 / 0.45);
   padding: 0;
+  transition: box-shadow 220ms var(--ease-out), transform 220ms var(--ease-out);
+}
+/* A soft top sheen, like glass catching light - subtle, not a visual effect that fights the video itself. */
+.oic-room .lk-participant-tile::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.08) 0%, transparent 28%);
 }
 .oic-room .lk-participant-tile::after {
-  border-radius: 14px;
+  border-radius: 24px;
 }
 .oic-room .lk-participant-tile[data-lk-speaking="true"]:not([data-lk-source="screen_share"])::after {
-  box-shadow: inset 0 0 0 var(--lk-speaking-indicator-width) #20c4d8, 0 0 24px rgb(32 196 216 / 0.25);
+  animation: oic-speaking-glow 2.1s ease-in-out infinite;
 }
 .oic-room .lk-participant-media-video {
-  border-radius: 14px;
-  background: #0b1e31;
+  border-radius: 24px;
+  background: var(--oic-midnight);
+}
+@keyframes oic-speaking-glow {
+  0%, 100% { box-shadow: inset 0 0 0 var(--lk-speaking-indicator-width) var(--oic-cyan), 0 0 22px rgb(32 196 216 / 0.28); }
+  50% { box-shadow: inset 0 0 0 var(--lk-speaking-indicator-width) #5EE6F5, 0 0 38px rgb(32 196 216 / 0.5); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oic-room .lk-participant-tile[data-lk-speaking="true"]:not([data-lk-source="screen_share"])::after {
+    animation: none;
+    box-shadow: inset 0 0 0 var(--lk-speaking-indicator-width) var(--oic-cyan), 0 0 28px rgb(32 196 216 / 0.3);
+  }
 }
 .oic-room .lk-participant-media-video[data-lk-source="screen_share"] {
   object-fit: contain;
@@ -97,20 +178,41 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  background-image: radial-gradient(rgb(255 255 255 / 0.05) 1px, transparent 1px);
+  background-size: 18px 18px;
 }
 .oic-tile-avatar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   width: clamp(56px, 22%, 112px);
   aspect-ratio: 1;
   border-radius: 9999px;
-  background: linear-gradient(135deg, #1769aa, #2878e5 60%, #20c4d8);
+  background: radial-gradient(circle at 32% 26%, rgb(255 255 255 / 0.5), transparent 42%), linear-gradient(135deg, var(--oic-enterprise-blue), var(--oic-electric-blue) 60%, var(--oic-cyan));
   color: #fff;
   font-weight: 700;
   font-size: clamp(18px, 3.2vw, 34px);
   letter-spacing: 0.02em;
-  box-shadow: 0 0 0 6px rgb(255 255 255 / 0.05), 0 10px 30px rgb(0 0 0 / 0.3);
+  box-shadow: 0 0 0 6px rgb(255 255 255 / 0.05), 0 14px 34px -6px rgb(32 196 216 / 0.4);
+}
+.oic-tile-avatar::after {
+  content: "";
+  position: absolute;
+  inset: -14px;
+  border-radius: inherit;
+  border: 1px solid rgb(255 255 255 / 0.12);
+  animation: oic-avatar-ring 3.4s ease-out infinite;
+}
+@keyframes oic-avatar-ring {
+  0% { transform: scale(0.92); opacity: 0.7; }
+  100% { transform: scale(1.18); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oic-tile-avatar::after {
+    animation: none;
+    display: none;
+  }
 }
 .oic-tile-meta {
   position: absolute;
@@ -130,7 +232,7 @@
   height: 28px;
   padding: 0 10px;
   border-radius: 9999px;
-  background: rgb(11 30 49 / 0.72);
+  background: rgb(8 21 37 / 0.72);
   backdrop-filter: blur(8px);
   font-size: 12.5px;
   font-weight: 600;
@@ -152,7 +254,7 @@
   padding: 0 12px;
   border-radius: 9999px;
   background: #f59e0b;
-  color: #0b1e31;
+  color: var(--oic-midnight);
   font-size: 12.5px;
   font-weight: 700;
   box-shadow: 0 6px 18px rgb(245 158 11 / 0.35);
@@ -177,7 +279,7 @@
   gap: 10px;
 }
 .oic-room .lk-pagination-control {
-  background: rgb(11 30 49 / 0.8);
+  background: rgb(8 21 37 / 0.8);
   border-color: rgb(255 255 255 / 0.12);
 }
 
@@ -192,15 +294,22 @@
   justify-content: center;
   gap: 8px;
   padding: 0 14px;
-  border-radius: 14px;
-  background: rgb(255 255 255 / 0.08);
+  border-radius: 9999px;
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.1), rgb(255 255 255 / 0.05));
+  border: 1px solid rgb(255 255 255 / 0.07);
   color: #fff;
   font-size: 13px;
   font-weight: 600;
-  transition: background-color 150ms var(--ease-out), transform 150ms var(--ease-out), box-shadow 150ms var(--ease-out);
+  letter-spacing: 0.01em;
+  transition: background-color 150ms var(--ease-out), border-color 150ms var(--ease-out), transform 150ms var(--ease-out), box-shadow 150ms var(--ease-out), color 150ms var(--ease-out);
+}
+.oic-ctl svg {
+  transition: color 150ms var(--ease-out);
 }
 .oic-ctl:hover {
-  background: rgb(255 255 255 / 0.15);
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.18), rgb(255 255 255 / 0.1));
+  border-color: rgb(255 255 255 / 0.14);
+  transform: translateY(-1px);
 }
 .oic-ctl:active {
   transform: scale(0.97);
@@ -209,25 +318,47 @@
   opacity: 0.5;
   pointer-events: none;
 }
+/* Each control reads at a glance: a faint tint on its icon, stronger on hover - not loud, just legible. */
+.oic-ctl[data-testid="ctl-chat"] svg,
+.oic-ctl[data-testid="ctl-layout"] svg { color: var(--oic-cyan); }
+.oic-ctl[data-testid="ctl-people"] svg { color: #7fb4ff; }
+.oic-ctl[data-testid="ctl-hand"]:not([data-on]) svg { color: #fbbf24; }
+.oic-ctl[data-testid="ctl-screen"]:not([data-on]) svg { color: #a78bfa; }
+.oic-ctl:disabled svg { color: inherit; }
 .oic-ctl[data-off="true"] {
-  background: #dc2626;
+  background: var(--oic-danger);
 }
 .oic-ctl[data-off="true"]:hover {
-  background: #b91c1c;
+  background: #c62430;
 }
 .oic-ctl[data-on="true"] {
-  background: #2878e5;
-  box-shadow: 0 6px 18px rgb(40 120 229 / 0.35);
+  background: var(--oic-electric-blue);
+  box-shadow: 0 6px 18px rgb(55 135 245 / 0.35);
 }
 .oic-ctl[data-on="true"]:hover {
-  background: #1f6fd0;
+  background: var(--oic-enterprise-blue);
+}
+/* A recording in progress gets a slow red pulse on its Stop control - a quiet reminder, not an alarm. */
+.oic-ctl[data-testid="ctl-record"][data-on="true"] {
+  background: var(--oic-danger);
+  animation: oic-rec-pulse 2s ease-in-out infinite;
+}
+.oic-ctl[data-testid="ctl-record"][data-on="true"]:hover {
+  background: #c62430;
+}
+@keyframes oic-rec-pulse {
+  0%, 100% { box-shadow: 0 6px 18px rgb(229 57 69 / 0.35), 0 0 0 0 rgb(229 57 69 / 0); }
+  50% { box-shadow: 0 6px 18px rgb(229 57 69 / 0.45), 0 0 0 8px rgb(229 57 69 / 0.12); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oic-ctl[data-testid="ctl-record"][data-on="true"] { animation: none; }
 }
 .oic-ctl[data-variant="leave"] {
-  background: #dc2626;
+  background: var(--oic-danger);
   padding: 0 18px;
 }
 .oic-ctl[data-variant="leave"]:hover {
-  background: #b91c1c;
+  background: #c62430;
 }
 .oic-ctl-badge {
   position: absolute;
@@ -241,29 +372,57 @@
   padding: 0 5px;
   border-radius: 9999px;
   background: #f59e0b;
-  color: #0b1e31;
+  color: var(--oic-midnight);
   font-size: 10.5px;
   font-weight: 800;
-  box-shadow: 0 0 0 2px #0b1e31;
+  box-shadow: 0 0 0 2px var(--oic-midnight);
 }
 .oic-room .lk-start-audio-button {
-  background: #2878e5;
+  background: var(--oic-electric-blue);
   border-radius: 12px;
   font-weight: 600;
+}
+/* A thin glass divider between toolbar groups (audio/video · presentation · interaction · meeting management · exit). */
+.oic-ctl-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 10px 2px;
+  background: linear-gradient(180deg, transparent, rgb(255 255 255 / 0.14) 20%, rgb(255 255 255 / 0.14) 80%, transparent);
+  flex: none;
+}
+@media (max-width: 639px) {
+  .oic-ctl-divider {
+    display: none;
+  }
+}
+/* Tailwind's left-1/2/-translate-x-1/2 utilities lose to LiveKit's own unlayered stylesheet on this element (the
+   same reason the room container itself is positioned here, not with utility classes, see the note above) -
+   centering it has to happen here too, or it renders pinned to the left edge and gets clipped on narrow screens. */
+.oic-room .oic-start-audio.lk-start-audio-button {
+  position: absolute !important;
+  top: 12px !important;
+  left: 50% !important;
+  right: auto !important;
+  transform: translateX(-50%) !important;
+  z-index: 10;
+  max-width: calc(100vw - 24px);
+  white-space: nowrap;
 }
 
 /* ---- Panels ---------------------------------------------------------------- */
 
 .oic-panel {
-  background: rgb(16 42 67 / 0.88);
+  background: rgb(23 35 51 / 0.88);
   border: 1px solid rgb(255 255 255 / 0.07);
-  backdrop-filter: blur(14px);
+  backdrop-filter: blur(20px) saturate(140%);
+  border-radius: 20px !important;
+  box-shadow: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 20px 50px -14px rgb(0 0 0 / 0.55);
 }
 .oic-input {
   width: 100%;
   border-radius: 12px;
   border: 1px solid rgb(255 255 255 / 0.12);
-  background: rgb(11 30 49 / 0.7);
+  background: rgb(8 21 37 / 0.7);
   color: #fff;
   padding: 10px 12px;
   font-size: 13.5px;
@@ -274,8 +433,8 @@
   color: rgb(255 255 255 / 0.45);
 }
 .oic-input:focus {
-  border-color: #2878e5;
-  box-shadow: 0 0 0 3px rgb(40 120 229 / 0.35);
+  border-color: var(--oic-electric-blue);
+  box-shadow: 0 0 0 3px rgb(55 135 245 / 0.35);
 }
 .oic-select {
   appearance: none;
@@ -286,7 +445,7 @@
   padding-right: 34px;
 }
 .oic-select option {
-  background: #102a43;
+  background: var(--oic-deep-navy);
   color: #fff;
 }
 .oic-scroll {
@@ -313,14 +472,22 @@
 .oic-room[data-lk-theme].lk-room-container {
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
 }
+/* A floating glass "island" toolbar (iOS Control Center-style) rather than a bar flush with the screen edge. */
 .oic-controls {
+  margin: 0 10px max(10px, env(safe-area-inset-bottom));
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgb(31 45 63 / 0.78), rgb(18 28 42 / 0.78));
+  backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgb(255 255 255 / 0.09);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 0.12) inset, 0 0 0 1px rgb(32 196 216 / 0.07), 0 20px 46px -14px rgb(0 0 0 / 0.55);
   padding-top: 10px;
-  padding-bottom: max(10px, env(safe-area-inset-bottom));
+  padding-bottom: 10px;
 }
 @media (min-width: 640px) {
   .oic-controls {
+    margin: 0 16px max(14px, env(safe-area-inset-bottom));
     padding-top: 0;
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: 0;
   }
 }
 .oic-controls[data-compact] .oic-ctl {

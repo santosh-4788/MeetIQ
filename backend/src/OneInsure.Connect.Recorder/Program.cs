@@ -106,10 +106,14 @@ Directory.CreateDirectory(outDir);
 var partial = Path.Combine(outDir, $"{jobId}.mp4.partial");
 var final = Path.Combine(outDir, $"{jobId}.mp4");
 var remux = options.Layout.VideoCodec == "h264";
-var ff = await finalizer.BuildMp4Async(segments.Select(s => s.FilePath).ToList(), partial + ".mp4", remux, CancellationToken.None);
+// The browser session decides the real canvas size (landscape, or a 1:1 call's portrait canvas - see main.ts);
+// 0 only if every attempt failed before reporting in, in which case the configured landscape default is used.
+var width = session.ActualWidth > 0 ? session.ActualWidth : options.Layout.Width;
+var height = session.ActualHeight > 0 ? session.ActualHeight : options.Layout.Height;
+var ff = await finalizer.BuildMp4Async(segments.Select(s => s.FilePath).ToList(), partial + ".mp4", remux, width, height, CancellationToken.None);
 File.Move(partial + ".mp4", partial, overwrite: true);
 var verification = ff.ExitCode == 0
-    ? await finalizer.VerifyAsync(partial, expectedSeconds, CancellationToken.None)
+    ? await finalizer.VerifyAsync(partial, expectedSeconds, width, height, CancellationToken.None)
     : new VerificationResult(false, [$"FFmpeg exited with {ff.ExitCode}: {ff.StdErrTail}"], 0, expectedSeconds, 0, "", "", "", 0, 0, 0, false, 0);
 
 var recordingOk = outcome is AttemptOutcome.RoomEnded or AttemptOutcome.StopRequested or AttemptOutcome.MaxDuration;

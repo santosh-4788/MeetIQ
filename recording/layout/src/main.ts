@@ -35,7 +35,7 @@ declare global {
     oicChunk: (seq: number, base64: string) => Promise<void>
     oicEvent: (json: string) => Promise<void>
     oicControl: {
-      start: () => Promise<{ mimeType: string }>
+      start: () => Promise<{ mimeType: string; width: number; height: number }>
       stop: () => Promise<void>
       status: () => RecorderStatus
       simulate: (scenario: SimulationScenario) => Promise<void>
@@ -64,8 +64,13 @@ type RecorderStatus = {
 
 const cfg = window.__OIC_REC__
 const canvas = document.getElementById('stage') as HTMLCanvasElement
-canvas.width = cfg.width
-canvas.height = cfg.height
+// Locked once, a few seconds in, by decideCanvasSize() below: group calls (3+) always stay landscape; a one-to-one
+// call switches to a portrait canvas if either camera is portrait. MediaRecorder cannot change the resolution of a
+// stream already in progress, so once start() locks this, it never changes again for the life of the recording.
+let activeWidth = cfg.width
+let activeHeight = cfg.height
+canvas.width = activeWidth
+canvas.height = activeHeight
 const ctx = canvas.getContext('2d', { alpha: false })!
 const mediaHost = document.getElementById('media')!
 
@@ -228,7 +233,10 @@ function drawTile(p: RemoteParticipant, r: Rect, small = false) {
   ctx.fillRect(r.x, r.y, r.w, r.h)
   const v = videoFor(p, Track.Source.Camera)
   const name = p.name || p.identity
-  if (v) drawCover(v, r)
+  // Contain, never cover: show the complete participant video with no cropping or stretching, letterboxed to
+  // fit the tile. A frame's own displayWidth/displayHeight is read fresh every draw, so a participant rotating
+  // their phone mid-call is picked up automatically on the next frame with no extra handling needed here.
+  if (v) drawCover(v, r, true)
   else {
     const rad = Math.min(r.w, r.h) * 0.16
     ctx.fillStyle = colorFor(p.identity)
@@ -268,6 +276,12 @@ function drawTile(p: RemoteParticipant, r: Rect, small = false) {
 
 function gridRects(n: number, area: Rect, gap = 10): Rect[] {
   if (n === 0) return []
+  // A portrait canvas only ever happens for a one-to-one call (n <= 2 - see decideCanvasSize), where a side-by-side
+  // column layout would squeeze each tile into a sliver. Stack top/bottom instead so each tile stays a sane shape.
+  if (area.h > area.w && n <= 2) {
+    const th = (area.h - gap * (n - 1)) / n
+    return Array.from({ length: n }, (_, i) => ({ x: area.x, y: area.y + i * (th + gap), w: area.w, h: th }))
+  }
   const cols = n === 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4
   const rows = Math.ceil(n / cols)
   // Keep tiles 16:9 inside the area.
@@ -298,7 +312,7 @@ function hhmmss(ms: number) {
 
 function draw() {
   const t0 = performance.now()
-  const W = cfg.width, H = cfg.height
+  const W = activeWidth, H = activeHeight
   ctx.fillStyle = C.bg
   ctx.fillRect(0, 0, W, H)
   const top = 44, pad = 12
@@ -403,10 +417,47 @@ function blobToBase64(blob: Blob) {
   })
 }
 
+const ORIENTATION_DETECT_MS = 4000
+const ORIENTATION_POLL_MS = 200
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Device-adaptive canvas size (approved spec): a one-to-one call (<=2 real participants) records portrait
+ * (height x width, i.e. the configured landscape canvas rotated) if either camera is portrait; a group call
+ * (3+) always stays the configured landscape size - no detection needed there. Give cameras a few seconds to
+ * publish before deciding, since a camera that hasn't reported a frame yet reads as "unknown", not "landscape".
+ * This runs once, before the recorder starts, and never re-evaluates once the canvas is locked.
+ */
+async function decideCanvasSize() {
+  const deadline = performance.now() + ORIENTATION_DETECT_MS
+  for (;;) {
+    if (room.remoteParticipants.size > 2) return // group call: keep the configured landscape size
+    const people = [...room.remoteParticipants.values()]
+    const frames = people.map((p) => videoFor(p, Track.Source.Camera)).filter((f): f is VideoFrame => !!f)
+    const allReported = people.length > 0 && frames.length >= people.length
+    if (allReported || performance.now() >= deadline) {
+      if (room.remoteParticipants.size > 2) return // someone joined mid-wait, making this a group call after all
+      if (frames.some((f) => f.displayHeight > f.displayWidth)) applyCanvasSize(cfg.height, cfg.width)
+      return
+    }
+    await sleep(ORIENTATION_POLL_MS)
+  }
+}
+
+function applyCanvasSize(w: number, h: number) {
+  activeWidth = w
+  activeHeight = h
+  canvas.width = w
+  canvas.height = h
+}
+
 async function start() {
   await room.connect(cfg.url, cfg.token, { autoSubscribe: true })
   emit('connected', { room: room.name, participants: room.remoteParticipants.size })
   if (audioCtx.state !== 'running') await audioCtx.resume()
+
+  await decideCanvasSize()
+  emit('canvas_locked', { width: activeWidth, height: activeHeight, participants: room.remoteParticipants.size })
 
   drawTimer = window.setInterval(draw, 1000 / cfg.fps)
   draw()
@@ -430,8 +481,8 @@ async function start() {
   recorder.onerror = (e) => emit('recorder_error', { message: String((e as unknown as { error?: Error }).error ?? e) })
   recorder.start(cfg.timesliceMs)
   recordStartMs = Date.now()
-  emit('recording_started', { mimeType, width: cfg.width, height: cfg.height, fps: cfg.fps })
-  return { mimeType }
+  emit('recording_started', { mimeType, width: activeWidth, height: activeHeight, fps: cfg.fps })
+  return { mimeType, width: activeWidth, height: activeHeight }
 }
 
 function stopRecording() {

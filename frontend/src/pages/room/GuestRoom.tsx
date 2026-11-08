@@ -30,6 +30,7 @@ export default function GuestRoom({
   info,
   onClose,
   getToken,
+  onInvalidToken,
   audioOnly = false,
   footnote = 'This personal link is for you only. Your camera and microphone are used only while you are in the meeting.',
   backLabel = 'Back to the invitation',
@@ -38,6 +39,9 @@ export default function GuestRoom({
   info: JoinInfo
   onClose: () => void
   getToken?: (name: string) => Promise<string | null>
+  /** A previously-remembered personal token (see getToken) turned out to be invalid/expired - the caller should forget
+      it so the next attempt asks the server for a fresh one, instead of retrying the same dead token forever. */
+  onInvalidToken?: () => void
   audioOnly?: boolean
   footnote?: string
   backLabel?: string
@@ -98,6 +102,14 @@ export default function GuestRoom({
         tracksRef.current = previews
         releaseTracks()
         return true
+      }
+      if (e instanceof ApiError && e.status === 404 && token) {
+        // A remembered personal token (from an earlier visit) no longer works - forget it and let a retry ask the
+        // server for a fresh one, rather than silently failing the same way every time.
+        onInvalidToken?.()
+        setToken('')
+        setError('This link needs to be refreshed. Please try joining again.')
+        return false
       }
       setError(errorMessage(e, 'You could not be connected to the meeting. Please try again.'))
       return false
@@ -253,7 +265,7 @@ function WaitingRoom({
         <div className="relative mx-auto flex size-24 items-center justify-center">
           <span className="oic-pulse" aria-hidden />
           <span className="oic-pulse delay" aria-hidden />
-          <span className="relative flex size-20 items-center justify-center rounded-full bg-[linear-gradient(135deg,#1769AA,#2878E5_60%,#20C4D8)] shadow-[0_12px_40px_rgb(40_120_229/0.45)]">
+          <span className="relative flex size-20 items-center justify-center rounded-full bg-[linear-gradient(135deg,#246BCE,#3787F5_60%,#20C4D8)] shadow-[0_12px_40px_rgb(55_135_245/0.45)]">
             <DoorOpen className="size-9" aria-hidden />
           </span>
         </div>

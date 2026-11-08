@@ -1,6 +1,6 @@
 import { useRef, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { ArrowRight, Lock, ShieldCheck, UserRound } from 'lucide-react'
+import { ArrowRight, Lock, UserRound } from 'lucide-react'
 import { authApi } from '../../api'
 import { ApiError } from '../../api/types'
 import { useAuth } from '../../auth/AuthContext'
@@ -11,7 +11,6 @@ import { Alert } from '../../components/ui/Feedback'
 import { validateLoginId } from '../../lib/validation'
 import { DEMO_MODE } from '../../config'
 import { DemoCredentials } from './DemoCredentials'
-import { OneInsureLogo } from '../../components/brand/OneInsureLogo'
 
 export function LoginPage() {
   const navigate = useNavigate()
@@ -75,12 +74,11 @@ export function LoginPage() {
   }
 
   return (
-    <div className="w-full max-w-[440px]">
+    <div className="w-full max-w-[400px]">
       <AuthCard>
-        <div className="mb-7 short:mb-6">
-          <OneInsureLogo height={40} className="mb-6 -ml-1.5 short:mb-5 short:h-[36px]! tiny:mb-4 tiny:h-[32px]!" />
-          <h1 className="text-[26px] leading-8 font-bold tracking-[-0.02em] text-ink">Welcome back!</h1>
-          <p className="mt-1.5 text-[14px] text-ink-secondary">Sign in to your OneInsure Connect account.</p>
+        <div className="mb-6 text-center short:mb-5">
+          <h1 className="text-[21px] leading-7 font-bold tracking-[-0.015em] text-ink">Sign in to Connect</h1>
+          <p className="mt-1.5 text-[13.5px] text-ink-secondary">Use your official OneInsure e-mail or employee code.</p>
         </div>
 
         <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4.5 short:gap-4">
@@ -102,6 +100,7 @@ export function LoginPage() {
             autoFocus
             spellCheck={false}
             autoCapitalize="none"
+            autoCorrect="off"
           />
           <PasswordField
             ref={passwordRef}
@@ -128,17 +127,12 @@ export function LoginPage() {
             size="lg"
             fullWidth
             loading={submitting}
-            className="mt-1 bg-[linear-gradient(90deg,#1769AA,#2878E5)] hover:brightness-110 hover:bg-transparent"
+            className="btn-shine mt-1 bg-[linear-gradient(90deg,#1769AA,#2878E5)] hover:brightness-110 hover:bg-transparent"
             rightIcon={<ArrowRight className="size-[18px] transition-transform duration-200 group-hover/btn:translate-x-0.5" />}
           >
             {submitting ? 'Signing in…' : 'Sign In'}
           </Button>
         </form>
-
-        <p className="mt-6 flex items-center justify-center gap-2 text-[12.5px] text-ink-secondary short:mt-5">
-          <ShieldCheck className="size-4 text-success" />
-          Secure Enterprise Communication Platform
-        </p>
       </AuthCard>
       {DEMO_MODE && <DemoCredentials onPick={(l, p) => (setLogin(l), setPassword(p), setErrors({}), setFormError(null))} />}
     </div>

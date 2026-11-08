@@ -27,7 +27,6 @@ const plannedAreas = [
   'SMTP and e-mail delivery settings',
   'Meeting and security settings',
   'System health of the other background services',
-  'Audit log viewer',
 ]
 
 export function AdminPage() {

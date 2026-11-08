@@ -22,7 +22,12 @@ public static class MeetingEndpoints
     public sealed record MeetingUpdateInput(string? Title, string? Description, string? Agenda, string? Category, DateTime? StartUtc, DateTime? EndUtc,
         string? TimeZoneId, string? RecordingPolicy, bool? WaitingRoomEnabled, string? Status, string? Purpose, string? PolicyNumber,
         bool OverrideConflicts, string? OverrideReason);
+    public sealed record RecurrenceInput(string? Pattern, int? Interval, string[]? ByWeekdays, string? EndType, int? EndCount, DateTime? EndUntilUtc);
+    public sealed record RecurringMeetingInput(string? Title, string? Description, string? Agenda, string? Category, DateTime? StartUtc, DateTime? EndUtc,
+        string? TimeZoneId, Guid? HostEmployeeId, Guid[]? EmployeeIds, Guid? CustomerId, GuestInput[]? Guests, string? RecordingPolicy,
+        bool? WaitingRoomEnabled, string? Purpose, string? PolicyNumber, bool OverrideConflicts, string? OverrideReason, RecurrenceInput? Recurrence);
     public sealed record CancelInput(string? Reason);
+    public sealed record CancelSeriesInput(string? Reason, string? Scope);
     public sealed record RespondInput(string? Response);
     public sealed record AddParticipantsInput(Guid[]? EmployeeIds, GuestInput[]? Guests, bool OverrideConflicts, string? OverrideReason);
     public sealed record AvailabilityInput(Guid[]? EmployeeIds, DateTime? StartUtc, DateTime? EndUtc, Guid? ExcludeMeetingId);
@@ -75,6 +80,9 @@ public static class MeetingEndpoints
         g.MapGet("", List).RequireAnyPermission("meetings.view.own", "meetings.view.all");
         g.MapGet("/{id:guid}", Get).RequireAnyPermission("meetings.view.own", "meetings.view.all");
         g.MapPost("", Create).RequirePermission("meetings.create");
+        g.MapPost("/recurring", CreateRecurring).RequirePermission("meetings.create");
+        g.MapGet("/{id:guid}/series", GetSeries).RequireAnyPermission("meetings.view.own", "meetings.view.all");
+        g.MapPost("/{id:guid}/series/cancel", CancelSeries).RequirePermission("meetings.create");
         g.MapPut("/{id:guid}", Update).RequirePermission("meetings.create");
         g.MapPost("/{id:guid}/cancel", Cancel).RequirePermission("meetings.create");
         g.MapPost("/{id:guid}/respond", Respond).RequireAnyPermission("meetings.view.own", "meetings.view.all");
@@ -334,6 +342,274 @@ public static class MeetingEndpoints
                     newValues: new { reason = overrideReason, conflicts = conflicts.Select(x => new { employeeId = x.EmployeeId, x.Type, x.StartUtc, x.EndUtc }) });
             return Results.Json(new { id = publicId, meetingCode = code, status, warnings, overriddenConflicts = conflicts.Count }, statusCode: 201);
         });
+    }
+
+    // ---- Recurring meetings --------------------------------------------------------------------------------------
+
+    static (string Pattern, int Interval, int? WeekdaysMask, string EndType, int? EndCount, DateTime? EndUntilUtc)? ValidateRecurrence(
+        Validator v, RecurrenceInput? r, DateTime firstStartUtc, DateTime now)
+    {
+        if (r is null) return null;
+        var pattern = Upper(r.Pattern);
+        if (pattern is null || !Recurrence.Patterns.Contains(pattern)) { v.Add("recurrence.pattern", "Pattern must be DAILY, WEEKLY or MONTHLY."); return null; }
+        var interval = r.Interval ?? 1;
+        if (interval is < 1 or > 30) v.Add("recurrence.interval", "Repeat every 1 to 30.");
+        int? mask = null;
+        if (pattern == "WEEKLY") mask = Recurrence.ParseWeekdaysMask(r.ByWeekdays, v, "recurrence.byWeekdays");
+        var endType = Upper(r.EndType);
+        if (endType is null || !Recurrence.EndTypes.Contains(endType)) { v.Add("recurrence.endType", "End type must be COUNT or UNTIL."); return null; }
+        int? endCount = null;
+        DateTime? endUntilUtc = null;
+        if (endType == "COUNT")
+        {
+            endCount = r.EndCount;
+            if (endCount is null || endCount is < 2 or > Recurrence.MaxOccurrences) v.Add("recurrence.endCount", $"Choose between 2 and {Recurrence.MaxOccurrences} occurrences.");
+        }
+        else
+        {
+            endUntilUtc = r.EndUntilUtc is null ? null : DateTime.SpecifyKind(r.EndUntilUtc.Value, DateTimeKind.Utc);
+            if (endUntilUtc is null || endUntilUtc <= firstStartUtc) v.Add("recurrence.endUntilUtc", "The end date must be after the first occurrence.");
+            else if (endUntilUtc > firstStartUtc.Add(Recurrence.MaxHorizon)) v.Add("recurrence.endUntilUtc", "A series can run for at most one year.");
+        }
+        if (!v.IsValid) return null;
+        return (pattern, interval, mask, endType!, endCount, endUntilUtc);
+    }
+
+    static async Task<IResult> CreateRecurring(RecurringMeetingInput i, Db db, HttpContext ctx, MeetingMessaging msg, IClock clock, IOptions<MeetingOptions> mo)
+    {
+        using var c = await db.OpenAsync();
+        var me = await Actor.LoadAsync(c, ctx.User);
+        if (me.EmployeeId is null) return NoEmployee();
+        var now = clock.UtcNow;
+        var o = mo.Value;
+
+        var v = new Validator();
+        var title = v.Required("title", i.Title, 200, "Title");
+        var description = v.Optional("description", i.Description, 2000, "Description");
+        var agenda = v.Optional("agenda", i.Agenda, 4000, "Agenda");
+        var purpose = v.Optional("purpose", i.Purpose, 200, "Purpose");
+        var policyNumber = v.Optional("policyNumber", i.PolicyNumber, 50, "Policy number");
+        var category = Upper(i.Category);
+        if (category is null) v.Add("category", "Category is required.");
+        else if (!Categories.Contains(category)) v.Add("category", "Unknown meeting category.");
+        ValidateTimes(v, i.StartUtc, i.EndUtc, allowPast: false, now, o);
+        var tz = ValidateZone(v, i.TimeZoneId, o);
+        var recording = Upper(i.RecordingPolicy) ?? "NONE";
+        if (!RecordingPolicies.Contains(recording)) v.Add("recordingPolicy", "Recording policy must be NONE, OPTIONAL or REQUIRED.");
+        var guests = ValidateGuests(v, i.Guests);
+        var overrideReason = v.Optional("overrideReason", i.OverrideReason, 500, "Override reason");
+        if (i.OverrideConflicts && overrideReason is null && me.Override) v.Add("overrideReason", "Give a reason for booking despite the conflict.");
+        var rule = i.StartUtc is null ? null : ValidateRecurrence(v, i.Recurrence, DateTime.SpecifyKind(i.StartUtc.Value, DateTimeKind.Utc), now);
+        if (i.Recurrence is null) v.Add("recurrence", "A recurrence rule is required. Use POST /meetings for a one-off meeting.");
+        if (!v.IsValid) return v.Problem();
+
+        var isCustomer = IsCustomerCategory(category);
+        if (isCustomer && !me.Customers) return Problems.Create(403, "FORBIDDEN", "You do not have permission to schedule customer meetings.");
+        if (i.OverrideConflicts && !me.Override) return Problems.Create(403, "FORBIDDEN", "You do not have permission to override calendar conflicts.");
+
+        long hostId = me.EmployeeId.Value;
+        long hostDept;
+        if (i.HostEmployeeId is { } hostPublic)
+        {
+            var h = await c.QuerySingleOrDefaultAsync<EmpRef>("SELECT EmployeeId, PublicId, DepartmentId FROM org.Employees WHERE PublicId = @hostPublic AND IsActive = 1", new { hostPublic });
+            if (h is null) { v.Add("hostEmployeeId", "The selected host was not found or is no longer active."); return v.Problem(); }
+            (hostId, hostDept) = (h.EmployeeId, h.DepartmentId);
+        }
+        else hostDept = await c.ExecuteScalarAsync<long>("SELECT DepartmentId FROM org.Employees WHERE EmployeeId = @hostId", new { hostId });
+        var employees = await ResolveEmployees(c, i.EmployeeIds, v, "employeeIds");
+        CustomerPick? customer = null;
+        if (isCustomer)
+        {
+            if (i.CustomerId is null) v.Add("customerId", "Select the customer for a customer meeting.");
+            else
+            {
+                customer = await c.QuerySingleOrDefaultAsync<CustomerPick>("SELECT CustomerId, PolicyNumber FROM crm.Customers WHERE PublicId = @id AND IsActive = 1", new { id = i.CustomerId });
+                if (customer is null) v.Add("customerId", "The selected customer was not found or is inactive.");
+            }
+        }
+        else if (i.CustomerId is not null) v.Add("customerId", "Only customer meetings (CUSTOMER_PLVC, CUSTOMER_GENERAL) can include a customer.");
+        if (!v.IsValid || employees is null || rule is null) return v.Problem();
+        (employees, guests) = await PromoteEmployeeGuests(c, employees, guests);
+
+        var employeeIds = new List<long> { hostId, me.EmployeeId.Value };
+        employeeIds.AddRange(employees.Select(e => e.EmployeeId));
+        employeeIds = employeeIds.Distinct().ToList();
+        var firstStart = DateTime.SpecifyKind(i.StartUtc!.Value, DateTimeKind.Utc);
+        var firstEnd = DateTime.SpecifyKind(i.EndUtc!.Value, DateTimeKind.Utc);
+        var occurrences = Recurrence.Generate(rule.Value.Pattern, rule.Value.Interval, rule.Value.WeekdaysMask, rule.Value.EndType, rule.Value.EndCount,
+            rule.Value.EndUntilUtc, firstStart, firstEnd, tz!);
+        if (occurrences.Count == 0) return Problems.Create(400, "VALIDATION", "The recurrence rule produces no meetings. Check the days of the week and end date.");
+
+        return await Booking(c, true, async tx =>
+        {
+            var (seriesId, seriesPublicId) = await c.QuerySingleAsync<(long, Guid)>("""
+                INSERT mtg.MeetingSeries (Pattern, IntervalCount, ByWeekdaysMask, EndType, EndCount, EndUntilUtc, TimeZoneId, CreatedByEmployeeId)
+                OUTPUT inserted.SeriesId, inserted.PublicId
+                VALUES (@pattern, @interval, @mask, @endType, @endCount, @endUntil, @tz, @creator)
+                """, new
+            {
+                pattern = rule.Value.Pattern, interval = rule.Value.Interval, mask = rule.Value.WeekdaysMask, endType = rule.Value.EndType,
+                endCount = rule.Value.EndCount, endUntil = rule.Value.EndUntilUtc, tz, creator = me.EmployeeId,
+            }, tx);
+
+            var created = new List<(Guid Id, string Code, DateTime Start, DateTime End)>();
+            var allConflicts = new List<object>();
+            var anyConflict = false;
+            var seq = 0;
+            foreach (var (start, end) in occurrences)
+            {
+                seq++;
+                var check = await AvailabilityCheck.RunAsync(c, tx, employeeIds, start, end, null, lockCalendars: true);
+                if (check.Conflicts.Count > 0)
+                {
+                    anyConflict = true;
+                    allConflicts.Add(new { seq, startUtc = start, endUtc = end, conflicts = check.Conflicts });
+                    if (!i.OverrideConflicts) continue; // keep checking the rest so the host sees every conflicting date at once
+                }
+
+                long meetingId = 0;
+                Guid publicId = default;
+                string code = "";
+                for (var attempt = 0; meetingId == 0; attempt++)
+                {
+                    code = MeetingMessaging.NewMeetingCode(now);
+                    try
+                    {
+                        (meetingId, publicId) = await c.QuerySingleAsync<(long, Guid)>("""
+                            INSERT mtg.Meetings (MeetingCode, Title, Description, Agenda, Category, CreatedByEmployeeId, HostEmployeeId, DepartmentId, CustomerId,
+                                PolicyNumber, Purpose, ScheduledStartUtc, ScheduledEndUtc, TimeZoneId, [Status], RecordingPolicy, WaitingRoomEnabled, LiveKitRoomName,
+                                OverrideConflictReason, CreatedByUserId, SeriesId, SeriesSeq)
+                            OUTPUT inserted.MeetingId, inserted.PublicId
+                            VALUES (@code, @title, @description, @agenda, @category, @creator, @hostId, @hostDept, @customerId, @policyNumber, @purpose, @start, @end,
+                                @tz, 'SCHEDULED', @recording, @waiting, @room, @overrideNote, @user, @seriesId, @seq)
+                            """, new
+                        {
+                            code, title, description, agenda, category, creator = me.EmployeeId, hostId, hostDept, customerId = customer?.CustomerId,
+                            policyNumber = policyNumber ?? customer?.PolicyNumber, purpose, start, end, tz, recording, waiting = i.WaitingRoomEnabled ?? true,
+                            room = MeetingMessaging.NewOpaqueId("oic_", 16), overrideNote = check.Conflicts.Count > 0 ? overrideReason : null, user = me.UserId,
+                            seriesId, seq,
+                        }, tx);
+                    }
+                    catch (SqlException e) when (e.IsUniqueViolation() && e.Message.Contains("MeetingCode") && attempt < 5) { }
+                }
+
+                var rows = new List<ParticipantInsert> { Employee(meetingId, hostId, "HOST", me.UserId) };
+                if (me.EmployeeId.Value != hostId) rows.Add(Employee(meetingId, me.EmployeeId.Value, "HOST", me.UserId));
+                rows.AddRange(employees.Where(e => e.EmployeeId != hostId && e.EmployeeId != me.EmployeeId).Select(e => Employee(meetingId, e.EmployeeId, "ATTENDEE", me.UserId)));
+                if (customer is not null)
+                    rows.Add(new(meetingId, "CUSTOMER", null, customer.CustomerId, null, null, "ATTENDEE", "PENDING", MeetingMessaging.NewOpaqueId("p_", 12), false, me.UserId));
+                rows.AddRange(guests.Select(gu => Guest(meetingId, gu, me.UserId)));
+                await InsertParticipants(c, tx, rows);
+
+                var info = await MeetingMessaging.LoadAsync(c, tx, meetingId);
+                var recipients = await MeetingMessaging.RecipientsAsync(c, tx, meetingId);
+                await msg.SendAsync(c, tx, info, recipients, MessageKind.Invited, me.UserId);
+                await msg.ScheduleRemindersAsync(c, tx, info, recipients);
+                created.Add((publicId, code, start, end));
+            }
+
+            if (anyConflict && !i.OverrideConflicts)
+            {
+                tx.Rollback();
+                return Problems.Create(409, "CONFLICT", "One or more occurrences are not available for all participants.",
+                    new Dictionary<string, object?> { ["occurrenceConflicts"] = allConflicts });
+            }
+
+            var ip = ClientInfo.From(ctx).Ip;
+            await Audit.WriteAsync(c, "USER", me.UserId, "MEETING_SERIES_SCHEDULED", "MeetingSeries", seriesPublicId.ToString(),
+                $"Recurring meeting '{title}' scheduled: {created.Count} occurrence(s)", ip, tx, newValues: new
+                {
+                    title, category, pattern = rule.Value.Pattern, interval = rule.Value.Interval, occurrences = created.Count,
+                });
+            if (anyConflict)
+                await Audit.WriteAsync(c, "USER", me.UserId, "MEETING_CONFLICT_OVERRIDDEN", "MeetingSeries", seriesPublicId.ToString(),
+                    $"Booked despite conflicts on {allConflicts.Count} occurrence(s)", ip, tx, privileged: true, newValues: new { reason = overrideReason, occurrenceConflicts = allConflicts });
+
+            return Results.Json(new
+            {
+                seriesId = seriesPublicId,
+                occurrences = created.Select(x => new { id = x.Id, meetingCode = x.Code, startUtc = x.Start, endUtc = x.End }),
+                overriddenConflicts = allConflicts.Count,
+            }, statusCode: 201);
+        });
+    }
+
+    sealed record SeriesAnchorRow(long SeriesId, Guid SeriesPublicId, int Seq);
+    sealed record SeriesInfoRow(Guid SeriesPublicId, string Pattern, int IntervalCount, int? ByWeekdaysMask, string EndType, int? EndCount, DateTime? EndUntilUtc);
+    sealed record SeriesOccurrenceRow(Guid Id, int Seq, DateTime StartUtc, DateTime EndUtc, string Status);
+
+    static async Task<IResult> GetSeries(Guid id, Db db, HttpContext ctx)
+    {
+        using var c = await db.OpenAsync();
+        var me = await Actor.LoadAsync(c, ctx.User);
+        var m = await FindVisibleAsync(c, id, me);
+        if (m is null) return MeetingNotFound();
+        var seriesId = await c.ExecuteScalarAsync<long?>("SELECT SeriesId FROM mtg.Meetings WHERE MeetingId = @id", new { id = m.MeetingId });
+        if (seriesId is null) return Problems.Create(400, "VALIDATION", "This meeting is not part of a recurring series.");
+        var series = await c.QuerySingleAsync<SeriesInfoRow>("""
+            SELECT PublicId AS SeriesPublicId, Pattern, IntervalCount, ByWeekdaysMask, EndType, EndCount, EndUntilUtc
+            FROM mtg.MeetingSeries WHERE SeriesId = @seriesId
+            """, new { seriesId });
+        var occurrences = (await c.QueryAsync<SeriesOccurrenceRow>($"""
+            SELECT m.PublicId AS Id, m.SeriesSeq AS Seq, m.ScheduledStartUtc AS StartUtc, m.ScheduledEndUtc AS EndUtc, m.[Status]
+            FROM mtg.Meetings m WHERE m.SeriesId = @seriesId AND {Visible}
+            ORDER BY m.SeriesSeq
+            """, new { seriesId, emp = me.EmployeeId, all = me.ViewAll })).ToList();
+        return Results.Ok(new
+        {
+            seriesId = series.SeriesPublicId, pattern = series.Pattern, interval = series.IntervalCount,
+            byWeekdays = series.ByWeekdaysMask is null ? null : Recurrence.WeekdaysFromMask(series.ByWeekdaysMask.Value),
+            endType = series.EndType, endCount = series.EndCount, endUntilUtc = series.EndUntilUtc,
+            occurrences = occurrences.Select(o => new { id = o.Id, seq = o.Seq, startUtc = o.StartUtc, endUtc = o.EndUtc, status = o.Status }),
+        });
+    }
+
+    static async Task<IResult> CancelSeries(Guid id, CancelSeriesInput input, Db db, HttpContext ctx, MeetingMessaging msg)
+    {
+        using var c = await db.OpenAsync();
+        var me = await Actor.LoadAsync(c, ctx.User);
+        var m = await FindVisibleAsync(c, id, me);
+        if (m is null) return MeetingNotFound();
+        if (!CanEdit(m, me)) return NotEditable();
+        var v = new Validator();
+        var reason = v.Required("reason", input.Reason, 500, "Reason");
+        var scope = (input.Scope ?? "").Trim().ToLowerInvariant();
+        if (scope is not ("following" or "all")) v.Add("scope", "Scope must be 'following' or 'all'.");
+        if (!v.IsValid) return v.Problem();
+
+        var anchor = await c.QuerySingleOrDefaultAsync<SeriesAnchorRow>("""
+            SELECT m.SeriesId, s.PublicId AS SeriesPublicId, m.SeriesSeq AS Seq FROM mtg.Meetings m JOIN mtg.MeetingSeries s ON s.SeriesId = m.SeriesId
+            WHERE m.MeetingId = @id
+            """, new { id = m.MeetingId });
+        if (anchor is null) return Problems.Create(400, "VALIDATION", "This meeting is not part of a recurring series.");
+
+        var targets = (await c.QueryAsync<(long MeetingId, string Status)>("""
+            SELECT MeetingId, [Status] FROM mtg.Meetings
+            WHERE SeriesId = @seriesId AND [Status] IN ('DRAFT', 'SCHEDULED') AND (@scope = 'all' OR SeriesSeq >= @seq)
+            """, new { seriesId = anchor.SeriesId, scope, seq = anchor.Seq })).ToList();
+        if (targets.Count == 0) return Problems.Create(400, "VALIDATION", "There are no cancellable meetings in this series for the chosen scope.");
+
+        using var tx = c.BeginTransaction();
+        var cancelled = 0;
+        foreach (var t in targets)
+        {
+            var n = await c.ExecuteAsync("""
+                UPDATE mtg.Meetings SET [Status] = 'CANCELLED', CancelReason = @reason, ModifiedUtc = SYSUTCDATETIME(), ModifiedByUserId = @user
+                WHERE MeetingId = @mid AND [Status] = @old
+                """, new { reason, user = me.UserId, mid = t.MeetingId, old = t.Status }, tx);
+            if (n == 0) continue; // changed concurrently since the list was read: skip it rather than fail the whole batch
+            await MeetingMessaging.CancelRemindersAsync(c, tx, t.MeetingId);
+            if (t.Status == "SCHEDULED")
+            {
+                var info = await MeetingMessaging.LoadAsync(c, tx, t.MeetingId);
+                await msg.SendAsync(c, tx, info, await MeetingMessaging.RecipientsAsync(c, tx, t.MeetingId), MessageKind.Cancelled, me.UserId);
+            }
+            cancelled++;
+        }
+        await Audit.WriteAsync(c, "USER", me.UserId, "MEETING_SERIES_CANCELLED", "MeetingSeries", anchor.SeriesPublicId.ToString(),
+            $"{cancelled} occurrence(s) cancelled ({scope})", ClientInfo.From(ctx).Ip, tx, newValues: new { reason, scope, cancelled });
+        tx.Commit();
+        return Results.Ok(new { cancelled });
     }
 
     // ---- Update / reschedule -----------------------------------------------------------------------------------
@@ -646,7 +922,8 @@ public static class MeetingEndpoints
     // ---- Read --------------------------------------------------------------------------------------------------
 
     sealed record ListRow(Guid Id, string MeetingCode, string Title, string Category, string Status, DateTime StartUtc, DateTime EndUtc, string TimeZoneId,
-        string Organiser, Guid HostId, string? CustomerName, string RecordingPolicy, int ParticipantCount, string? Participants, string? MyRole, string? MyResponse, string MeetingKind);
+        DateTime? ActualStartUtc, DateTime? ActualEndUtc, string Organiser, Guid HostId, string? CustomerName, string RecordingPolicy, int ParticipantCount,
+        string? Participants, string? MyRole, string? MyResponse, string MeetingKind);
 
     internal static bool TryParseUtc(string? s, out DateTime? value)
     {
@@ -699,7 +976,7 @@ public static class MeetingEndpoints
         using var multi = await c.QueryMultipleAsync($"""
             SELECT COUNT(*) FROM mtg.Meetings m {where};
             SELECT m.PublicId AS Id, m.MeetingCode, m.Title, m.Category, m.[Status], m.ScheduledStartUtc AS StartUtc, m.ScheduledEndUtc AS EndUtc, m.TimeZoneId,
-                   h.DisplayName AS Organiser, h.PublicId AS HostId, cu.FullName AS CustomerName, m.RecordingPolicy,
+                   m.ActualStartUtc, m.ActualEndUtc, h.DisplayName AS Organiser, h.PublicId AS HostId, cu.FullName AS CustomerName, m.RecordingPolicy,
                    (SELECT COUNT(*) FROM mtg.MeetingParticipants x WHERE x.MeetingId = m.MeetingId) AS ParticipantCount,
                    (SELECT STRING_AGG(COALESCE(e.DisplayName, pc.FullName, x.GuestName), CHAR(31)) FROM (SELECT TOP (10) * FROM mtg.MeetingParticipants y WHERE y.MeetingId = m.MeetingId ORDER BY y.ParticipantId) x
                         LEFT JOIN org.Employees e ON e.EmployeeId = x.EmployeeId LEFT JOIN crm.Customers pc ON pc.CustomerId = x.CustomerId) AS Participants,
@@ -715,7 +992,8 @@ public static class MeetingEndpoints
         var items = (await multi.ReadAsync<ListRow>()).Select(r => new
         {
             id = r.Id, meetingCode = r.MeetingCode, title = r.Title, category = r.Category, categoryGroup = CategoryGroup(r.Category), status = r.Status,
-            startUtc = r.StartUtc, endUtc = r.EndUtc, timeZoneId = r.TimeZoneId, organiser = r.Organiser, hostId = r.HostId,
+            startUtc = r.StartUtc, endUtc = r.EndUtc, timeZoneId = r.TimeZoneId, actualStartUtc = r.ActualStartUtc, actualEndUtc = r.ActualEndUtc,
+            organiser = r.Organiser, hostId = r.HostId,
             participants = (r.Participants ?? "").Split('\u001F', StringSplitOptions.RemoveEmptyEntries), participantCount = r.ParticipantCount,
             recording = r.RecordingPolicy != "NONE", recordingPolicy = r.RecordingPolicy, customerName = r.CustomerName, myRole = r.MyRole, myResponse = r.MyResponse,
             kind = r.MeetingKind,
@@ -727,7 +1005,7 @@ public static class MeetingEndpoints
         DateTime StartUtc, DateTime EndUtc, string TimeZoneId, DateTime? ActualStartUtc, DateTime? ActualEndUtc, string RecordingPolicy, bool WaitingRoomEnabled,
         int ScheduleVersion, string? CancelReason, string? OverrideConflictReason, string? Purpose, string? PolicyNumber, long HostEmployeeId, Guid HostId, string HostName,
         long CreatedByEmployeeId, Guid CreatedById, string CreatedByName, Guid? CustomerId, string? CustomerName, string? CustomerRef, string? Department,
-        DateTime CreatedUtc, DateTime? ModifiedUtc, string MeetingKind, bool IsAudioOnly);
+        DateTime CreatedUtc, DateTime? ModifiedUtc, string MeetingKind, bool IsAudioOnly, Guid? SeriesId, int? SeriesSeq);
     sealed record ParticipantRow(long ParticipantId, string Id, string Type, long? EmployeeRowId, Guid? EmployeeId, string Name, string? Department,
         string? GuestEmail, string Role, string ResponseStatus, bool IsRequired);
     sealed record InvitationRow(long ParticipantId, DateTime CreatedUtc, DateTime ExpiresUtc, DateTime? RevokedUtc, int UseCount, DateTime? LastUsedUtc);
@@ -741,9 +1019,10 @@ public static class MeetingEndpoints
                    m.ScheduledEndUtc AS EndUtc, m.TimeZoneId, m.ActualStartUtc, m.ActualEndUtc, m.RecordingPolicy, m.WaitingRoomEnabled, m.ScheduleVersion,
                    m.CancelReason, m.OverrideConflictReason, m.Purpose, m.PolicyNumber, m.HostEmployeeId, h.PublicId AS HostId, h.DisplayName AS HostName,
                    m.CreatedByEmployeeId, cb.PublicId AS CreatedById, cb.DisplayName AS CreatedByName, cu.PublicId AS CustomerId, cu.FullName AS CustomerName,
-                   cu.CustomerRef, d.Name AS Department, m.CreatedUtc, m.ModifiedUtc, m.MeetingKind, m.IsAudioOnly
+                   cu.CustomerRef, d.Name AS Department, m.CreatedUtc, m.ModifiedUtc, m.MeetingKind, m.IsAudioOnly, ms.PublicId AS SeriesId, m.SeriesSeq
             FROM mtg.Meetings m JOIN org.Employees h ON h.EmployeeId = m.HostEmployeeId JOIN org.Employees cb ON cb.EmployeeId = m.CreatedByEmployeeId
             LEFT JOIN crm.Customers cu ON cu.CustomerId = m.CustomerId LEFT JOIN org.Departments d ON d.DepartmentId = m.DepartmentId
+            LEFT JOIN mtg.MeetingSeries ms ON ms.SeriesId = m.SeriesId
             WHERE m.PublicId = @id AND {Visible}
             """, new { id, emp = me.EmployeeId, all = me.ViewAll });
         if (m is null) return MeetingNotFound();
@@ -782,6 +1061,7 @@ public static class MeetingEndpoints
             host = new { id = m.HostId, name = m.HostName }, createdBy = new { id = m.CreatedById, name = m.CreatedByName },
             customer = m.CustomerId is null ? null : new { id = m.CustomerId, name = m.CustomerName, customerRef = me.Customers ? m.CustomerRef : null },
             createdUtc = m.CreatedUtc, modifiedUtc = m.ModifiedUtc, kind = m.MeetingKind, audioOnly = m.IsAudioOnly,
+            series = m.SeriesId is null ? null : new { id = m.SeriesId, seq = m.SeriesSeq },
             participants = participants.Select(p =>
             {
                 var inv = invitations.Where(x => x.ParticipantId == p.ParticipantId).OrderByDescending(x => x.CreatedUtc).FirstOrDefault();

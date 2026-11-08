@@ -1,4 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="UTF-8" /><title>R2 PoC participant</title></head>
 <body style="margin:0;background:#111"><canvas id="cam" width="640" height="360"></canvas><canvas id="screen" width="1280" height="720" style="display:none"></canvas>
+<!-- cam's width/height attributes above are just the landscape default; main.ts resizes it before first publish
+     based on cfg.orientation, and window.p.rotate() resizes it again mid-call for the device-rotation test. -->
 <script type="module" src="./src/main.ts"></script></body></html>

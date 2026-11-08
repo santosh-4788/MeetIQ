@@ -128,6 +128,9 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
                 ok = check.Ok, required = check.Required.Count,
                 granted = check.Required.Count(r => r.Decision == "GRANTED"),
                 pending = check.Pending.Select(r => r.Name), declined = check.Declined.Select(r => r.Name),
+                // Per-participant breakdown so the host can see, at a glance in the Participants panel (not only in the
+                // start-recording dialog), who has granted/declined/not yet responded - keyed by LiveKit identity.
+                decisions = check.Required.Select(r => new { identity = r.Identity, name = r.Name, decision = r.Decision ?? "PENDING" }),
             };
         }
         return new

@@ -7,6 +7,19 @@ import { meetingCategoryColors } from '../../design/tokens'
 
 // Shared labels, colours and badges for the meeting screens (and the dashboard).
 
+/**
+ * The old separate Agenda and Description fields are shown and edited as one "Meeting Details" field. Both database
+ * columns still exist (nothing deleted, nothing migrated) - an older record that has both is shown combined here;
+ * a resave through the new single field writes the merged text into `agenda` only and leaves `description`
+ * untouched, so no existing data is ever lost even though only one box is shown.
+ */
+export function combineMeetingDetails(agenda: string | null | undefined, description: string | null | undefined): string {
+  const a = (agenda ?? '').trim()
+  const d = (description ?? '').trim()
+  if (a && d && a !== d) return `${a}\n\n${d}`
+  return a || d
+}
+
 /** Category families as on the dashboard: colour (calendar, borders) and badge tone. */
 export const categoryMeta: Record<MeetingCategory, { label: string; color: string; tone: BadgeTone }> = {
   INTERNAL: { label: 'Internal', color: meetingCategoryColors.internal, tone: 'brand' },

@@ -1,10 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useParams } from 'react-router-dom'
 import {
-  ArrowLeft, BellRing, Building2, CalendarClock, CalendarX2, Check, CircleHelp, Clapperboard, Clock, DoorOpen, FileText, Hash, Link2, Pencil,
+  ArrowLeft, BellRing, Building2, CalendarClock, CalendarX2, Check, CircleHelp, Clapperboard, Clock, DoorOpen, FileText, Hash, Link2, Pencil, Repeat,
   ShieldAlert, Trash2, UserPlus, UserRound, Users, Video, X,
 } from 'lucide-react'
-import { bookingConflicts, meetingsApi, type Conflict, type MeetingDetail, type MeetingParticipant, type ResponseStatus } from '../../api/meetings'
+import { bookingConflicts, meetingsApi, type Conflict, type MeetingDetail, type MeetingParticipant, type MeetingSeries, type ResponseStatus } from '../../api/meetings'
 import { errorMessage, fieldErrors } from '../../api/types'
 import { useAuth } from '../../auth/AuthContext'
 import { EmployeePicker, type PickedEmployee } from '../../components/EmployeePicker'
@@ -23,7 +23,7 @@ import { useLoader } from '../../lib/useLoader'
 import { MeetingRecordingsCard } from '../recordings/MeetingRecordingsCard'
 import { ConflictDialog } from './Conflicts'
 import { MeetingLinkCard } from './MeetingLinkShare'
-import { CategoryBadge, ResponseBadge, StatusBadge, categoryMeta, dbCategoryLabel, recordingLabel, useTimeZone } from './meta'
+import { CategoryBadge, ResponseBadge, StatusBadge, categoryMeta, combineMeetingDetails, dbCategoryLabel, recordingLabel, useTimeZone } from './meta'
 
 /** /meetings/:id — everything about one meeting, RSVP and host actions. "Join" opens the video room (/meetings/:id/room). */
 export function MeetingDetailPage() {
@@ -59,6 +59,7 @@ function Detail({ m, tz, reload, reloading }: { m: MeetingDetail; tz: string; re
   const toast = useToast()
   const [cancelling, setCancelling] = useState(false)
   const [reason, setReason] = useState('')
+  const [cancelScope, setCancelScope] = useState<'this' | 'following'>('this')
   const cat = categoryMeta[m.categoryGroup] ?? categoryMeta.INTERNAL
   const start = parseUtc(m.startUtc)
   const end = parseUtc(m.endUtc)
@@ -73,6 +74,7 @@ function Detail({ m, tz, reload, reloading }: { m: MeetingDetail; tz: string; re
             <CategoryBadge group={m.categoryGroup} category={m.category} />
             <StatusBadge status={m.status} />
             {m.scheduleVersion > 1 && <Badge tone="warning">Rescheduled</Badge>}
+            {m.series && <Badge tone="info"><Repeat className="size-3" /> Recurring · occurrence {m.series.seq}</Badge>}
           </div>
           <h1 className={cn('mt-2 text-[24px] leading-8 font-bold tracking-[-0.015em] break-words', m.status === 'CANCELLED' ? 'text-ink-secondary line-through' : 'text-ink')}>{m.title}</h1>
           <p className="mt-1 flex flex-wrap items-center gap-x-2 text-[13.5px] text-ink-secondary">
@@ -87,7 +89,7 @@ function Detail({ m, tz, reload, reloading }: { m: MeetingDetail; tz: string; re
             </ButtonLink>
           )}
           {m.my.canCancel && (
-            <Button variant="ghost" className="text-danger hover:bg-danger-soft hover:text-danger" leftIcon={<CalendarX2 className="size-4" />} onClick={() => (setReason(''), setCancelling(true))}>
+            <Button variant="ghost" className="text-danger hover:bg-danger-soft hover:text-danger" leftIcon={<CalendarX2 className="size-4" />} onClick={() => (setReason(''), setCancelScope('this'), setCancelling(true))}>
               Cancel meeting
             </Button>
           )}
@@ -110,20 +112,9 @@ function Detail({ m, tz, reload, reloading }: { m: MeetingDetail; tz: string; re
           <DetailsCard m={m} tz={tz} />
           {(m.agenda || m.description) && (
             <Card>
-              <CardHeader title="Agenda and description" />
+              <CardHeader title="Meeting details" />
               <div className="flex flex-col gap-4 px-5 pb-5 text-[13.5px] leading-[22px] text-ink">
-                {m.agenda && (
-                  <div>
-                    <p className="eyebrow mb-1 text-ink-muted">Agenda</p>
-                    <p className="whitespace-pre-line break-words">{m.agenda}</p>
-                  </div>
-                )}
-                {m.description && (
-                  <div>
-                    <p className="eyebrow mb-1 text-ink-muted">Description</p>
-                    <p className="whitespace-pre-line break-words">{m.description}</p>
-                  </div>
-                )}
+                <p className="whitespace-pre-line break-words">{combineMeetingDetails(m.agenda, m.description)}</p>
               </div>
             </Card>
           )}
@@ -132,21 +123,27 @@ function Detail({ m, tz, reload, reloading }: { m: MeetingDetail; tz: string; re
         <div className="flex min-w-0 flex-col gap-5">
           {m.my.canRespond && <RsvpCard m={m} reload={reload} />}
           {m.status !== 'DRAFT' && <JoinCard m={m} tz={tz} reload={reload} />}
-          {m.my.canShareLink && <MeetingLinkCard meetingId={m.id} title={m.title} />}
+          {m.my.canShareLink && <MeetingLinkCard meetingId={m.id} title={m.title} isRecurring={!!m.series} />}
           {m.status !== 'DRAFT' && <RemindersCard m={m} tz={tz} />}
           {m.status !== 'DRAFT' && <MeetingRecordingsCard meetingId={m.id} tz={tz} />}
+          {m.series && <SeriesCard currentId={m.id} tz={tz} />}
         </div>
       </div>
 
       <ConfirmDialog
         open={cancelling}
         onClose={() => setCancelling(false)}
-        title="Cancel this meeting?"
+        title={m.series ? 'Cancel this recurring meeting?' : 'Cancel this meeting?'}
         confirmLabel="Cancel meeting"
         onConfirm={async () => {
           if (!reason.trim()) throw new Error('Give a reason for cancelling. Participants see it in the cancellation e-mail.')
-          await meetingsApi.cancel(m.id, reason.trim())
-          toast.success(m.status === 'SCHEDULED' ? 'Meeting cancelled. Participants have been notified.' : 'Draft cancelled.')
+          if (m.series && cancelScope === 'following') {
+            const r = await meetingsApi.cancelSeries(m.id, reason.trim(), 'following')
+            toast.success(`${r.cancelled} meeting${r.cancelled === 1 ? '' : 's'} cancelled. Participants have been notified.`)
+          } else {
+            await meetingsApi.cancel(m.id, reason.trim())
+            toast.success(m.status === 'SCHEDULED' ? 'Meeting cancelled. Participants have been notified.' : 'Draft cancelled.')
+          }
           reload()
         }}
       >
@@ -154,9 +151,58 @@ function Detail({ m, tz, reload, reloading }: { m: MeetingDetail; tz: string; re
           <strong className="text-ink">{m.title}</strong> on {formatRange(m.startUtc, m.endUtc, tz)} {zoneLabel(tz)}.
         </p>
         <p className="mt-1.5">Reminders stop, join links stop working{m.status === 'SCHEDULED' ? ' and everyone is e-mailed and notified' : ''}. This cannot be undone.</p>
+        {m.series && (
+          <fieldset className="mt-3 flex flex-col gap-2">
+            <label className="flex items-start gap-2.5 rounded-md border border-line px-3 py-2.5 text-[13px] text-ink">
+              <input type="radio" checked={cancelScope === 'this'} onChange={() => setCancelScope('this')} className="mt-0.5 size-4 accent-brand-500" />
+              <span>This meeting only (occurrence {m.series.seq})</span>
+            </label>
+            <label className="flex items-start gap-2.5 rounded-md border border-line px-3 py-2.5 text-[13px] text-ink">
+              <input type="radio" checked={cancelScope === 'following'} onChange={() => setCancelScope('following')} className="mt-0.5 size-4 accent-brand-500" />
+              <span>This and all following meetings in the series</span>
+            </label>
+          </fieldset>
+        )}
         <TextAreaField label="Reason" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} rows={3} className="mt-3" hint="Required. Shared with the participants." />
       </ConfirmDialog>
     </div>
+  )
+}
+
+/** Shown on one occurrence of a recurring meeting: the rest of the series, so you can see what else is scheduled. */
+function SeriesCard({ currentId, tz }: { currentId: string; tz: string }) {
+  const series = useLoader(() => meetingsApi.series(currentId), [currentId], 'Unable to load the series.')
+  const s = series.data
+  const freq: Record<MeetingSeries['pattern'], string> = { DAILY: 'Daily', WEEKLY: 'Weekly', MONTHLY: 'Monthly' }
+  return (
+    <Card>
+      <CardHeader
+        title="Recurring series"
+        subtitle={s ? `${freq[s.pattern]}${s.interval > 1 ? ` (every ${s.interval})` : ''} · ${s.occurrences.length} occurrence${s.occurrences.length === 1 ? '' : 's'}` : undefined}
+      />
+      {!s ? (
+        <div className="flex flex-col gap-2 p-5">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+        </div>
+      ) : (
+        <ul className="flex max-h-72 flex-col gap-1 overflow-y-auto px-3 pb-3">
+          {s.occurrences.map((o) => (
+            <li key={o.id}>
+              <ButtonLink
+                to={`/meetings/${o.id}`}
+                variant="ghost"
+                fullWidth
+                className={cn('!justify-between !font-normal', o.id === currentId && 'bg-brand-50')}
+              >
+                <span className="text-[13px] text-ink">#{o.seq} · {formatDateTime(o.startUtc, tz)}</span>
+                <StatusBadge status={o.status} />
+              </ButtonLink>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   )
 }
 

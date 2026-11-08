@@ -224,6 +224,17 @@ public sealed class LiveKitRoomService(HttpClient http, LiveKitTokens tokens, IO
         catch (LiveKitUnavailableException e) { log.LogInformation("LiveKit UpdateRoomMetadata skipped: {Message}", e.Message); }
     }
 
+    /// <summary>
+    /// Best-effort live metadata update for one connected participant (e.g. their role after a host transfer). LiveKit pushes
+    /// the new metadata to every subscriber immediately, including the participant's own view of themselves - no reconnect or
+    /// new token needed. Never throws: if the participant already left, there is nothing to update.
+    /// </summary>
+    public async Task TryUpdateParticipantMetadataAsync(string room, string identity, string metadata, CancellationToken ct)
+    {
+        try { (await CallAsync("UpdateParticipant", room, new { room, identity, metadata }, ct))?.Dispose(); }
+        catch (LiveKitUnavailableException e) { log.LogInformation("LiveKit UpdateParticipant skipped: {Message}", e.Message); }
+    }
+
     /// <summary>Best-effort reliable data message from the server (e.g. "someone is waiting" to the hosts). Never throws.</summary>
     public async Task TrySendDataAsync(string room, string topic, object payload, IReadOnlyCollection<string>? destinationIdentities, CancellationToken ct)
     {
@@ -297,6 +308,9 @@ internal static class JoinWindow
             "CANCELLED" => No("CANCELLED", "This meeting was cancelled."),
             "COMPLETED" or "EXPIRED" or "INCOMPLETE" => No("ENDED", "This meeting has ended."),
             _ when nowUtc < opens => No("TOO_EARLY", $"The meeting room opens {o.JoinEarlyMinutes} minutes before the start."),
+            // An overrunning call stays joinable for as long as it is genuinely still LIVE - only a SCHEDULED
+            // meeting nobody started in time is cut off at the late-join cutoff.
+            "LIVE" => new(true, null, null, opens, closes),
             _ when nowUtc >= closes => No("TOO_LATE", "The time for joining this meeting has passed."),
             _ => new(true, null, null, opens, closes),
         };

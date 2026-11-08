@@ -13,6 +13,7 @@ import { AccessDeniedPage, AccountLockedPage, SessionExpiredPage } from './pages
 import { DashboardPage } from './pages/DashboardPage'
 import { PlannedModulePage } from './pages/PlannedModulePage'
 import { AdminPage } from './pages/admin/AdminPage'
+import { AuditLogPage } from './pages/admin/AuditLogPage'
 import { RecordingsRoutes } from './pages/recordings/RecordingsPage'
 import { EmployeesPage } from './pages/employees/EmployeesPage'
 import { OrganisationPage } from './pages/org/OrganisationPage'
@@ -23,6 +24,7 @@ import { LinkJoinPage } from './pages/LinkJoinPage'
 import { ScheduleMeetingPage } from './pages/meetings/MeetingForm'
 import { CustomerMeetingsPage, InternalMeetingsPage, MeetingsRoutes } from './pages/meetings/MeetingsPages'
 import { NotificationsPage } from './pages/notifications/NotificationsPage'
+import { ReportsPage } from './pages/reports/ReportsPage'
 import { RoomLoading } from './pages/room/RoomScreens'
 
 // Phase 4: the video room (LiveKit client + components) is a separate chunk, downloaded only when someone joins.
@@ -44,7 +46,9 @@ const builtPages: Record<string, ReactNode> = {
   '/employees': <EmployeesPage />,
   '/organisation': <OrganisationPage />,
   '/admin': <AdminPage />,
+  '/audit-log': <AuditLogPage />,
   '/recordings': <RecordingsRoutes />,
+  '/reports': <ReportsPage />,
   '/settings': <SettingsPage />,
 }
 

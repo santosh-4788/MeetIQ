@@ -118,6 +118,31 @@ public sealed class MediaVerifier(string ffmpegPath, string ffprobePath, bool lo
         }
     }
 
+    /// <summary>
+    /// Stream-copies (no re-encode) into a new file carrying the meeting code in the MP4's own title/comment tags -
+    /// readable with any media player or ffprobe, so the recording is identifiable without the on-disk path or
+    /// filename itself ever naming the meeting (the path stays an opaque, random key by design).
+    /// </summary>
+    public async Task<FfmpegRun> TagMetadataAsync(string sourcePath, string outputPath, string meetingCode, CancellationToken ct) =>
+        await RunAsync(ffmpegPath, ["-hide_banner", "-nostdin", "-y", "-loglevel", "warning", "-i", sourcePath, "-map", "0", "-c", "copy",
+            "-movflags", "+faststart", "-metadata", $"title={meetingCode}", "-metadata", $"comment=OneInsure Connect meeting {meetingCode}",
+            "-f", "mp4", outputPath], ct);
+
+    /// <summary>The real pixel dimensions of a video's first stream - used to recover what canvas size a recording
+    /// actually used (landscape vs. a 1:1 call's portrait canvas) when re-finalizing from spooled segments, since
+    /// that decision was only ever made live inside the browser session that recorded them.</summary>
+    public static async Task<(int Width, int Height)> ProbeVideoDimensionsAsync(string ffprobePath, string path, CancellationToken ct)
+    {
+        try
+        {
+            var r = await RunProcessAsync(ffprobePath, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", path], false, ct, captureStdout: true);
+            var parts = (r.StdOut ?? "").Trim().Split(',');
+            if (parts.Length == 2 && int.TryParse(parts[0], out var w) && int.TryParse(parts[1], out var h) && w > 0 && h > 0) return (w, h);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { /* fall through */ }
+        return (0, 0);
+    }
+
     public static async Task<string> Sha256HexAsync(string path, CancellationToken ct)
     {
         await using var fs = File.OpenRead(path);

@@ -13,7 +13,7 @@ import { Button } from '../../components/ui/Button'
 import { Card, CardHeader } from '../../components/ui/Card'
 import { PageHeader, Pagination, Tabs, tabPanelProps, table } from '../../components/ui/Data'
 import { Alert, Badge, EmptyState, ErrorState, Skeleton, type BadgeTone } from '../../components/ui/Feedback'
-import { TextField } from '../../components/ui/Field'
+import { DateField } from '../../components/ui/DateTimeField'
 import { FilterSelect, SearchField, TextAreaField } from '../../components/ui/Form'
 import { Dialog } from '../../components/ui/Overlay'
 import { useToast } from '../../components/ui/Toast'
@@ -60,6 +60,7 @@ function RecordingLibrary() {
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [page, setPage] = useState(1)
+  const [deleting, setDeleting] = useState<{ id: string; title: string } | null>(null)
   const employee = params.get('employee') ?? ''
   const employeeName = params.get('employeeName') ?? ''
   const term = useDebounced(search.trim(), 300)
@@ -107,8 +108,8 @@ function RecordingLibrary() {
               {(departments.data ?? []).map((d) => <option key={d.code} value={d.code}>{d.name}</option>)}
             </FilterSelect>
             <SearchField value={customerRef} onChange={setCustomerRef} placeholder="Customer, reference or policy no." aria-label="Customer reference" />
-            <TextField label="From" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-            <TextField label="To" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+            <DateField label="From" value={from} onChange={setFrom} />
+            <DateField label="To" value={to} onChange={setTo} />
             {employee && (
               <div className="flex items-end">
                 <Button variant="secondary" size="sm" onClick={() => setParams((p) => (p.delete('employee'), p.delete('employeeName'), p))}>
@@ -130,7 +131,8 @@ function RecordingLibrary() {
             <EmptyState icon={<Clapperboard className="size-6" />} title="No recordings" description="Recordings of meetings you may see appear here once they are verified." />
           ) : (
             <div className={cn(list.loading && 'opacity-60')}>
-              <div className={table.wrap}>
+              {/* Desktop / tablet: table */}
+              <div className={cn(table.wrap, 'hidden md:block')}>
                 <table className={table.table} data-testid="recordings-table">
                   <thead>
                     <tr>
@@ -143,15 +145,21 @@ function RecordingLibrary() {
                     </tr>
                   </thead>
                   <tbody>
-                    {list.data.items.map((r) => <Row key={r.id} r={r} tz={tz} />)}
+                    {list.data.items.map((r) => <Row key={r.id} r={r} tz={tz} onDelete={() => setDeleting({ id: r.id, title: r.meeting.title })} />)}
                   </tbody>
                 </table>
               </div>
+              {/* Mobile: cards */}
+              <ul className="flex flex-col md:hidden">
+                {list.data.items.map((r) => <RecordingCard key={r.id} r={r} tz={tz} onDelete={() => setDeleting({ id: r.id, title: r.meeting.title })} />)}
+              </ul>
               <Pagination page={page} pageSize={PAGE_SIZE} total={list.data.total} onPage={setPage} disabled={list.loading} />
             </div>
           )}
         </Card>
       )}
+
+      <DeleteRecordingDialog target={deleting} onClose={() => setDeleting(null)} onDeleted={() => { setDeleting(null); list.reload() }} />
 
       {tab === 'employees' && (
         <Card {...tabPanelProps('rec', 'employees')}>
@@ -163,35 +171,58 @@ function RecordingLibrary() {
           ) : byEmployee.data.length === 0 ? (
             <EmptyState title="No recordings" />
           ) : (
-            <div className={table.wrap}>
-              <table className={table.table}>
-                <thead>
-                  <tr>
-                    <th className={table.th}>Employee</th><th className={table.th}>Department</th><th className={table.th}>Recordings</th>
-                    <th className={table.th}>Completed</th><th className={table.th}>Failed</th><th className={table.th}>Total length</th><th className={table.th}>Latest</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {byEmployee.data.map((e) => (
-                    <tr key={e.employee.id} className={table.row}>
-                      <td className={table.td}>
-                        <button type="button" className="font-semibold text-brand-700 hover:underline"
-                          onClick={() => { setParams((p) => (p.set('employee', e.employee.id), p.set('employeeName', e.employee.name), p.set('tab', 'recordings'), p)); setTab('recordings') }}>
-                          {e.employee.name}
-                        </button>
-                        <span className="ml-1.5 text-[12px] text-ink-secondary">{e.employee.employeeCode}</span>
-                      </td>
-                      <td className={table.td}>{e.employee.department ?? '—'}</td>
-                      <td className={table.td}>{e.recordings}</td>
-                      <td className={table.td}>{e.completed}</td>
-                      <td className={table.td}>{e.failed}</td>
-                      <td className={table.td}>{formatSeconds(e.totalSeconds)}</td>
-                      <td className={table.td}>{formatDateTime(e.lastUtc, tz)}</td>
+            <>
+              {/* Desktop / tablet: table */}
+              <div className={cn(table.wrap, 'hidden md:block')}>
+                <table className={table.table}>
+                  <thead>
+                    <tr>
+                      <th className={table.th}>Employee</th><th className={table.th}>Department</th><th className={table.th}>Recordings</th>
+                      <th className={table.th}>Completed</th><th className={table.th}>Failed</th><th className={table.th}>Total length</th><th className={table.th}>Latest</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {byEmployee.data.map((e) => (
+                      <tr key={e.employee.id} className={table.row}>
+                        <td className={table.td}>
+                          <button type="button" className="font-semibold text-brand-700 hover:underline"
+                            onClick={() => { setParams((p) => (p.set('employee', e.employee.id), p.set('employeeName', e.employee.name), p.set('tab', 'recordings'), p)); setTab('recordings') }}>
+                            {e.employee.name}
+                          </button>
+                          <span className="ml-1.5 text-[12px] text-ink-secondary">{e.employee.employeeCode}</span>
+                        </td>
+                        <td className={table.td}>{e.employee.department ?? '—'}</td>
+                        <td className={table.td}>{e.recordings}</td>
+                        <td className={table.td}>{e.completed}</td>
+                        <td className={table.td}>{e.failed}</td>
+                        <td className={table.td}>{formatSeconds(e.totalSeconds)}</td>
+                        <td className={table.td}>{formatDateTime(e.lastUtc, tz)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {/* Mobile: cards */}
+              <ul className="flex flex-col md:hidden">
+                {byEmployee.data.map((e) => (
+                  <li key={e.employee.id} className="border-b border-line px-4 py-3.5 last:border-b-0">
+                    <button type="button" className="text-left font-semibold text-brand-700 hover:underline"
+                      onClick={() => { setParams((p) => (p.set('employee', e.employee.id), p.set('employeeName', e.employee.name), p.set('tab', 'recordings'), p)); setTab('recordings') }}>
+                      {e.employee.name}
+                    </button>
+                    <span className="ml-1.5 text-[12px] text-ink-secondary">{e.employee.employeeCode}</span>
+                    <p className="mt-0.5 text-[12px] text-ink-secondary">{e.employee.department ?? '—'}</p>
+                    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-ink-secondary">
+                      <span>{e.recordings} recording{e.recordings === 1 ? '' : 's'}</span>
+                      <span>{e.completed} completed</span>
+                      {e.failed > 0 && <span>{e.failed} failed</span>}
+                      <span>{formatSeconds(e.totalSeconds)} total</span>
+                      <span>Latest {formatDateTime(e.lastUtc, tz)}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </Card>
       )}
@@ -201,7 +232,7 @@ function RecordingLibrary() {
   )
 }
 
-function Row({ r, tz }: { r: RecordingItem; tz: string }) {
+function Row({ r, tz, onDelete }: { r: RecordingItem; tz: string; onDelete?: () => void }) {
   return (
     <tr className={table.row} data-testid="recording-row" data-id={r.id}>
       <td className={table.td}>
@@ -221,11 +252,87 @@ function Row({ r, tz }: { r: RecordingItem; tz: string }) {
       <td className={table.td}>{formatSeconds(r.durationSeconds)}</td>
       <td className={table.td}><RecordingStatusBadge status={r.status} /></td>
       <td className={cn(table.td, 'text-right')}>
-        <Link to={`/recordings/${r.id}`} className="inline-flex items-center gap-1 text-[13px] font-semibold text-brand-700 hover:underline">
-          {r.canPlay ? <><Play className="size-3.5" /> Play</> : 'Details'}
-        </Link>
+        <div className="flex items-center justify-end gap-3">
+          <Link to={`/recordings/${r.id}`} className="inline-flex items-center gap-1 text-[13px] font-semibold text-brand-700 hover:underline">
+            {r.canPlay ? <><Play className="size-3.5" /> Play</> : 'Details'}
+          </Link>
+          {r.canDelete && onDelete && (
+            <button type="button" title="Delete recording" aria-label="Delete recording" onClick={onDelete} className="text-ink-muted hover:text-danger">
+              <Trash2 className="size-4" />
+            </button>
+          )}
+        </div>
       </td>
     </tr>
+  )
+}
+
+function RecordingCard({ r, tz, onDelete }: { r: RecordingItem; tz: string; onDelete: () => void }) {
+  return (
+    <li className="flex items-start gap-1 border-b border-line last:border-b-0">
+      <Link to={`/recordings/${r.id}`} className="block min-w-0 flex-1 px-4 py-3.5 transition-colors hover:bg-surface-muted" data-testid="recording-row" data-id={r.id}>
+        <div className="flex items-start justify-between gap-2">
+          <span className="min-w-0 truncate text-[14px] font-semibold text-ink">{r.meeting.title}</span>
+          <RecordingStatusBadge status={r.status} />
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[12px] text-ink-secondary">
+          <span className="font-mono">{r.meeting.meetingCode}</span>
+          <CategoryBadge group={r.meeting.categoryGroup} />
+          {r.legalHold && <Badge tone="warning"><Gavel className="size-3" /> Legal hold</Badge>}
+        </div>
+        {r.customer && <p className="mt-1 truncate text-[12px] text-ink-secondary">{r.customer.name}{r.customer.reference ? ` (${r.customer.reference})` : ''}</p>}
+        <p className="mt-1.5 truncate text-[12px] text-ink-secondary">{r.owner.name}{r.owner.department ? ` · ${r.owner.department}` : ''}</p>
+        <div className="mt-1.5 flex items-center justify-between gap-2 text-[12px] text-ink-secondary">
+          <span>{formatDateTime(r.startedUtc ?? r.createdUtc, tz)} · {formatSeconds(r.durationSeconds)}</span>
+          <span className="inline-flex items-center gap-1 shrink-0 font-semibold text-brand-700">{r.canPlay ? <><Play className="size-3.5" /> Play</> : 'Details'}</span>
+        </div>
+      </Link>
+      {r.canDelete && (
+        <button type="button" title="Delete recording" aria-label="Delete recording" onClick={onDelete} className="mt-3.5 mr-3 shrink-0 text-ink-muted hover:text-danger">
+          <Trash2 className="size-4" />
+        </button>
+      )}
+    </li>
+  )
+}
+
+/** Shared by every "Delete" entry point in the Recording Library list (desktop table row, mobile card). */
+function DeleteRecordingDialog({ target, onClose, onDeleted }: { target: { id: string; title: string } | null; onClose: () => void; onDeleted: () => void }) {
+  const toast = useToast()
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => { if (target) { setReason(''); setError(null) } }, [target])
+
+  async function submit() {
+    if (!target) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await recordingsApi.requestDeletion(target.id, reason)
+      toast.success(res.status === 'PENDING' ? 'Deletion requested. It needs admin approval before the file is removed.' : 'Recording deleted. The record and its history are kept.')
+      onDeleted()
+    } catch (e) {
+      setError(errorMessage(e, 'The deletion request could not be submitted.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog
+      open={!!target}
+      onClose={onClose}
+      title={`Delete "${target?.title ?? ''}"?`}
+      description="The video file will be removed. This cannot be undone - but the recording's record, consent decisions and full access/audit history are always kept, never erased."
+      size="sm"
+      dismissible={!busy}
+      footer={<><Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button><Button variant="danger" onClick={() => void submit()} loading={busy} disabled={!reason.trim()}>Delete</Button></>}
+    >
+      {error && <Alert tone="danger" className="mb-3">{error}</Alert>}
+      <TextAreaField label="Reason (audited)" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={400} />
+    </Dialog>
   )
 }
 
@@ -314,11 +421,11 @@ function RecordingDetailPage() {
         title={r.meeting.title}
         description={<span className="flex flex-wrap items-center gap-2"><span className="font-mono">{r.meeting.meetingCode}</span><CategoryBadge group={r.meeting.categoryGroup} /><RecordingStatusBadge status={r.status} />{r.legalHold && <Badge tone="warning"><Gavel className="size-3" /> Legal hold</Badge>}</span>}
       />
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex flex-col gap-5">
           {r.status === 'COMPLETED' ? <Player d={d} /> : (
             <Alert tone={r.status === 'FAILED' ? 'danger' : 'info'} title={recordingStatusLabel[r.status]}>
-              {r.status === 'FAILED' ? d.failureReason : r.status === 'PURGED' ? 'The file was deleted under the retention policy. This record and its history are kept.' : 'The recording is not ready yet.'}
+              {r.status === 'FAILED' ? d.failureReason : r.status === 'PURGED' ? 'The recording file has been deleted (by retention or a deletion request). This record and its history are kept.' : 'The recording is not ready yet.'}
             </Alert>
           )}
           <Card>
@@ -411,12 +518,31 @@ function Player({ d }: { d: RecordingDetail }) {
     }
   }, [r.id])
 
+  const [downloading, setDownloading] = useState(false)
   async function download() {
+    setDownloading(true)
     try {
       const link = await recordingsApi.download(r.id)
-      window.location.assign(link.url)
+      // Fetched in-page (not a full-page navigation): a failure - an expired session, a link that's just timed
+      // out - lands back here as a normal, readable toast instead of a raw error page replacing the whole app.
+      const resp = await fetch(link.url, { credentials: 'include' })
+      if (!resp.ok) {
+        if (resp.status === 401) throw new Error('Your session has expired. Please sign in again and retry.')
+        throw new Error(`The file could not be downloaded (${resp.status}).`)
+      }
+      const blob = await resp.blob()
+      const blobUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = `recording-${r.meeting.meetingCode}.mp4`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(blobUrl)
     } catch (e) {
-      toast.error(errorMessage(e, 'The download could not be started.'))
+      toast.error(e instanceof Error ? e.message : errorMessage(e, 'The download could not be started.'))
+    } finally {
+      setDownloading(false)
     }
   }
 
@@ -429,9 +555,12 @@ function Player({ d }: { d: RecordingDetail }) {
             src={src}
             controls
             playsInline
+            disablePictureInPicture
             className="size-full"
             data-testid="recording-player"
-            controlsList={r.canDownload ? undefined : 'nodownload'}
+            // noremoteplayback: suppresses the browser's own floating AirPlay/cast icon, which some mobile browsers
+            // place over a corner of the video - this recording is permissioned/logged, not meant to cast to a TV.
+            controlsList={r.canDownload ? 'noremoteplayback' : 'nodownload noremoteplayback'}
             onContextMenu={(e) => !r.canDownload && e.preventDefault()}
             onLoadedMetadata={() => {
               const v = video.current
@@ -464,7 +593,7 @@ function Player({ d }: { d: RecordingDetail }) {
       <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 text-[12.5px] text-ink-secondary">
         <span>Links are personal and expire after a few minutes. Every playback and download is logged.</span>
         {r.canDownload ? (
-          <Button size="sm" variant="secondary" leftIcon={<Download className="size-4" />} onClick={() => void download()} data-testid="download">Download MP4</Button>
+          <Button size="sm" variant="secondary" leftIcon={<Download className="size-4" />} loading={downloading} onClick={() => void download()} data-testid="download">Download MP4</Button>
         ) : (
           <span className="inline-flex items-center gap-1"><Lock className="size-3.5" /> Download not permitted</span>
         )}
@@ -479,8 +608,12 @@ function Actions({ d, reload }: { d: RecordingDetail; reload: () => void }) {
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteReason, setDeleteReason] = useState('')
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const r = d.recording
-  if (!d.canSetLegalHold && !d.canRetry) return null
+  if (!d.canSetLegalHold && !d.canRetry && !d.canDelete && !d.pendingDeletion) return null
 
   async function setHold() {
     setBusy(true)
@@ -494,6 +627,21 @@ function Actions({ d, reload }: { d: RecordingDetail; reload: () => void }) {
       setError(errorMessage(e, 'The legal hold could not be changed.'))
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function requestDelete() {
+    setDeleteBusy(true)
+    setDeleteError(null)
+    try {
+      const res = await recordingsApi.requestDeletion(r.id, deleteReason)
+      toast.success(res.status === 'PENDING' ? 'Deletion requested. It needs admin approval before the file is removed.' : 'Recording deleted. The record and its history are kept.')
+      setDeleteOpen(false)
+      reload()
+    } catch (e) {
+      setDeleteError(errorMessage(e, 'The deletion request could not be submitted.'))
+    } finally {
+      setDeleteBusy(false)
     }
   }
 
@@ -512,6 +660,16 @@ function Actions({ d, reload }: { d: RecordingDetail; reload: () => void }) {
             Retry processing
           </Button>
         )}
+        {d.canDelete && (
+          <Button size="sm" variant="danger" leftIcon={<Trash2 className="size-4" />} onClick={() => (setDeleteReason(''), setDeleteOpen(true))}>
+            Delete recording
+          </Button>
+        )}
+        {d.pendingDeletion && (
+          <span className="inline-flex items-center gap-1.5 text-[13px] text-ink-secondary">
+            <FileClock className="size-4" /> Deletion requested{d.pendingDeletion.requiredApprovals > 0 ? `, awaiting ${d.pendingDeletion.requiredApprovals === 1 ? 'approval' : 'two approvals'}` : ''}.
+          </span>
+        )}
       </div>
       <Dialog
         open={holdOpen}
@@ -524,6 +682,18 @@ function Actions({ d, reload }: { d: RecordingDetail; reload: () => void }) {
       >
         {error && <Alert tone="danger" className="mb-3">{error}</Alert>}
         <TextAreaField label="Reason (audited)" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={400} />
+      </Dialog>
+      <Dialog
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        title="Delete this recording?"
+        description="The video file will be removed. This cannot be undone - but the recording's record, consent decisions and full access/audit history are always kept, never erased."
+        size="sm"
+        dismissible={!deleteBusy}
+        footer={<><Button variant="secondary" onClick={() => setDeleteOpen(false)} disabled={deleteBusy}>Cancel</Button><Button variant="danger" onClick={() => void requestDelete()} loading={deleteBusy} disabled={!deleteReason.trim()}>Delete</Button></>}
+      >
+        {deleteError && <Alert tone="danger" className="mb-3">{deleteError}</Alert>}
+        <TextAreaField label="Reason (audited)" value={deleteReason} onChange={(e) => setDeleteReason(e.target.value)} maxLength={400} />
       </Dialog>
     </Card>
   )

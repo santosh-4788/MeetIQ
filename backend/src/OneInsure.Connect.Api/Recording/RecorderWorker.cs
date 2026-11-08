@@ -53,7 +53,7 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
 
     sealed record JobRow(long JobId, long RecordingId, string IdempotencyKey, string Engine, string State, int Attempt, string? SpoolPath);
     sealed record JobInfo(long JobId, long RecordingId, Guid RecordingPublicId, long MeetingId, string JobState, string RecordingStatus, int LaunchCount,
-        int? RecorderPid, string MeetingStatus, string? PolicyCode, DateTime? StartedUtc, long OwnerEmployeeId);
+        int? RecorderPid, string MeetingStatus, string? PolicyCode, DateTime? StartedUtc, long OwnerEmployeeId, string MeetingCode);
 
     /// <summary>Wakes the worker (a recording was started or stopped).</summary>
     public void Kick()
@@ -129,7 +129,7 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
     async Task<JobInfo?> InfoAsync(IDbConnection c, long jobId) =>
         await c.QuerySingleOrDefaultAsync<JobInfo>("""
             SELECT j.JobId, j.RecordingId, r.PublicId AS RecordingPublicId, r.MeetingId, j.[State] AS JobState, r.[Status] AS RecordingStatus, j.LaunchCount,
-                   j.RecorderPid, m.[Status] AS MeetingStatus, r.PolicyCode, r.StartedUtc, r.OwnerEmployeeId
+                   j.RecorderPid, m.[Status] AS MeetingStatus, r.PolicyCode, r.StartedUtc, r.OwnerEmployeeId, m.MeetingCode
             FROM rec.RecordingJobs j JOIN rec.MeetingRecordings r ON r.RecordingId = j.RecordingId JOIN mtg.Meetings m ON m.MeetingId = r.MeetingId
             WHERE j.JobId = @jobId
             """, new { jobId });
@@ -334,7 +334,7 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
 
     static string? Str(JsonElement e, string name) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-    sealed record Part(int Launch, string File, double ExpectedSeconds, int Restarts);
+    sealed record Part(int Launch, string File, double ExpectedSeconds, int Restarts, int Width, int Height);
 
     /// <summary>Collects the verified part(s), joins them, copies the result into the library, verifies it there, and only then marks it COMPLETED.</summary>
     async Task PostProcessAsync(Running r, bool retry, CancellationToken ct)
@@ -367,7 +367,11 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
                 {
                     var expected = result.Value.TryGetProperty("verification", out var v) && v.TryGetProperty("ExpectedSeconds", out var es) ? es.GetDouble() : 0;
                     var restarts = result.Value.TryGetProperty("Restarts", out var rs) && rs.ValueKind == JsonValueKind.Number ? rs.GetInt32() : 0;
-                    parts.Add(new Part(i, file, expected, restarts));
+                    // The recorder already verified this part against the canvas size it actually chose (landscape, or a
+                    // 1:1 call's portrait canvas) - reuse those dimensions rather than assuming the configured landscape default.
+                    var pw = v.ValueKind == JsonValueKind.Object && v.TryGetProperty("Width", out var wv) ? wv.GetInt32() : 0;
+                    var ph = v.ValueKind == JsonValueKind.Object && v.TryGetProperty("Height", out var hv) ? hv.GetInt32() : 0;
+                    parts.Add(new Part(i, file, expected, restarts, pw, ph));
                 }
                 else if (status == "REFUSED")
                     problems.Add($"Part {i}: refused by the recording policy ({Str(result.Value, "Code")}: {Str(result.Value, "Message")}).");
@@ -404,13 +408,24 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
             await c.ExecuteAsync("UPDATE rec.MeetingRecordings SET [Status] = 'VERIFYING', ModifiedUtc = SYSUTCDATETIME() WHERE RecordingId = @id", new { id = r.RecordingId });
             var root = paths.StorageRoot ?? throw new InvalidOperationException("Recording:StorageRoot is not configured.");
             var now = clock.UtcNow;
-            // Opaque key: no meeting, customer or employee data in folder or file names.
-            var key = $"{now:yyyy}/{now:MM}/{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16))}.mp4";
+            // Opaque key: no meeting, customer or employee data in the folder or file name itself (day-wise so one
+            // month's folder never grows unbounded). The meeting code is still findable - it is written into the
+            // file's own MP4 metadata below, and into the Content-Disposition filename a user downloads it as.
+            var key = $"{now:yyyy}/{now:MM}/{now:dd}/{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16))}.mp4";
             var dest = RecordingPaths.Resolve(root, key);
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             var partial = dest + ".partial";
-            File.Copy(source, partial, overwrite: true);
-            var verification = await verifier.VerifyAsync(partial, new MediaExpectations(O.Width, O.Height, expectedSeconds, O.DurationTolerancePercent, O.DurationToleranceMinSeconds), ct);
+            var tag = await verifier.TagMetadataAsync(source, partial, info.MeetingCode, ct);
+            if (tag.ExitCode != 0)
+            {
+                log.LogWarning("Metadata tagging failed for recording job {Job}, falling back to a plain copy: {Err}", r.JobId, tag.StdErrTail);
+                File.Copy(source, partial, overwrite: true);
+            }
+            // Re-verify against the canvas size the recorder actually used for this job, not the configured landscape
+            // default - a 1:1 call may have recorded portrait. All parts of one job share one canvas size (see RecordingSession).
+            var width = parts[0].Width > 0 ? parts[0].Width : O.Width;
+            var height = parts[0].Height > 0 ? parts[0].Height : O.Height;
+            var verification = await verifier.VerifyAsync(partial, new MediaExpectations(width, height, expectedSeconds, O.DurationTolerancePercent, O.DurationToleranceMinSeconds), ct);
             if (!verification.Passed)
             {
                 TryDelete(partial);
@@ -502,7 +517,27 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
         var row = await c.QuerySingleAsync<(Guid PublicId, long MeetingId)>("SELECT PublicId, MeetingId FROM rec.MeetingRecordings WHERE RecordingId = @recordingId", new { recordingId });
         await Audit.WriteAsync(c, "SYSTEM", null, "RECORDING_FAILED", "Recording", row.PublicId.ToString(), reason.Length > 480 ? reason[..480] : reason, null);
         await NotifyOwnerAsync(c, recordingId, available: false, reason);
+        await NotifyAdminsOfFailureAsync(c, row.MeetingId, row.PublicId, reason);
         await BroadcastAsync(c, row.MeetingId, ct);
+    }
+
+    /// <summary>A recording failure is an operational problem, not just the meeting owner's concern - every Admin/SuperAdmin
+    /// gets the same in-app notification so it isn't only visible to whoever happened to schedule that one meeting.</summary>
+    async Task NotifyAdminsOfFailureAsync(IDbConnection c, long meetingId, Guid recordingPublicId, string reason)
+    {
+        var m = await MeetingMessaging.LoadAsync(c, null, meetingId);
+        var title = $"Recording failed: {m.Title}";
+        var body = $"{reason} (meeting {m.Title}, {m.StartUtc:d MMM} — recorder/verification failure, not a legal-hold or policy refusal).";
+        await c.ExecuteAsync("""
+            INSERT mtg.MeetingNotifications (RecipientUserId, MeetingId, [Type], Title, Body, LinkPath)
+            SELECT DISTINCT u.UserId, @m, 'RECORDING_FAILED', @title, @body, @link
+            FROM auth.Users u JOIN auth.UserRoles ur ON ur.UserId = u.UserId JOIN auth.Roles r ON r.RoleId = ur.RoleId
+            WHERE u.IsActive = 1 AND r.Code IN ('SuperAdmin', 'Admin')
+            """, new
+        {
+            m = meetingId, title = title.Length > 200 ? title[..199] + "…" : title, body = body.Length > 1000 ? body[..999] + "…" : body,
+            link = $"/recordings/{recordingPublicId}",
+        });
     }
 
     /// <summary>RECORDING_AVAILABLE / RECORDING_FAILED in-app notification and e-mail (outbox) to the recording's owner (the meeting creator).</summary>

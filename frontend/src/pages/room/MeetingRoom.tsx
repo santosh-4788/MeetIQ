@@ -1,6 +1,7 @@
 ﻿import '@livekit/components-styles'
 import './room.css'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import {
   CarouselLayout,
   ConnectionQualityIndicator,
@@ -38,10 +39,11 @@ import {
   type RoomOptions,
 } from 'livekit-client'
 import {
-  Ellipsis, Hand, LayoutGrid, LoaderCircle, LogOut, MessageSquare, Mic, MicOff, MonitorUp, MonitorX, PhoneOff, Presentation, Settings2, UserPlus, Users, Video, VideoOff, WifiOff,
+  Ellipsis, Hand, LayoutGrid, Lock, LoaderCircle, LogOut, MessageSquare, Mic, MicOff, MonitorUp, MonitorX, PhoneOff, Presentation, Settings2, UserPlus, Users, Video, VideoOff, WifiOff,
 } from 'lucide-react'
-import type { RoomConnection, RoomMeetingInfo, WaitingEntry } from '../../api/room'
-import { resolveLiveKitUrl } from '../../api/room'
+import type { MuteSource, RoomConnection, RoomMeetingInfo, WaitingEntry } from '../../api/room'
+import { resolveLiveKitUrl, roomApi } from '../../api/room'
+import { roomRecordingApi } from '../../api/recordings'
 import { errorMessage } from '../../api/types'
 import { ACTIVITY_EVENT } from '../../auth/AuthContext'
 import { ConnectMark } from '../../components/brand/ConnectLogo'
@@ -67,6 +69,8 @@ export type RoomExit =
 const TOPIC_CHAT = 'oic.chat'
 const TOPIC_HAND = 'oic.hand'
 const TOPIC_WAITING = 'oic.waiting'
+const TOPIC_HOST_TRANSFER = 'oic.host-transfer'
+const TOPIC_NOTICE = 'oic.host-notice'
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
@@ -168,7 +172,7 @@ export function MeetingRoom({
       data-testid="meeting-room"
     >
       <LayoutContextProvider>
-        <RoomShell connection={connection} meeting={meeting} backend={backend} onConnectFailed={(m) => exit({ kind: 'error', message: m })} />
+        <RoomShell connection={connection} meeting={meeting} backend={backend} onConnectFailed={(m) => exit({ kind: 'error', message: m })} onEnded={() => exit({ kind: 'ended' })} />
         {connection.canPublish && <PublishOnConnect media={connection.canPublishVideo === false ? { ...media, videoEnabled: false } : media} tracks={connection.canPublishVideo === false ? { audio: tracks.audio } : tracks} />}
       </LayoutContextProvider>
       <RoomAudioRenderer />
@@ -387,23 +391,123 @@ function RoomShell({
   meeting,
   backend,
   onConnectFailed,
+  onEnded,
 }: {
   connection: RoomConnection
   meeting: RoomMeetingInfo
   backend: RoomBackend
   onConnectFailed: (message: string) => void
+  /** Called as soon as our own "end for all" API call succeeds - don't wait for LiveKit's own disconnect signal,
+      which can show a "Reconnecting…" banner first before it gives up, leaving the host stuck looking at a dead call. */
+  onEnded: () => void
 }) {
   const room = useRoomContext()
   const state = useConnectionState()
+  const toast = useToast()
   const [panel, setPanel] = useState<Panel>(null)
   const [layout, setLayout] = useState<'grid' | 'speaker'>('grid')
   const [ending, setEnding] = useState(false)
   // A meeting just started from "New meeting" opens with the invite link on screen.
   const [inviting, setInviting] = useState(!!backend.share?.openOnStart)
+
+  // A one-time notice when the scheduled end time passes - informational only, nobody is disconnected. A genuinely
+  // overrunning call is meant to keep running (see MeetingExpiryWorker); this just lets people in the room know.
+  useEffect(() => {
+    const wait = new Date(meeting.endUtc).getTime() - Date.now()
+    if (wait <= 0 || wait > 24 * 3_600_000) return
+    const t = window.setTimeout(() => toast.success("This meeting's scheduled time is up. The call keeps going until a host ends it."), wait)
+    return () => window.clearTimeout(t)
+  }, [meeting.endUtc, toast])
+
+  // Host transfer: `backend` is built once, at join time, from the role the caller had then. A participant who becomes
+  // (or stops being) host mid-meeting needs their host-only capabilities to appear (or disappear) without reconnecting -
+  // LiveKit already pushes the role-badge change live via participant metadata (see roomUi.participantRole); this override
+  // covers the capability objects themselves (room admin actions, recording start/stop).
+  const [hostOverride, setHostOverride] = useState<boolean | null>(null)
+  useEffect(() => {
+    const onData = (payload: Uint8Array, _participant?: RemoteParticipant, _kind?: unknown, topic?: string) => {
+      if (topic !== TOPIC_HOST_TRANSFER) return
+      try {
+        const d = JSON.parse(decoder.decode(payload)) as { previousIdentity?: string; newIdentity?: string }
+        const me = room.localParticipant.identity
+        if (d.newIdentity === me) {
+          setHostOverride(true)
+          toast.success('You are now the host.')
+        } else if (d.previousIdentity === me) {
+          setHostOverride(false)
+          toast.success('Host privileges were transferred to someone else.')
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    room.on(RoomEvent.DataReceived, onData)
+    return () => {
+      room.off(RoomEvent.DataReceived, onData)
+    }
+  }, [room, toast])
+
+  // Host notices that don't change recording/waiting/host state: a forced mute, a request to unmute, or the meeting
+  // being locked/unlocked - all one-off, so a toast is enough (the lock state itself also needs to stick around, for
+  // the header chip and the Participants-panel toggle, so that part is kept in state rather than just shown once).
+  const [locked, setLockedFromServer] = useState(!!meeting.locked)
+  useEffect(() => {
+    const onData = (payload: Uint8Array, _participant?: RemoteParticipant, _kind?: unknown, topic?: string) => {
+      if (topic !== TOPIC_NOTICE) return
+      try {
+        const d = JSON.parse(decoder.decode(payload)) as { type?: string; source?: string; locked?: boolean }
+        if (d.type === 'muted') toast.success(`The host turned off your ${(d.source ?? 'microphone').toLowerCase().replace('_', ' ')}.`)
+        else if (d.type === 'unmute-requested') toast.success('The host is asking you to unmute.')
+        else if (d.type === 'lock-changed') {
+          setLockedFromServer(!!d.locked)
+          toast.success(d.locked ? 'The meeting has been locked. No one new can join.' : 'The meeting has been unlocked.')
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    room.on(RoomEvent.DataReceived, onData)
+    return () => {
+      room.off(RoomEvent.DataReceived, onData)
+    }
+  }, [room, toast])
+
+  const effectiveBackend = useMemo<RoomBackend>(() => {
+    if (hostOverride === null) return backend
+    if (hostOverride === false) {
+      if (!backend.host && !backend.recording?.start) return backend
+      return {
+        ...backend,
+        host: undefined,
+        recording: backend.recording && { state: backend.recording.state, consent: backend.recording.consent },
+      }
+    }
+    // hostOverride === true: gained host. Keep whatever was already there (e.g. was already co-host), otherwise build it.
+    return {
+      ...backend,
+      host: backend.host ?? {
+        waiting: () => roomApi.waiting(meeting.id),
+        admit: (e) => roomApi.admit(meeting.id, e),
+        reject: (e) => roomApi.reject(meeting.id, e),
+        mute: (identity, source: MuteSource) => roomApi.mute(meeting.id, identity, source),
+        requestUnmute: (identity) => roomApi.requestUnmute(meeting.id, identity),
+        remove: (identity, block) => roomApi.remove(meeting.id, identity, block),
+        end: () => roomApi.end(meeting.id),
+        setLocked: (locked) => roomApi.setLocked(meeting.id, locked).then(() => undefined),
+        transferHost: (identity) => roomApi.transferHost(meeting.id, identity),
+      },
+      recording: backend.recording && {
+        ...backend.recording,
+        start: backend.recording.start ?? ((version: string) => roomRecordingApi.start(meeting.id, version)),
+        stop: backend.recording.stop ?? (() => roomRecordingApi.stop(meeting.id)),
+      },
+    }
+  }, [backend, hostOverride, meeting.id])
+
   const chat = useChat(backend, panel === 'chat')
   const hands = useHands()
-  const waiting = useWaiting(backend.host)
-  const recording = useRoomRecording(backend.recording)
+  const waiting = useWaiting(effectiveBackend.host)
+  const recording = useRoomRecording(effectiveBackend.recording)
   const everConnected = useRef(false)
 
   if (state === ConnectionState.Connected) everConnected.current = true
@@ -429,7 +533,7 @@ function RoomShell({
     }
   }, [state, backend])
 
-  const ui = useMemo<RoomUi>(() => ({ connection, hands: hands.hands, backend }), [connection, hands.hands, backend])
+  const ui = useMemo<RoomUi>(() => ({ connection, hands: hands.hands, backend: effectiveBackend }), [connection, hands.hands, effectiveBackend])
   const toggle = (p: Exclude<Panel, null>) => setPanel((x) => (x === p ? null : p))
 
   return (
@@ -438,6 +542,11 @@ function RoomShell({
         meeting={meeting}
         extra={
           <>
+            {locked && (
+              <span className="oic-chip" title="No one new can join while the meeting is locked" data-testid="meeting-locked-chip">
+                <Lock className="size-3.5" aria-hidden /> Locked
+              </span>
+            )}
             {recording.withdraw}
             {recording.indicator}
             {backend.share && (
@@ -450,6 +559,7 @@ function RoomShell({
         }
       />
       <ConnectionBanner />
+      {recording.banner}
       <div className="flex min-h-0 flex-1 gap-3 px-3 pb-1 sm:px-4">
         <main className="relative min-w-0 flex-1" aria-label="Participants' video">
           {state === ConnectionState.Connecting && !everConnected.current ? (
@@ -460,18 +570,41 @@ function RoomShell({
           ) : (
             <Stage layout={layout} />
           )}
-          <StartAudio label="Click to turn on meeting audio" className="!absolute top-3 left-1/2 z-10 -translate-x-1/2" />
+          <StartAudio label="Click to turn on meeting audio" className="oic-start-audio" />
         </main>
-        {panel && (
-          <aside
-            className="oic-panel fixed inset-x-2 top-16 bottom-24 z-20 flex flex-col overflow-hidden rounded-xl sm:static sm:inset-auto sm:z-auto sm:w-[360px] sm:shrink-0"
-            aria-label={panel === 'chat' ? 'Chat' : panel === 'people' ? 'Participants' : 'Settings'}
-          >
-            {panel === 'chat' && <ChatPanel messages={chat.messages} onSend={chat.send} onRetry={chat.retry} historyError={chat.historyError} onClose={() => setPanel(null)} />}
-            {panel === 'people' && <PeoplePanel waiting={waiting.items} onWaitingChanged={waiting.refresh} onClose={() => setPanel(null)} />}
-            {panel === 'settings' && <SettingsPanel onClose={() => setPanel(null)} />}
-          </aside>
-        )}
+        <AnimatePresence>
+          {panel && (
+            <motion.aside
+              key={panel}
+              className="oic-panel fixed inset-x-2 top-16 bottom-24 z-20 flex flex-col overflow-hidden rounded-xl sm:static sm:inset-auto sm:z-auto sm:w-[360px] sm:shrink-0"
+              aria-label={panel === 'chat' ? 'Chat' : panel === 'people' ? 'Participants' : 'Settings'}
+              initial={{ opacity: 0, y: 10, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: 0.98 }}
+              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+            >
+              {panel === 'chat' && <ChatPanel messages={chat.messages} onSend={chat.send} onRetry={chat.retry} historyError={chat.historyError} onClose={() => setPanel(null)} />}
+              {panel === 'people' && (
+                <PeoplePanel
+                  waiting={waiting.items}
+                  onWaitingChanged={waiting.refresh}
+                  onClose={() => setPanel(null)}
+                  consent={recording.state?.consent}
+                  locked={locked}
+                  onToggleLocked={
+                    effectiveBackend.host
+                      ? async () => {
+                          await effectiveBackend.host!.setLocked(!locked)
+                          setLockedFromServer(!locked)
+                        }
+                      : undefined
+                  }
+                />
+              )}
+              {panel === 'settings' && <SettingsPanel onClose={() => setPanel(null)} />}
+            </motion.aside>
+          )}
+        </AnimatePresence>
       </div>
       <ControlBar
         layout={layout}
@@ -483,19 +616,20 @@ function RoomShell({
         handRaised={hands.mine}
         onHand={hands.toggle}
         onLeave={() => void room.disconnect()}
-        onEndForAll={backend.host ? () => setEnding(true) : undefined}
+        onEndForAll={effectiveBackend.host ? () => setEnding(true) : undefined}
         extra={recording.control}
       />
       {recording.dialogs}
       {backend.share && <ShareLinkDialog open={inviting} onClose={() => setInviting(false)} meetingId={backend.share.meetingId} title={meeting.title} />}
-      {backend.host && (
+      {effectiveBackend.host && (
         <ConfirmDialog
           open={ending}
           onClose={() => setEnding(false)}
           title="End the meeting for everyone?"
           confirmLabel="End for all"
           onConfirm={async () => {
-            await backend.host!.end()
+            await effectiveBackend.host!.end()
+            onEnded()
           }}
         >
           <p>Everyone is disconnected and the meeting is marked as completed. This cannot be undone.</p>
@@ -538,24 +672,24 @@ function RoomHeader({ meeting, extra }: { meeting: RoomMeetingInfo; extra?: Reac
     <header className="flex h-16 shrink-0 items-center gap-3 px-3 sm:px-5 [@media(max-height:500px)]:h-12">
       <ConnectMark size={32} />
       <div className="min-w-0 flex-1">
-        <h1 className="truncate text-[15px] leading-5 font-semibold" title={meeting.title}>
+        <h1 className="truncate text-[16px] leading-5 font-bold tracking-[-0.01em]" title={meeting.title}>
           {meeting.title}
         </h1>
-        <p className="truncate text-[12px] text-white/55">
-          <span className="font-mono tabular-nums">{meeting.meetingCode}</span> · Host {meeting.hostName} · Ends {formatTime(meeting.endUtc, tz)} {zoneLabel(tz)}
+        <p className="truncate text-[12px] font-medium text-white/50">
+          <span className="font-mono tracking-wide text-white/65 tabular-nums">{meeting.meetingCode}</span> · Host {meeting.hostName} · Ends {formatTime(meeting.endUtc, tz)} {zoneLabel(tz)}
         </p>
       </div>
       <div className="hidden items-center gap-2 sm:flex">
-        <span className="inline-flex h-8 items-center gap-2 rounded-full bg-white/[0.07] px-3 text-[12px] font-medium text-white/80" title={qualityLabel[quality]} data-testid="network-quality">
-          <span className={cn('size-2 rounded-full', dot)} aria-hidden />
+        <span className="oic-chip" title={qualityLabel[quality]} data-testid="network-quality">
+          <span className={cn('size-2 rounded-full shadow-[0_0_6px_currentColor]', dot)} aria-hidden />
           {qualityLabel[quality]}
         </span>
-        <span className="inline-flex h-8 items-center gap-1.5 rounded-full bg-white/[0.07] px-3 text-[12px] font-medium text-white/80">
-          <Users className="size-3.5" aria-hidden /> {participants.length}
+        <span className="oic-chip">
+          <Users className="size-3.5 text-cyan-400" aria-hidden /> {participants.length}
         </span>
       </div>
       {extra}
-      <span className="inline-flex h-8 items-center rounded-full bg-white/[0.07] px-3 font-mono text-[12.5px] text-white/85 tabular-nums" aria-label="Time in meeting">
+      <span className="oic-chip font-mono tabular-nums" aria-label="Time in meeting">
         {elapsed}
       </span>
     </header>
@@ -785,8 +919,23 @@ function ControlBar({
 }) {
   const { connection } = useRoomUi()
   const compact = useCompact()
+  const toast = useToast()
   const [more, setMore] = useState(false)
   const camera = connection.canPublish && connection.canPublishVideo !== false
+  // The participant is allowed to present, but this browser/OS can't capture a screen at all (getDisplayMedia
+  // missing - common on phones). Say so rather than silently hiding the control with no explanation.
+  const presentUnsupported = connection.canScreenShare && !canShareScreen && (
+    <button
+      type="button"
+      className="oic-ctl opacity-60"
+      onClick={() => toast.error('Screen sharing is not supported on this browser or device. Try a desktop browser such as Chrome or Edge.')}
+      title="Screen sharing is not supported on this browser or device"
+      aria-label="Screen sharing is not supported on this browser or device"
+      data-testid="ctl-present-unsupported"
+    >
+      <MonitorX className="size-5" />
+    </button>
+  )
   const hand = (
     <button type="button" className="oic-ctl" data-on={handRaised || undefined} aria-pressed={handRaised} onClick={onHand} title={handRaised ? 'Lower hand' : 'Raise hand'} data-testid="ctl-hand">
       <Hand className="size-5" />
@@ -818,7 +967,9 @@ function ControlBar({
         {camera && (
           <MediaToggle source={Track.Source.Camera} labelOn="Turn camera off" labelOff="Turn camera on" iconOn={<Video className="size-5" />} iconOff={<VideoOff className="size-5" />} testId="ctl-cam" />
         )}
+        {!compact && (connection.canScreenShare && canShareScreen ? <ScreenShareToggle /> : presentUnsupported) && <div className="oic-ctl-divider" aria-hidden />}
         {!compact && connection.canScreenShare && canShareScreen && <ScreenShareToggle />}
+        {!compact && presentUnsupported}
         {!compact && hand}
         <button type="button" className="oic-ctl" data-on={panel === 'chat' || undefined} aria-pressed={panel === 'chat'} onClick={() => onPanel('chat')} title="Chat" data-testid="ctl-chat">
           <MessageSquare className="size-5" />
@@ -828,6 +979,7 @@ function ControlBar({
           <Users className="size-5" />
           {waitingCount > 0 && <span className="oic-ctl-badge" data-testid="waiting-badge">{waitingCount}</span>}
         </button>
+        {!compact && <div className="oic-ctl-divider" aria-hidden />}
         {!compact && layoutBtn}
         {!compact && settings}
         {!compact && extra}
@@ -836,6 +988,7 @@ function ControlBar({
             <Ellipsis className="size-5" />
           </button>
         )}
+        {!compact && <div className="oic-ctl-divider" aria-hidden />}
         <button type="button" className="oic-ctl sm:ml-1" data-variant="leave" onClick={onLeave} title="Leave the meeting" aria-label="Leave the meeting" data-testid="ctl-leave">
           <LogOut className="size-5" />
           {!compact && <span>Leave</span>}
@@ -849,6 +1002,7 @@ function ControlBar({
           <SheetItem label="Audio & video">{settings}</SheetItem>
           {extra && <SheetItem label="Recording">{extra}</SheetItem>}
           {connection.canScreenShare && canShareScreen && <SheetItem label="Present"><ScreenShareToggle /></SheetItem>}
+          {presentUnsupported && <SheetItem label="Present">{presentUnsupported}</SheetItem>}
           {end && <SheetItem label="End for all">{end}</SheetItem>}
         </MoreSheet>
       )}

@@ -65,8 +65,12 @@ function Flow({ m, back, reload }: { m: MeetingDetail; back: ReactNode; reload: 
         admit: (e) => roomApi.admit(m.id, e),
         reject: (e) => roomApi.reject(m.id, e),
         mute: (identity, source) => roomApi.mute(m.id, identity, source),
+        requestUnmute: (identity) => roomApi.requestUnmute(m.id, identity),
         remove: (identity, block) => roomApi.remove(m.id, identity, block),
         end: () => roomApi.end(m.id),
+        setLocked: (locked) => roomApi.setLocked(m.id, locked).then(() => undefined),
+        // A co-host may admit/mute/remove/end, but only the literal host may hand off host privileges.
+        ...(joined.connection.role === 'HOST' ? { transferHost: (identity: string) => roomApi.transferHost(m.id, identity) } : {}),
       }
     return b
   }, [joined, m.id, m.my.canShareLink]) // eslint-disable-line react-hooks/exhaustive-deps -- `entry` is fixed for this visit

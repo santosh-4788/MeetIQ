@@ -121,7 +121,8 @@ public sealed class RetentionWorker(Db db, IClock clock, RecordingPaths paths, I
     }
 
     /// <summary>Deletes the file and marks the recording PURGED (row, audit and access history stay). Refuses while a legal hold is set.</summary>
-    internal static async Task<bool> PurgeAsync(IDbConnection c, RecordingPaths paths, long recordingId, long deletionId, long? userId, string? ip)
+    internal static async Task<bool> PurgeAsync(IDbConnection c, RecordingPaths paths, long recordingId, long deletionId, long? userId, string? ip,
+        string auditSummary = "Recording file deleted under the retention policy; the record and its history are kept")
     {
         var r = await c.QuerySingleAsync<(Guid PublicId, string Status, bool LegalHold, string? StorageKey, string StorageTier, string? ArchiveRoot)>(
             "SELECT PublicId, [Status], LegalHold, StorageKey, StorageTier, ArchiveRoot FROM rec.MeetingRecordings WHERE RecordingId = @recordingId", new { recordingId });
@@ -143,8 +144,7 @@ public sealed class RetentionWorker(Db db, IClock clock, RecordingPaths paths, I
             UPDATE rec.MeetingRecordings SET [Status] = 'PURGED', PurgedUtc = SYSUTCDATETIME(), ModifiedUtc = SYSUTCDATETIME(), ModifiedByUserId = @userId WHERE RecordingId = @recordingId;
             UPDATE rec.RecordingDeletions SET [Status] = 'EXECUTED', ExecutedUtc = SYSUTCDATETIME() WHERE DeletionId = @deletionId;
             """, new { recordingId, deletionId, userId }, tx);
-        await Audit.WriteAsync(c, userId is null ? "SYSTEM" : "USER", userId, "RECORDING_PURGED", "Recording", r.PublicId.ToString(),
-            "Recording file deleted under the retention policy; the record and its history are kept", ip, tx, privileged: true);
+        await Audit.WriteAsync(c, userId is null ? "SYSTEM" : "USER", userId, "RECORDING_PURGED", "Recording", r.PublicId.ToString(), auditSummary, ip, tx, privileged: true);
         tx.Commit();
         return true;
     }

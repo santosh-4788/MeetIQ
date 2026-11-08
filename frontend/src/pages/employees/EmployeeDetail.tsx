@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Building2, CalendarDays, IdCard, Link2, Mail, MapPin, Pencil, Phone, Power, ShieldCheck, UserCheck, UserPlus, UserRound, Users } from 'lucide-react'
+import { Building2, CalendarDays, IdCard, KeyRound, Link2, Mail, MapPin, Pencil, Phone, Power, ShieldCheck, UserCheck, UserPlus, UserRound, Users } from 'lucide-react'
 import { adminApi } from '../../api/admin'
 import { employeesApi, type Employee, type EmployeeDetail } from '../../api/employees'
 import { useAuth } from '../../auth/AuthContext'
@@ -12,6 +12,7 @@ import { useToast } from '../../components/ui/Toast'
 import { DEFAULT_TIME_ZONE } from '../../config'
 import { formatCalendarDate, formatDateTime } from '../../lib/format'
 import { useLoader } from '../../lib/useLoader'
+import { ResetPasswordDialog } from '../admin/UserDialogs'
 
 function rolesOf(r: string | string[] | null | undefined) {
   if (!r) return []
@@ -69,6 +70,7 @@ export function EmployeeDetailDrawer({
   const matching = data?.matchingAccount
   const [linking, setLinking] = useState(false)
   const [linkError, setLinkError] = useState<string | null>(null)
+  const [resetting, setResetting] = useState(false)
 
   /** An account with the employee's e-mail already exists (e.g. the first SuperAdmin): link it instead of creating another. */
   async function linkExisting() {
@@ -87,6 +89,7 @@ export function EmployeeDetailDrawer({
   }
 
   return (
+    <>
     <Dialog
       open={!!employeeId}
       onClose={onClose}
@@ -189,6 +192,11 @@ export function EmployeeDetailDrawer({
                 {!account.isActive && e.isActive && (
                   <p className="mt-3 text-[12.5px] text-ink-secondary">The account is disabled. Re-enable it under Administration → Users &amp; roles.</p>
                 )}
+                {can('users.manage') && (
+                  <Button size="sm" variant="subtle" className="mt-3" leftIcon={<KeyRound className="size-4" />} onClick={() => setResetting(true)}>
+                    Reset password
+                  </Button>
+                )}
               </div>
             ) : (
               <div className="flex flex-col items-start gap-3 rounded-md border border-dashed border-line-strong p-4">
@@ -221,5 +229,13 @@ export function EmployeeDetailDrawer({
         </div>
       )}
     </Dialog>
+    <ResetPasswordDialog
+      user={resetting && e && account ? { id: account.id, displayName: e.displayName, email: account.email } : null}
+      onClose={(done) => {
+        setResetting(false)
+        if (done) toast.success('Password reset.')
+      }}
+    />
+    </>
   )
 }

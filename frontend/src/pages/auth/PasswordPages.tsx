@@ -81,6 +81,9 @@ export function ForgotPasswordPage() {
           onChange={(e) => (setLogin(e.target.value), setError(undefined))}
           error={error}
           autoFocus
+          spellCheck={false}
+          autoCapitalize="none"
+          autoCorrect="off"
         />
         <Button type="submit" size="lg" fullWidth loading={submitting}>
           Send reset link

@@ -64,13 +64,13 @@ export function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
           </Badge>
         </span>
       )}
-      <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+      <div className="relative ml-auto flex items-center gap-1.5 sm:gap-2">
         <GlobalSearch />
         {/* Roles without meetings.create (e.g. Compliance Auditor) would only reach Access denied. */}
         {can('meetings.create') && (
           <>
             <span className="hidden sm:block">
-              <ButtonLink to="/schedule" leftIcon={<Plus className="size-4" />}>
+              <ButtonLink to="/schedule" leftIcon={<Plus className="size-4" />} className="btn-shine">
                 New Meeting
               </ButtonLink>
             </span>
@@ -274,9 +274,12 @@ function BellDropdown({ items, unread, onItem, onMarkAll, onOpen, loading, error
   closeOnItem?: boolean
 }) {
   const [open, setOpen] = useState(false)
+  // No `relative` here: the dropdown anchors to the header's right-hand cluster (see Header.tsx) instead of this
+  // button's own wrapper, so `right-0` lines up with the header's true right edge instead of the Bell's — which,
+  // with ProfileMenu sitting to its right, pushed part of the panel (and its own "Notifications" heading) off-screen.
   const ref = useOutsideClose<HTMLDivElement>(open, () => setOpen(false))
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref}>
       <IconButton
         label={`Notifications${unread ? `, ${unread} unread` : ''}`}
         badge={unread}

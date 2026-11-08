@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Check, Copy, Link2, Link2Off, Mail, RefreshCw, Share2 } from 'lucide-react'
+import { Check, Clock, Copy, Link2, Link2Off, Mail, RefreshCw, Repeat, Share2, Users } from 'lucide-react'
 import { meetingsApi, type MeetingLink } from '../../api/meetings'
 import { errorMessage } from '../../api/types'
 import { Card, CardHeader } from '../../components/ui/Card'
@@ -34,7 +34,7 @@ function invitationText(title: string, url: string) {
 }
 
 /** The link with Copy, E-mail and (where the device supports it) Share; optional Replace / Withdraw for hosts. */
-export function LinkShareBox({ link, title, onReplace, onWithdraw }: { link: MeetingLink; title: string; onReplace?: () => void; onWithdraw?: () => void }) {
+export function LinkShareBox({ link, title, isRecurring, onReplace, onWithdraw }: { link: MeetingLink; title: string; isRecurring?: boolean; onReplace?: () => void; onWithdraw?: () => void }) {
   const toast = useToast()
   const tz = useTimeZone()
   const [copied, setCopied] = useState(false)
@@ -48,23 +48,28 @@ export function LinkShareBox({ link, title, onReplace, onWithdraw }: { link: Mee
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <input
-          readOnly
-          value={link.url}
-          aria-label="Meeting link"
-          onFocus={(e) => e.currentTarget.select()}
-          className="h-10 min-w-0 flex-1 rounded-sm border border-line bg-surface-muted px-3 font-mono text-[12.5px] text-ink"
-          data-testid="meeting-link"
-        />
-        <Button onClick={() => void copy()} leftIcon={copied ? <Check className="size-4" /> : <Copy className="size-4" />} data-testid="copy-link">
-          {copied ? 'Copied' : 'Copy link'}
-        </Button>
+    <div className="flex flex-col gap-4">
+      <div className="rounded-lg bg-gradient-to-br from-brand-50 to-cyan-50/40 p-3 ring-1 ring-brand-100">
+        <div className="flex items-center gap-2 px-1 pb-2 text-[11.5px] font-semibold tracking-wide text-brand-700 uppercase">
+          <Link2 className="size-3.5" /> Meeting link
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            readOnly
+            value={link.url}
+            aria-label="Meeting link"
+            onFocus={(e) => e.currentTarget.select()}
+            className="h-11 min-w-0 flex-1 truncate rounded-md border border-line bg-surface px-3.5 font-mono text-[12.5px] text-ink shadow-[0_1px_2px_rgba(16,42,67,0.04)]"
+            data-testid="meeting-link"
+          />
+          <Button onClick={() => void copy()} leftIcon={copied ? <Check className="size-4" /> : <Copy className="size-4" />} data-testid="copy-link" className="sm:w-[136px]">
+            {copied ? 'Copied' : 'Copy link'}
+          </Button>
+        </div>
       </div>
       <div className="flex flex-wrap gap-2">
         <a
-          className="inline-flex h-8 items-center gap-1.5 rounded-sm border border-line bg-surface px-3 text-[13px] font-medium text-ink hover:bg-surface-muted"
+          className="inline-flex h-9 items-center gap-1.5 rounded-md border border-line bg-surface px-3.5 text-[13px] font-medium text-ink transition-colors hover:border-line-strong hover:bg-surface-muted"
           href={`mailto:?subject=${encodeURIComponent(`Meeting invitation: ${title}`)}&body=${encodeURIComponent(invitationText(title, link.url))}`}
         >
           <Mail className="size-3.5" /> E-mail
@@ -78,10 +83,22 @@ export function LinkShareBox({ link, title, onReplace, onWithdraw }: { link: Mee
         {onReplace && <Button size="sm" variant="ghost" leftIcon={<RefreshCw className="size-3.5" />} onClick={onReplace}>New link</Button>}
         {onWithdraw && <Button size="sm" variant="ghost" leftIcon={<Link2Off className="size-3.5" />} onClick={onWithdraw}>Withdraw</Button>}
       </div>
-      <p className="text-[12px] leading-5 text-ink-secondary">
-        Anyone with this link can <strong className="text-ink">ask</strong> to join: a host must admit them from the waiting room. Valid until{' '}
-        {formatDateTime(link.expiresUtc, tz)}. Used {link.useCount} time{link.useCount === 1 ? '' : 's'}.
-      </p>
+      <div className="flex flex-col gap-1.5 rounded-md bg-surface-muted px-3.5 py-3 text-[12px] leading-5 text-ink-secondary">
+        {isRecurring && (
+          <p className="flex items-start gap-2 font-medium text-brand-700">
+            <Repeat className="mt-0.5 size-3.5 shrink-0" />
+            One link for the whole series — it takes people to whichever occurrence is happening or coming up next, every day.
+          </p>
+        )}
+        <p className="flex items-start gap-2">
+          <Users className="mt-0.5 size-3.5 shrink-0 text-ink-muted" />
+          Anyone with this link can <strong className="text-ink">ask</strong> to join — a host admits them from the waiting room.
+        </p>
+        <p className="flex items-start gap-2">
+          <Clock className="mt-0.5 size-3.5 shrink-0 text-ink-muted" />
+          Valid until {formatDateTime(link.expiresUtc, tz)} · used {link.useCount} time{link.useCount === 1 ? '' : 's'}
+        </p>
+      </div>
     </div>
   )
 }
@@ -101,7 +118,7 @@ function useMeetingLink(meetingId: string, active: boolean) {
   return { link, error, withdrawn, load, setLink, setWithdrawn }
 }
 
-function LinkBody({ meetingId, title, active }: { meetingId: string; title: string; active: boolean }) {
+function LinkBody({ meetingId, title, active, isRecurring }: { meetingId: string; title: string; active: boolean; isRecurring?: boolean }) {
   const toast = useToast()
   const s = useMeetingLink(meetingId, active)
   const [confirm, setConfirm] = useState<'replace' | 'withdraw' | null>(null)
@@ -115,7 +132,7 @@ function LinkBody({ meetingId, title, active }: { meetingId: string; title: stri
           <Button size="sm" leftIcon={<Link2 className="size-3.5" />} onClick={s.load}>Create a new link</Button>
         </div>
       ) : s.link ? (
-        <LinkShareBox link={s.link} title={title} onReplace={() => setConfirm('replace')} onWithdraw={() => setConfirm('withdraw')} />
+        <LinkShareBox link={s.link} title={title} isRecurring={isRecurring} onReplace={() => setConfirm('replace')} onWithdraw={() => setConfirm('withdraw')} />
       ) : (
         <Skeleton className="h-10 w-full" />
       )}
@@ -146,12 +163,15 @@ function LinkBody({ meetingId, title, active }: { meetingId: string; title: stri
   )
 }
 
-export function MeetingLinkCard({ meetingId, title }: { meetingId: string; title: string }) {
+export function MeetingLinkCard({ meetingId, title, isRecurring }: { meetingId: string; title: string; isRecurring?: boolean }) {
   return (
     <Card>
-      <CardHeader title="Meeting link" subtitle="Share it with anyone who should join: guests need no account." />
+      <CardHeader
+        title="Meeting link"
+        subtitle={isRecurring ? 'One link for every occurrence of this recurring meeting: guests need no account.' : 'Share it with anyone who should join: guests need no account.'}
+      />
       <div className="px-5 pb-5">
-        <LinkBody meetingId={meetingId} title={title} active />
+        <LinkBody meetingId={meetingId} title={title} active isRecurring={isRecurring} />
       </div>
     </Card>
   )

@@ -36,6 +36,7 @@ export type RoomMeetingInfo = {
   waitingRoomEnabled: boolean
   kind?: MeetingKind
   audioOnly?: boolean
+  locked?: boolean
 }
 
 export type JoinResponse = { connection: RoomConnection; meeting: RoomMeetingInfo }
@@ -62,10 +63,17 @@ export const roomApi = {
   reject: (id: string, entryId: string) => http<void>(`${one(id)}/room/waiting/${encodeURIComponent(entryId)}/reject`, { method: 'POST' }),
   mute: (id: string, identity: string, source: MuteSource) =>
     http<void>(`${one(id)}/room/participants/${encodeURIComponent(identity)}/mute`, { method: 'POST', body: { source } }),
+  /** No browser lets a host force a remote mic back on - this just asks the participant to unmute themselves. */
+  requestUnmute: (id: string, identity: string) =>
+    http<void>(`${one(id)}/room/participants/${encodeURIComponent(identity)}/unmute-request`, { method: 'POST' }),
   /** `block`: they cannot come back to this meeting (their personal link stops working). */
   remove: (id: string, identity: string, block = false) =>
     http<void>(`${one(id)}/room/participants/${encodeURIComponent(identity)}/remove`, { method: 'POST', body: { block } }),
   end: (id: string) => http<void>(`${one(id)}/room/end`, { method: 'POST' }),
+  /** Only the host (not a co-host) may call this. The previous host becomes a plain attendee at once. */
+  transferHost: (id: string, identity: string) => http<void>(`${one(id)}/room/host-transfer/${encodeURIComponent(identity)}`, { method: 'POST' }),
+  /** Keeps out anyone who hasn't already attended once; never locks out the host or people already in the room. */
+  setLocked: (id: string, locked: boolean) => http<{ locked: boolean }>(`${one(id)}/room/lock`, { method: 'POST', body: { locked } }),
 }
 
 // ---- Customers and guests (anonymous; the invitation token is the credential) ---------------

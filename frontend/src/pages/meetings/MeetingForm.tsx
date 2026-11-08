@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, CalendarCheck, CircleCheck, Info, LoaderCircle, Save, Trash2, TriangleAlert, UserPlus, X } from 'lucide-react'
+import { ArrowLeft, CalendarCheck, CircleCheck, Info, LoaderCircle, Repeat, Save, Trash2, TriangleAlert, UserPlus, X } from 'lucide-react'
 import {
-  bookingConflicts, meetingsApi, type Conflict, type DbMeetingCategory, type GuestInput, type MeetingCreateInput, type MeetingDetail,
-  type MeetingUpdateInput, type RecordingPolicy,
+  bookingConflicts, meetingsApi, occurrenceConflicts, MAX_RECURRENCE_OCCURRENCES, WEEKDAYS, type Conflict, type DbMeetingCategory, type GuestInput,
+  type MeetingCreateInput, type MeetingDetail, type MeetingUpdateInput, type OccurrenceConflict, type RecordingPolicy, type RecurrenceRule,
+  type RecurringMeetingCreateInput, type Weekday,
 } from '../../api/meetings'
 import { errorMessage, fieldErrors } from '../../api/types'
 import { http } from '../../api/http'
@@ -14,16 +15,18 @@ import { Button, ButtonLink } from '../../components/ui/Button'
 import { Card, CardHeader } from '../../components/ui/Card'
 import { PageHeader } from '../../components/ui/Data'
 import { Alert, ErrorState, Skeleton } from '../../components/ui/Feedback'
+import { DateField, TimeField } from '../../components/ui/DateTimeField'
 import { TextField } from '../../components/ui/Field'
 import { SelectField, Switch, TextAreaField } from '../../components/ui/Form'
+import { Dialog } from '../../components/ui/Overlay'
 import { useToast } from '../../components/ui/Toast'
 import { cn } from '../../lib/cn'
-import { addDays, formatDuration, formatRange, parseUtc, zoneLabel, zonedParts, zonedToUtc } from '../../lib/format'
+import { addDays, formatDate, formatDuration, formatRange, formatTime, parseUtc, zoneLabel, zonedParts, zonedToUtc } from '../../lib/format'
 import { useLoader } from '../../lib/useLoader'
 import { CustomerDialog } from '../customers/CustomerDialog'
 import { CustomerPicker, type PickedCustomer } from '../customers/CustomerPicker'
 import { ConflictDialog, ConflictList } from './Conflicts'
-import { CUSTOMER_CATEGORIES, INTERNAL_CATEGORIES, conflictLabel, dbCategoryLabel, isCustomerCategory, useTimeZone } from './meta'
+import { CUSTOMER_CATEGORIES, INTERNAL_CATEGORIES, combineMeetingDetails, conflictLabel, dbCategoryLabel, isCustomerCategory, useTimeZone } from './meta'
 import { useAvailability, type AvailabilityState } from './useAvailability'
 
 /** Whether a meeting category can be recorded (GET /meetings/recording-options). */
@@ -33,21 +36,45 @@ const DURATIONS = [15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 420, 480]
 const MAX_GUESTS = 20
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
 
+/** The "Repeat" section's draft state. `null` means "does not repeat". New meetings only (see MeetingForm). */
+type RecurrenceDraft = {
+  pattern: RecurrenceRule['pattern']
+  interval: number
+  byWeekdays: Weekday[]
+  endType: RecurrenceRule['endType']
+  endCount: number
+  endUntilDate: string
+}
+
 type Form = {
   title: string
   category: DbMeetingCategory | ''
   date: string
   time: string
   duration: number
-  agenda: string
-  description: string
+  /** Replaces the old separate Agenda/Description fields (still two DB columns - see combineMeetingDetails). */
+  details: string
   recordingPolicy: RecordingPolicy
   waitingRoom: boolean
   purpose: string
   policyNumber: string
+  recurrence: RecurrenceDraft | null
 }
 
+function defaultRecurrence(date: string, weekday: Weekday): RecurrenceDraft {
+  return { pattern: 'WEEKLY', interval: 1, byWeekdays: [weekday], endType: 'COUNT', endCount: 10, endUntilDate: addDays(date, 90) }
+}
+
+const WEEKDAY_BY_JS_DAY: Weekday[] = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
+
 type GuestRow = GuestInput & { key: number }
+
+// Simplifies the category dropdown to 5 top-level choices instead of 9: the 5 "format" variants of an internal
+// meeting collapse into one "Internal Meeting" choice, with a secondary "Meeting Format" select shown underneath.
+// This is UI-only - the stored DbMeetingCategory value is exactly the same as before (no migration, no new column,
+// recording-policy category mapping and historical reports are entirely unaffected).
+const INTERNAL_FORMATS: DbMeetingCategory[] = ['INTERNAL_1_1', 'GROUP', 'TEAM', 'DEPARTMENT', 'MANAGEMENT']
+const topLevelCategory = (c: DbMeetingCategory | ''): string => (c && (INTERNAL_FORMATS as string[]).includes(c) ? 'INTERNAL_MEETING' : c)
 
 /** Next half hour at least 15 minutes ahead, in the user's zone. */
 function defaultStart(tz: string) {
@@ -135,17 +162,17 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
         date: p.ymd,
         time: p.hm,
         duration: Math.round((parseUtc(existing.endUtc).getTime() - s.getTime()) / 60_000),
-        agenda: existing.agenda ?? '',
-        description: existing.description ?? '',
+        details: combineMeetingDetails(existing.agenda, existing.description),
         recordingPolicy: existing.recordingPolicy,
         waitingRoom: existing.waitingRoomEnabled,
         purpose: existing.purpose ?? '',
         policyNumber: existing.policyNumber ?? '',
+        recurrence: null,
       }
     }
     const wanted = params.get('category') as DbMeetingCategory | null
     const category = wanted && (INTERNAL_CATEGORIES.includes(wanted) || (canCustomer && CUSTOMER_CATEGORIES.includes(wanted))) ? wanted : ''
-    return { title: '', category, ...defaultStart(tz), duration: 30, agenda: '', description: '', recordingPolicy: 'NONE', waitingRoom: true, purpose: '', policyNumber: '' }
+    return { title: '', category, ...defaultStart(tz), duration: 30, details: '', recordingPolicy: 'NONE', waitingRoom: true, purpose: '', policyNumber: '', recurrence: null }
   })
   const [people, setPeople] = useState<PickedEmployee[]>([])
   const [guests, setGuests] = useState<GuestRow[]>([])
@@ -155,6 +182,7 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<'DRAFT' | 'SCHEDULED' | 'SAVE' | null>(null)
   const [conflicts, setConflicts] = useState<{ list: Conflict[]; status: 'DRAFT' | 'SCHEDULED' | 'SAVE' } | null>(null)
+  const [occConflicts, setOccConflicts] = useState<OccurrenceConflict[] | null>(null)
 
   const set = <K extends keyof Form>(k: K, v: Form[K]) => {
     setForm((f) => ({ ...f, [k]: v }))
@@ -214,7 +242,26 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
     emails.forEach((e, i) => {
       if (e && emails.indexOf(e) !== i) v[`guests[${i}].email`] = 'This guest is listed twice.'
     })
+    const r = form.recurrence
+    if (r) {
+      if (r.pattern === 'WEEKLY' && r.byWeekdays.length === 0) v['recurrence.byWeekdays'] = 'Choose at least one day of the week.'
+      if (r.endType === 'COUNT' && (!r.endCount || r.endCount < 2 || r.endCount > MAX_RECURRENCE_OCCURRENCES))
+        v['recurrence.endCount'] = `Choose between 2 and ${MAX_RECURRENCE_OCCURRENCES} occurrences.`
+      if (r.endType === 'UNTIL' && (!r.endUntilDate || (times && zonedToUtc(r.endUntilDate, '23:59', tz).getTime() <= parseUtc(times.startUtc).getTime())))
+        v['recurrence.endUntilDate'] = 'The end date must be after the first occurrence.'
+    }
     return v
+  }
+
+  function recurrencePayload(r: RecurrenceDraft): RecurrenceRule {
+    return {
+      pattern: r.pattern,
+      interval: r.interval,
+      byWeekdays: r.pattern === 'WEEKLY' ? r.byWeekdays : undefined,
+      endType: r.endType,
+      endCount: r.endType === 'COUNT' ? r.endCount : undefined,
+      endUntilUtc: r.endType === 'UNTIL' ? zonedToUtc(r.endUntilDate, '23:59', tz).toISOString() : undefined,
+    }
   }
 
   async function save(status: 'DRAFT' | 'SCHEDULED' | 'SAVE', override?: string) {
@@ -222,8 +269,10 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
     const opt = (s: string) => s.trim() || null
     const common = {
       title: form.title.trim(),
-      description: opt(form.description),
-      agenda: opt(form.agenda),
+      // The merged "Meeting Details" field is stored in `agenda`; `description` is passed through unchanged so an
+      // older record's separate description text is never touched or lost by a resave through the new single field.
+      description: existing ? existing.description : null,
+      agenda: opt(form.details),
       category: form.category,
       startUtc: times.startUtc,
       endUtc: times.endUtc,
@@ -238,6 +287,18 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
       const body: MeetingUpdateInput = { ...common, timeZoneId: existing.timeZoneId, status: status === 'SAVE' ? undefined : status }
       const r = await meetingsApi.update(existing.id, body)
       finish(existing.id, r.warnings, r.rescheduled ? 'Meeting rescheduled. Participants have been notified.' : r.status === 'SCHEDULED' && existing.status === 'DRAFT' ? 'Meeting scheduled. Invitations are on their way.' : 'Meeting updated.')
+    } else if (form.recurrence && status !== 'DRAFT') {
+      const body: RecurringMeetingCreateInput = {
+        ...common,
+        timeZoneId: tz,
+        employeeIds: people.map((p) => p.id),
+        customerId: isCustomerCategory(form.category) ? customer?.id ?? null : null,
+        guests: guests.map((g) => ({ name: g.name.trim(), email: g.email.trim() })),
+        recurrence: recurrencePayload(form.recurrence),
+      }
+      const r = await meetingsApi.createRecurring(body)
+      toast.success(`${r.occurrences.length} meeting${r.occurrences.length === 1 ? '' : 's'} scheduled. Invitations are on their way.`)
+      navigate(`/meetings/${r.occurrences[0].id}`)
     } else {
       const body: MeetingCreateInput = {
         ...common,
@@ -270,14 +331,27 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
     try {
       await save(status)
     } catch (e) {
+      const occ = occurrenceConflicts(e)
       const list = bookingConflicts(e)
-      if (list.length) setConflicts({ list, status })
+      if (occ.length) setOccConflicts(occ)
+      else if (list.length) setConflicts({ list, status })
       else {
         setErrors(fieldErrors(e))
         setError(errorMessage(e, 'The meeting could not be saved.'))
       }
     } finally {
       setBusy(null)
+    }
+  }
+
+  async function overrideRecurring() {
+    try {
+      await save('SCHEDULED', 'Booked despite calendar conflicts on one or more occurrences.')
+      setOccConflicts(null)
+    } catch (e) {
+      setOccConflicts(null)
+      setErrors(fieldErrors(e))
+      setError(errorMessage(e, 'The meeting could not be saved.'))
     }
   }
 
@@ -305,12 +379,23 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
           <CardHeader title="Meeting details" />
           <div className="flex flex-col gap-4 px-5 pb-5">
             <TextField label="Title" value={form.title} onChange={(e) => set('title', e.target.value)} error={errors.title} maxLength={200} autoComplete="off" placeholder="e.g. Weekly claims review" data-autofocus />
-            <SelectField label="Category" value={form.category} onChange={(e) => (set('category', e.target.value as DbMeetingCategory), setErrors((x) => ({ ...x, customerId: '' })))} error={errors.category}
-              hint={existing ? 'A customer meeting cannot become an internal meeting, or the other way round.' : undefined}>
+            <SelectField
+              label="Category"
+              value={topLevelCategory(form.category)}
+              onChange={(e) => {
+                const v = e.target.value
+                set('category', v === 'INTERNAL_MEETING' ? (INTERNAL_FORMATS.includes(form.category as DbMeetingCategory) ? form.category : 'GROUP') : (v as DbMeetingCategory))
+                setErrors((x) => ({ ...x, customerId: '' }))
+              }}
+              error={errors.category}
+              hint={existing ? 'A customer meeting cannot become an internal meeting, or the other way round.' : undefined}
+            >
               <option value="">Select category</option>
               {(existing ? categoryFamilies === INTERNAL_CATEGORIES : true) && (
                 <optgroup label="Internal">
-                  {INTERNAL_CATEGORIES.map((c) => <option key={c} value={c}>{dbCategoryLabel[c]}</option>)}
+                  <option value="INTERNAL_MEETING">Internal Meeting</option>
+                  <option value="TRAINING">{dbCategoryLabel.TRAINING}</option>
+                  <option value="REVIEW">{dbCategoryLabel.REVIEW}</option>
                 </optgroup>
               )}
               {(existing ? categoryFamilies === CUSTOMER_CATEGORIES : canCustomer) && (
@@ -319,6 +404,11 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
                 </optgroup>
               )}
             </SelectField>
+            {topLevelCategory(form.category) === 'INTERNAL_MEETING' && (
+              <SelectField label="Meeting Format" value={form.category} onChange={(e) => set('category', e.target.value as DbMeetingCategory)}>
+                {INTERNAL_FORMATS.map((c) => <option key={c} value={c}>{dbCategoryLabel[c]}</option>)}
+              </SelectField>
+            )}
 
             {customerMeeting && (
               <div className="flex flex-col gap-4 rounded-md border border-line bg-surface-muted p-4">
@@ -349,8 +439,15 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
               </div>
             )}
 
-            <TextAreaField label="Agenda (optional)" value={form.agenda} onChange={(e) => set('agenda', e.target.value)} error={errors.agenda} maxLength={4000} rows={4} placeholder="Topics to cover, one per line" />
-            <TextAreaField label="Description (optional)" value={form.description} onChange={(e) => set('description', e.target.value)} error={errors.description} maxLength={2000} rows={3} />
+            <TextAreaField
+              label="Meeting Details (Optional)"
+              value={form.details}
+              onChange={(e) => set('details', e.target.value)}
+              error={errors.details}
+              maxLength={4000}
+              rows={5}
+              placeholder="Enter the meeting agenda, discussion topics, purpose and any additional information..."
+            />
           </div>
         </Card>
 
@@ -358,8 +455,8 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
           <CardHeader title="Date and time" subtitle={`Times are in ${zoneLabel(tz)} (${tz}).`} />
           <div className="flex flex-col gap-4 px-5 pb-5">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <TextField label="Date" type="date" value={form.date} onChange={(e) => (set('date', e.target.value), setErrors((x) => ({ ...x, startUtc: '' })))} error={errors.startUtc} />
-              <TextField label={`Start time (${zoneLabel(tz)})`} type="time" step={300} value={form.time} onChange={(e) => (set('time', e.target.value), setErrors((x) => ({ ...x, startUtc: '' })))} />
+              <DateField label="Date" value={form.date} onChange={(v) => (set('date', v), setErrors((x) => ({ ...x, startUtc: '' })))} error={errors.startUtc} />
+              <TimeField label={`Start time (${zoneLabel(tz)})`} stepMinutes={5} value={form.time} onChange={(v) => (set('time', v), setErrors((x) => ({ ...x, startUtc: '' })))} />
               <SelectField label="Duration" value={String(form.duration)} onChange={(e) => (set('duration', Number(e.target.value)), setErrors((x) => ({ ...x, endUtc: '' })))} error={errors.endUtc}>
                 {durations.map((d) => <option key={d} value={d}>{formatDuration(d)}</option>)}
               </SelectField>
@@ -374,6 +471,16 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
               <Alert tone="warning" title="This reschedules the meeting">
                 Attendees' replies are reset, reminders are re-created, customer and guest links are re-issued, and everyone is notified.
               </Alert>
+            )}
+            {!existing && (
+              <>
+                <Switch
+                  checked={!!form.recurrence}
+                  onChange={(v) => set('recurrence', v ? defaultRecurrence(form.date, WEEKDAY_BY_JS_DAY[new Date(`${form.date}T00:00:00`).getDay()]) : null)}
+                  label={<span className="inline-flex items-center gap-1.5"><Repeat className="size-4" /> Repeat this meeting</span>}
+                />
+                {form.recurrence && <RecurrenceEditor value={form.recurrence} onChange={(r) => set('recurrence', r)} errors={errors} />}
+              </>
             )}
           </div>
         </Card>
@@ -446,12 +553,20 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
                 )
               ) : (
                 <>
-                  <Button type="submit" fullWidth loading={busy === 'SCHEDULED'} disabled={!!busy} leftIcon={<CalendarCheck className="size-4" />}>Schedule meeting</Button>
-                  <Button type="button" variant="secondary" fullWidth loading={busy === 'DRAFT'} disabled={!!busy} leftIcon={<Save className="size-4" />} onClick={() => void submit('DRAFT')}>Save as draft</Button>
+                  <Button type="submit" fullWidth loading={busy === 'SCHEDULED'} disabled={!!busy} leftIcon={form.recurrence ? <Repeat className="size-4" /> : <CalendarCheck className="size-4" />}>
+                    {form.recurrence ? 'Schedule recurring meeting' : 'Schedule meeting'}
+                  </Button>
+                  {!form.recurrence && (
+                    <Button type="button" variant="secondary" fullWidth loading={busy === 'DRAFT'} disabled={!!busy} leftIcon={<Save className="size-4" />} onClick={() => void submit('DRAFT')}>Save as draft</Button>
+                  )}
                 </>
               )}
               <p className="mt-1 text-[12px] text-ink-secondary">
-                {existing?.status === 'SCHEDULED' ? 'Participants are e-mailed and notified about changes to the time.' : 'Scheduling e-mails the invitations and sets up reminders. Drafts are visible only to you and are not checked for conflicts.'}
+                {existing?.status === 'SCHEDULED'
+                  ? 'Participants are e-mailed and notified about changes to the time.'
+                  : form.recurrence
+                    ? 'Every occurrence is a separate meeting with its own invitations, waiting room and recording. Drafts are not available for a recurring meeting.'
+                    : 'Scheduling e-mails the invitations and sets up reminders. Drafts are visible only to you and are not checked for conflicts.'}
               </p>
             </div>
           </Card>
@@ -481,7 +596,132 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
           setConflicts(null)
         }}
       />
+
+      <OccurrenceConflictDialog occConflicts={occConflicts} tz={tz} canOverride={canOverride} busy={busy === 'SCHEDULED'} onClose={() => setOccConflicts(null)} onOverride={() => void overrideRecurring()} />
     </form>
+  )
+}
+
+/** Shown when some dates of a recurring series clash with someone's calendar (409 from POST /meetings/recurring). */
+function OccurrenceConflictDialog({
+  occConflicts, tz, canOverride, busy, onClose, onOverride,
+}: {
+  occConflicts: OccurrenceConflict[] | null
+  tz: string
+  canOverride: boolean
+  busy: boolean
+  onClose: () => void
+  onOverride: () => void
+}) {
+  return (
+    <Dialog
+      open={!!occConflicts}
+      onClose={onClose}
+      title="Some dates are not available"
+      description={occConflicts ? `${occConflicts.length} of the occurrences clash with a participant's calendar.` : undefined}
+      size="md"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>Close</Button>
+          {canOverride && <Button variant="danger" loading={busy} onClick={onOverride}>Book the whole series anyway</Button>}
+        </>
+      }
+    >
+      <ul className="flex flex-col gap-3">
+        {(occConflicts ?? []).map((o) => (
+          <li key={o.seq} className="rounded-md border border-line bg-surface-muted p-3">
+            <p className="text-[13px] font-semibold text-ink">
+              Occurrence {o.seq} · {formatDate(o.startUtc, tz)}, {formatTime(o.startUtc, tz)}
+            </p>
+            <ConflictList conflicts={o.conflicts} tz={tz} />
+          </li>
+        ))}
+      </ul>
+      {!canOverride && <p className="mt-3 text-[12.5px] text-ink-secondary">You do not have permission to book despite a conflict. Change the time or remove the clashing participants.</p>}
+    </Dialog>
+  )
+}
+
+// ---- Repeat ------------------------------------------------------------------------
+
+const PATTERN_LABEL: Record<RecurrenceRule['pattern'], string> = { DAILY: 'day(s)', WEEKLY: 'week(s)', MONTHLY: 'month(s)' }
+
+function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft; onChange: (r: RecurrenceDraft) => void; errors: Record<string, string> }) {
+  const set = <K extends keyof RecurrenceDraft>(k: K, v: RecurrenceDraft[K]) => onChange({ ...value, [k]: v })
+  const toggleDay = (d: Weekday) => set('byWeekdays', value.byWeekdays.includes(d) ? value.byWeekdays.filter((x) => x !== d) : [...value.byWeekdays, d])
+
+  return (
+    <div className="flex flex-col gap-4 rounded-md border border-line bg-surface-muted p-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <SelectField label="Frequency" value={value.pattern} onChange={(e) => set('pattern', e.target.value as RecurrenceRule['pattern'])} className="w-40">
+          <option value="DAILY">Daily</option>
+          <option value="WEEKLY">Weekly</option>
+          <option value="MONTHLY">Monthly</option>
+        </SelectField>
+        <TextField
+          label="Repeat every"
+          type="number"
+          min={1}
+          max={30}
+          value={String(value.interval)}
+          onChange={(e) => set('interval', Math.min(30, Math.max(1, Number(e.target.value) || 1)))}
+          hint={PATTERN_LABEL[value.pattern]}
+          className="w-28"
+        />
+      </div>
+
+      {value.pattern === 'WEEKLY' && (
+        <fieldset>
+          <legend className="mb-1.5 text-[13px] font-semibold text-ink">On these days</legend>
+          <div className="flex flex-wrap gap-1.5">
+            {WEEKDAYS.map((d) => (
+              <button
+                key={d.code}
+                type="button"
+                onClick={() => toggleDay(d.code)}
+                className={cn(
+                  'flex size-10 items-center justify-center rounded-full border text-[12.5px] font-semibold transition-colors',
+                  value.byWeekdays.includes(d.code) ? 'border-brand-500 bg-brand-500 text-white' : 'border-line bg-surface text-ink-secondary hover:border-line-strong',
+                )}
+              >
+                {d.label[0]}
+              </button>
+            ))}
+          </div>
+          {errors['recurrence.byWeekdays'] && <p className="mt-1.5 text-[12.5px] font-medium text-danger">{errors['recurrence.byWeekdays']}</p>}
+        </fieldset>
+      )}
+
+      <fieldset>
+        <legend className="mb-1.5 text-[13px] font-semibold text-ink">Ends</legend>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex h-11 items-center gap-2 text-[13px] text-ink">
+              <input type="radio" checked={value.endType === 'COUNT'} onChange={() => set('endType', 'COUNT')} className="size-4 accent-brand-500" />
+              After
+            </label>
+            <TextField
+              label="Occurrences"
+              type="number"
+              min={2}
+              max={MAX_RECURRENCE_OCCURRENCES}
+              value={String(value.endCount)}
+              onChange={(e) => (set('endType', 'COUNT'), set('endCount', Number(e.target.value) || 2))}
+              error={errors['recurrence.endCount']}
+              className="w-28"
+            />
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex h-11 items-center gap-2 text-[13px] text-ink">
+              <input type="radio" checked={value.endType === 'UNTIL'} onChange={() => set('endType', 'UNTIL')} className="size-4 accent-brand-500" />
+              On date
+            </label>
+            <DateField label="End date" value={value.endUntilDate} onChange={(v) => (set('endType', 'UNTIL'), set('endUntilDate', v))} error={errors['recurrence.endUntilDate']} />
+          </div>
+        </div>
+      </fieldset>
+      <p className="text-[12px] text-ink-secondary">At most {MAX_RECURRENCE_OCCURRENCES} occurrences, within one year. Each one is a separate meeting that can be rescheduled or cancelled on its own.</p>
+    </div>
   )
 }
 

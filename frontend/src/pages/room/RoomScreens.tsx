@@ -19,9 +19,10 @@ export function RoomCanvas({ children, className }: { children: ReactNode; class
 }
 
 // The canvas background is repeated inline so the fallback looks right before room.css (lazy chunk) has loaded.
+// Mirrors the meeting room's own palette (room.css): midnight navy with enterprise-blue / cyan ambient glow.
 const canvasStyle = {
   background:
-    'radial-gradient(1200px 700px at 88% -12%, rgb(40 120 229 / 0.2), transparent 60%), radial-gradient(900px 620px at -12% 112%, rgb(32 196 216 / 0.12), transparent 55%), #0b1e31',
+    'radial-gradient(1200px 700px at 88% -12%, rgb(55 135 245 / 0.22), transparent 60%), radial-gradient(900px 620px at -12% 112%, rgb(32 196 216 / 0.14), transparent 55%), #081525',
 }
 
 export function RoomLoading({ label = 'Preparing the meeting room…' }: { label?: string }) {
@@ -52,7 +53,7 @@ export function RoomMessage({
   const ring = { brand: 'bg-brand-500/20 text-cyan-400', warning: 'bg-warning/20 text-warning', danger: 'bg-danger/20 text-[#F87171]', success: 'bg-success/20 text-[#4ADE80]' }[tone]
   return (
     <RoomCanvas>
-      <section className="w-full max-w-[520px] rounded-xl border border-white/10 bg-white/[0.04] p-7 text-center shadow-[0_24px_60px_rgb(0_0_0/0.35)] backdrop-blur-md sm:p-9 animate-fade-up">
+      <section className="w-full max-w-[520px] rounded-[20px] border border-white/10 bg-white/[0.05] p-7 text-center shadow-[0_1px_0_rgb(255_255_255/0.06)_inset,0_24px_60px_-10px_rgb(0_0_0/0.5)] backdrop-blur-xl sm:p-9 animate-fade-up">
         <div className={cn('mx-auto flex size-14 items-center justify-center rounded-full', ring)}>{icon}</div>
         <h1 className="mt-5 text-[22px] leading-8 font-bold tracking-[-0.01em]">{title}</h1>
         {children && <div className="mt-2 text-[14px] leading-6 text-white/70">{children}</div>}

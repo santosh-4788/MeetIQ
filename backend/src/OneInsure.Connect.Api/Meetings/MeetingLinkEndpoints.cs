@@ -63,14 +63,19 @@ public static class MeetingLinkEndpoints
 
     sealed record LinkRow(long LinkId, string TokenProtected, DateTime CreatedUtc, DateTime ExpiresUtc, int UseCount, DateTime? LastUsedUtc);
 
-    /// <summary>The meeting's active link, created (or extended after a reschedule) when needed.</summary>
-    static async Task<(string Token, LinkRow Row)> EnsureLinkAsync(IDbConnection c, IDbTransaction? tx, LinkServices s, long meetingId, DateTime endUtc, long userId)
+    /// <summary>
+    /// The active link for one meeting, or for a whole recurring series (exactly one of the two is given), created
+    /// (or extended after a reschedule / new occurrence) when needed. A series link resolves to the relevant
+    /// occurrence only when it is opened (<see cref="FindLinkAsync"/>) - this just keeps one token alive.
+    /// </summary>
+    static async Task<(string Token, LinkRow Row)> EnsureLinkAsync(IDbConnection c, IDbTransaction? tx, LinkServices s, long? meetingId, long? seriesId, DateTime endUtc, long userId)
     {
         var now = s.Clock.UtcNow;
         var expires = s.Expiry(endUtc);
         var row = await c.QuerySingleOrDefaultAsync<LinkRow>("""
-            SELECT LinkId, TokenProtected, CreatedUtc, ExpiresUtc, UseCount, LastUsedUtc FROM mtg.MeetingLinks WHERE MeetingId = @meetingId AND RevokedUtc IS NULL
-            """, new { meetingId }, tx);
+            SELECT LinkId, TokenProtected, CreatedUtc, ExpiresUtc, UseCount, LastUsedUtc FROM mtg.MeetingLinks
+            WHERE RevokedUtc IS NULL AND ((@meetingId IS NOT NULL AND MeetingId = @meetingId) OR (@seriesId IS NOT NULL AND SeriesId = @seriesId))
+            """, new { meetingId, seriesId }, tx);
         if (row is not null)
         {
             if (row.ExpiresUtc < expires && expires > row.CreatedUtc)
@@ -84,9 +89,9 @@ public static class MeetingLinkEndpoints
         var protectedToken = s.Protector.Protect(token);
         var exp = expires > now ? expires : now.AddMinutes(1); // a link made after joining closed works for nothing anyway
         var id = await c.QuerySingleAsync<long>("""
-            INSERT mtg.MeetingLinks (MeetingId, TokenHash, TokenProtected, CreatedUtc, CreatedByUserId, ExpiresUtc)
-            OUTPUT inserted.LinkId VALUES (@meetingId, @hash, @protectedToken, @now, @userId, @exp)
-            """, new { meetingId, hash = Tokens.Hash(token), protectedToken, now, userId, exp }, tx);
+            INSERT mtg.MeetingLinks (MeetingId, SeriesId, TokenHash, TokenProtected, CreatedUtc, CreatedByUserId, ExpiresUtc)
+            OUTPUT inserted.LinkId VALUES (@meetingId, @seriesId, @hash, @protectedToken, @now, @userId, @exp)
+            """, new { meetingId, seriesId, hash = Tokens.Hash(token), protectedToken, now, userId, exp }, tx);
         return (token, new LinkRow(id, protectedToken, now, exp, 0, null));
     }
 
@@ -147,7 +152,7 @@ public static class MeetingLinkEndpoints
             INSERT mtg.MeetingParticipants (MeetingId, ParticipantType, EmployeeId, [Role], ResponseStatus, LiveKitIdentity, CanScreenShare, CreatedByUserId)
             VALUES (@meetingId, 'EMPLOYEE', @emp, 'HOST', 'ACCEPTED', @identity, 1, @user)
             """, new { meetingId, emp = me.EmployeeId, identity = MeetingMessaging.NewOpaqueId("p_", 12), user = me.UserId }, tx);
-        var (token, link) = await EnsureLinkAsync(c, tx, s, meetingId, end, me.UserId);
+        var (token, link) = await EnsureLinkAsync(c, tx, s, meetingId, null, end, me.UserId);
         await Audit.WriteAsync(c, "USER", me.UserId, "MEETING_INSTANT_STARTED", "Meeting", publicId.ToString(), $"Instant meeting {code} created", ClientInfo.From(ctx).Ip, tx,
             newValues: new { meetingCode = code, title, category, startUtc = now, endUtc = end, recordingPolicy = recording, audioOnly = i.AudioOnly == true, waitingRoom = i.WaitingRoomEnabled ?? true });
         tx.Commit();
@@ -176,7 +181,7 @@ public static class MeetingLinkEndpoints
 
     // ---- Manage the link (hosts / organiser) --------------------------------------------------------------------------
 
-    sealed record ManagedMeeting(long MeetingId, long HostEmployeeId, long CreatedByEmployeeId, string Status, DateTime EndUtc, string? MyRole);
+    sealed record ManagedMeeting(long MeetingId, long? SeriesId, long HostEmployeeId, long CreatedByEmployeeId, string Status, DateTime EndUtc, string? MyRole);
 
     static async Task<IResult> Manage(Guid id, LinkServices s, HttpContext ctx, bool regenerate, bool revoke)
     {
@@ -184,22 +189,36 @@ public static class MeetingLinkEndpoints
         using var c = await s.Db.OpenAsync(ct);
         var me = await Actor.LoadAsync(c, ctx.User);
         var m = await c.QuerySingleOrDefaultAsync<ManagedMeeting>($"""
-            SELECT m.MeetingId, m.HostEmployeeId, m.CreatedByEmployeeId, m.[Status], m.ScheduledEndUtc AS EndUtc,
+            SELECT m.MeetingId, m.SeriesId, m.HostEmployeeId, m.CreatedByEmployeeId, m.[Status], m.ScheduledEndUtc AS EndUtc,
                    (SELECT p.[Role] FROM mtg.MeetingParticipants p WHERE p.MeetingId = m.MeetingId AND p.EmployeeId = @emp AND p.IsBlocked = 0) AS MyRole
             FROM mtg.Meetings m WHERE m.PublicId = @id AND {MeetingEndpoints.Visible}
             """, new { id, emp = me.EmployeeId, all = me.ViewAll });
         if (m is null) return Db_.NotFound("Meeting");
         if (!CanManageLink(m.HostEmployeeId, m.CreatedByEmployeeId, m.MyRole, me))
             return Problems.Create(403, "FORBIDDEN", "Only the host, a co-host or the organiser can share this meeting's link.");
-        if (m.Status is not ("SCHEDULED" or "LIVE")) return Db_.Conflict("This meeting is not scheduled or in progress, so it has no link to share.");
+
+        // Part of a series: one link for the whole series, so what matters is whether the series still has anything
+        // left to join, not just the one occurrence this request happened to be made from.
+        long? meetingKey = m.MeetingId, seriesKey = null;
+        var endUtc = m.EndUtc;
+        if (m.SeriesId is { } sid)
+        {
+            var active = await c.QuerySingleOrDefaultAsync<DateTime?>(
+                "SELECT MAX(ScheduledEndUtc) FROM mtg.Meetings WHERE SeriesId = @sid AND [Status] IN ('SCHEDULED', 'LIVE')", new { sid });
+            if (active is null) return Db_.Conflict("This recurring meeting has no scheduled occurrences left, so it has no link to share.");
+            (meetingKey, seriesKey, endUtc) = (null, sid, active.Value);
+        }
+        else if (m.Status is not ("SCHEDULED" or "LIVE")) return Db_.Conflict("This meeting is not scheduled or in progress, so it has no link to share.");
 
         var now = s.Clock.UtcNow;
         var ip = ClientInfo.From(ctx).Ip;
         using var tx = c.BeginTransaction();
         if (regenerate || revoke)
         {
-            var n = await c.ExecuteAsync("UPDATE mtg.MeetingLinks SET RevokedUtc = @now, RevokedByUserId = @user WHERE MeetingId = @mid AND RevokedUtc IS NULL",
-                new { now, user = me.UserId, mid = m.MeetingId }, tx);
+            var n = await c.ExecuteAsync("""
+                UPDATE mtg.MeetingLinks SET RevokedUtc = @now, RevokedByUserId = @user
+                WHERE RevokedUtc IS NULL AND ((@meetingKey IS NOT NULL AND MeetingId = @meetingKey) OR (@seriesKey IS NOT NULL AND SeriesId = @seriesKey))
+                """, new { now, user = me.UserId, meetingKey, seriesKey }, tx);
             await Audit.WriteAsync(c, "USER", me.UserId, regenerate ? "MEETING_LINK_REGENERATED" : "MEETING_LINK_REVOKED", "Meeting", id.ToString(),
                 regenerate ? "Meeting link replaced (the old link stops working)" : "Meeting link withdrawn", ip, tx, newValues: new { revoked = n });
             if (revoke)
@@ -208,7 +227,7 @@ public static class MeetingLinkEndpoints
                 return Results.NoContent();
             }
         }
-        var (token, row) = await EnsureLinkAsync(c, tx, s, m.MeetingId, m.EndUtc, me.UserId);
+        var (token, row) = await EnsureLinkAsync(c, tx, s, meetingKey, seriesKey, endUtc, me.UserId);
         tx.Commit();
         return Results.Ok(LinkDto(s, token, row));
     }
@@ -218,13 +237,29 @@ public static class MeetingLinkEndpoints
     sealed record PublicLink(long LinkId, long MeetingId, Guid PublicId, string Title, string Organiser, DateTime StartUtc, DateTime EndUtc, string TimeZoneId, string Status,
         string MeetingCode, bool IsLocked, bool IsAudioOnly, string MeetingKind);
 
+    /// <summary>
+    /// A plain link resolves to its one meeting, unchanged. A series link resolves, each time it is opened, to
+    /// whichever occurrence is relevant right now: the one currently live, else the earliest upcoming one that has
+    /// not ended yet - so the same link keeps working as the recurring meeting moves from day to day. If the series
+    /// has nothing left (every occurrence done, cancelled or expired), it resolves to nothing and the link reads as
+    /// expired, same as a one-off meeting whose link outlived it.
+    /// </summary>
     static async Task<PublicLink?> FindLinkAsync(IDbConnection c, string token, DateTime now)
     {
         if (string.IsNullOrEmpty(token) || token.Length > 200) return null;
         return await c.QuerySingleOrDefaultAsync<PublicLink>("""
-            SELECT l.LinkId, m.MeetingId, m.PublicId, m.Title, h.DisplayName AS Organiser, m.ScheduledStartUtc AS StartUtc, m.ScheduledEndUtc AS EndUtc, m.TimeZoneId,
-                   m.[Status], m.MeetingCode, m.IsLocked, m.IsAudioOnly, m.MeetingKind
-            FROM mtg.MeetingLinks l JOIN mtg.Meetings m ON m.MeetingId = l.MeetingId JOIN org.Employees h ON h.EmployeeId = m.HostEmployeeId
+            SELECT l.LinkId, rm.MeetingId, rm.PublicId, rm.Title, h.DisplayName AS Organiser, rm.ScheduledStartUtc AS StartUtc, rm.ScheduledEndUtc AS EndUtc,
+                   rm.TimeZoneId, rm.[Status], rm.MeetingCode, rm.IsLocked, rm.IsAudioOnly, rm.MeetingKind
+            FROM mtg.MeetingLinks l
+            CROSS APPLY (
+                SELECT TOP (1) m.MeetingId, m.PublicId, m.Title, m.HostEmployeeId, m.ScheduledStartUtc, m.ScheduledEndUtc, m.TimeZoneId, m.[Status],
+                       m.MeetingCode, m.IsLocked, m.IsAudioOnly, m.MeetingKind
+                FROM mtg.Meetings m
+                WHERE (l.MeetingId IS NOT NULL AND m.MeetingId = l.MeetingId)
+                   OR (l.SeriesId IS NOT NULL AND m.SeriesId = l.SeriesId AND m.[Status] IN ('SCHEDULED', 'LIVE') AND m.ScheduledEndUtc > @now)
+                ORDER BY CASE WHEN m.[Status] = 'LIVE' THEN 0 ELSE 1 END, m.ScheduledStartUtc ASC
+            ) rm
+            JOIN org.Employees h ON h.EmployeeId = rm.HostEmployeeId
             WHERE l.TokenHash = @hash AND l.RevokedUtc IS NULL AND l.ExpiresUtc > @now
             """, new { hash = Tokens.Hash(token), now });
     }

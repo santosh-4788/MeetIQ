@@ -8,9 +8,9 @@ export function validateLoginId(value: string): string | undefined {
   return EMPLOYEE_ID_RE.test(v) ? undefined : 'Enter a valid employee ID (e.g. OIC-1001).'
 }
 
-// Mirrors the server-side policy (the server is authoritative; ASVS L2 V2.1).
+// Mirrors the server-side policy (the server is authoritative; ASVS L1 V2.1 - shorter minimum than L2 by product decision).
 export const passwordRules = [
-  { id: 'len', label: 'At least 12 characters', test: (p: string) => p.length >= 12 },
+  { id: 'len', label: 'At least 8 characters', test: (p: string) => p.length >= 8 },
   { id: 'upper', label: 'An uppercase letter', test: (p: string) => /[A-Z]/.test(p) },
   { id: 'lower', label: 'A lowercase letter', test: (p: string) => /[a-z]/.test(p) },
   { id: 'digit', label: 'A number', test: (p: string) => /\d/.test(p) },

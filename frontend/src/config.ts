@@ -4,7 +4,8 @@ export const DEMO_MODE = import.meta.env.DEV && import.meta.env.VITE_DEMO_MODE =
 export const APP_NAME = 'OneInsure Connect'
 export const APP_TAGLINE = 'Connect. Collaborate. Grow.'
 export const APP_VERSION = '0.7.0'
-export const API_BASE = '/api/v1'
+// import.meta.env.BASE_URL follows vite.config.ts's `base` ('/meet/' in production, '/' in dev).
+export const API_BASE = `${import.meta.env.BASE_URL}api/v1`
 
 export const DEFAULT_TIME_ZONE = 'Asia/Kolkata'
 

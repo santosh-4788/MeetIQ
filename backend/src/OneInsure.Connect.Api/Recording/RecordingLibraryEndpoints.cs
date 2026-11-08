@@ -19,6 +19,7 @@ public static class RecordingLibraryEndpoints
 {
     public sealed record LegalHoldInput(bool Hold, string? Reason);
     public sealed record DecisionInput(string? Note);
+    public sealed record DeleteInput(string? Reason);
 
     public static RouteGroupBuilder MapRecordingLibraryEndpoints(this RouteGroupBuilder api)
     {
@@ -33,10 +34,14 @@ public static class RecordingLibraryEndpoints
         g.MapGet("/media/{token}", Media);
         g.MapGet("/{id:guid}", Detail);
         g.MapGet("/{id:guid}/access-log", AccessLog);
-        g.MapPost("/{id:guid}/play", (Guid id, Db db, RecordingMediaTokens tokens, IClock clock, HttpContext ctx, CancellationToken ct) => Link(id, "PLAY", db, tokens, clock, ctx, ct));
-        g.MapPost("/{id:guid}/download", (Guid id, Db db, RecordingMediaTokens tokens, IClock clock, HttpContext ctx, CancellationToken ct) => Link(id, "DOWNLOAD", db, tokens, clock, ctx, ct));
+        g.MapPost("/{id:guid}/play", (Guid id, Db db, RecordingMediaTokens tokens, IClock clock, IOptions<PublicEndpointOptions> pub, HttpContext ctx, CancellationToken ct) => Link(id, "PLAY", db, tokens, clock, pub, ctx, ct));
+        g.MapPost("/{id:guid}/download", (Guid id, Db db, RecordingMediaTokens tokens, IClock clock, IOptions<PublicEndpointOptions> pub, HttpContext ctx, CancellationToken ct) => Link(id, "DOWNLOAD", db, tokens, clock, pub, ctx, ct));
         g.MapPut("/{id:guid}/legal-hold", LegalHold).RequirePermission("recordings.legalhold");
         g.MapPost("/{id:guid}/retry", Retry).RequirePermission("admin.ops");
+        // No route-level RequirePermission: the owner of a recording may request its own deletion with no special
+        // permission (same trust level that already lets them play/download their own recording); RequestDeletion
+        // checks that, or recordings.delete, itself.
+        g.MapPost("/{id:guid}/delete", RequestDeletion);
         api.MapGet("/meetings/{id:guid}/recordings", ForMeeting).RequireAnyPermission("meetings.view.own", "meetings.view.all");
         return api;
     }
@@ -98,10 +103,13 @@ public static class RecordingLibraryEndpoints
                {RecordingAccess.FlagsSql}
         """;
 
-    static object Item(Row r, Access a) => new
+    // canDelete here is a cheap hint for showing the button in a list (no per-row pending-deletion lookup) - the
+    // endpoint itself re-checks legal hold, status and any pending request before actually accepting a request.
+    static object Item(Row r, Access a, Viewer v) => new
     {
         id = r.Id, status = r.Status, createdUtc = r.CreatedUtc, startedUtc = r.StartedUtc, endedUtc = r.EndedUtc, durationSeconds = r.DurationSeconds,
         fileSizeBytes = r.FileSizeBytes, legalHold = r.LegalHold, retainUntilUtc = r.RetainUntilUtc, storageTier = r.StorageTier,
+        canDelete = (r.IsOwner || v.Delete) && !r.LegalHold && r.Status is "COMPLETED" or "FAILED",
         meeting = new { id = r.MeetingId, title = r.MeetingTitle, meetingCode = r.MeetingCode, category = r.Category, categoryGroup = MeetingEndpoints.CategoryGroup(r.Category) },
         owner = new { id = r.OwnerId, name = r.OwnerName, employeeCode = r.OwnerCode, department = r.Department },
         customer = r.CustomerName is null ? null : new { name = r.CustomerName, reference = r.CustomerRef },
@@ -159,7 +167,7 @@ public static class RecordingLibraryEndpoints
             """, f.Args);
         var rows = (await multi.ReadAsync<Row>()).ToList();
         var total = await multi.ReadSingleAsync<int>();
-        return Results.Ok(new Page<object>(rows.Select(r => Item(r, RecordingAccess.Decide(v, r))).ToList(), total, page, size));
+        return Results.Ok(new Page<object>(rows.Select(r => Item(r, RecordingAccess.Decide(v, r), v)).ToList(), total, page, size));
     }
 
     static async Task<IResult> ByEmployee(Db db, HttpContext ctx, CancellationToken ct)
@@ -193,7 +201,7 @@ public static class RecordingLibraryEndpoints
         args.Add("id", id);
         var rows = await c.QueryAsync<Row>($"{Select} {From} WHERE m.PublicId = @id AND r.[Status] <> 'PURGED' AND {RecordingAccess.VisibleSql} ORDER BY r.RecordingId DESC", args);
         var hidden = await c.ExecuteScalarAsync<int>($"SELECT COUNT(*) {From} WHERE m.PublicId = @id AND r.[Status] <> 'PURGED' AND NOT {RecordingAccess.VisibleSql}", args);
-        return Results.Ok(new { items = rows.Select(r => Item(r, RecordingAccess.Decide(v, r))), hiddenCount = hidden });
+        return Results.Ok(new { items = rows.Select(r => Item(r, RecordingAccess.Decide(v, r), v)), hiddenCount = hidden });
     }
 
     /// <summary>The recording if the viewer may see it; otherwise null (after logging DENIED when it exists).</summary>
@@ -242,9 +250,12 @@ public static class RecordingLibraryEndpoints
         if (x.VerificationDetails is { } vd)
             try { verification = JsonDocument.Parse(vd).RootElement.Clone(); } catch (JsonException) { }
         var showHistory = CanSeeHistory(v, access!);
+        var pendingDeletion = await c.QuerySingleOrDefaultAsync<(Guid Id, string Source, int RequiredApprovals, DateTime RequestedUtc)?>("""
+            SELECT TOP (1) PublicId, Source, RequiredApprovals, RequestedUtc FROM rec.RecordingDeletions WHERE RecordingId = @id AND [Status] = 'PENDING' ORDER BY RequestedUtc DESC
+            """, new { id = row.RecordingId });
         return Results.Ok(new
         {
-            recording = Item(row, access!),
+            recording = Item(row, access!, v),
             sha256 = x.Sha256 is null ? null : Convert.ToHexStringLower(x.Sha256),
             container = x.Container, videoCodec = x.VideoCodec, audioCodec = x.AudioCodec, width = x.Width, height = x.Height, verifiedUtc = x.VerifiedUtc,
             verification, failureReason = x.FailureReason, stopReason = x.StopReason, startedBy = x.StartedBy, policyVersion = x.PolicyVersion,
@@ -252,6 +263,8 @@ public static class RecordingLibraryEndpoints
             consents = consents.Select(k => new { name = k.Name, participantType = k.Type, decision = k.Decision, noticeVersion = k.NoticeVersion, decisionUtc = k.DecisionUtc }),
             canSetLegalHold = v.LegalHold && row.LegalHoldEnabled && row.Status is "COMPLETED" or "FAILED",
             canRetry = v.Ops && row.Status == "FAILED",
+            canDelete = (row.IsOwner || v.Delete) && !row.LegalHold && row.Status is "COMPLETED" or "FAILED" && pendingDeletion is null,
+            pendingDeletion = pendingDeletion is null ? null : new { id = pendingDeletion.Value.Id, source = pendingDeletion.Value.Source, requiredApprovals = pendingDeletion.Value.RequiredApprovals, requestedUtc = pendingDeletion.Value.RequestedUtc },
             canSeeAccessHistory = showHistory,
             accessHistory = showHistory ? await HistoryAsync(c, row.RecordingId) : null,
         });
@@ -274,7 +287,7 @@ public static class RecordingLibraryEndpoints
     }
 
     /// <summary>POST /recordings/{id}/play|download → a short-lived signed URL (policy link lifetime), logged with its expiry.</summary>
-    static async Task<IResult> Link(Guid id, string action, Db db, RecordingMediaTokens tokens, IClock clock, HttpContext ctx, CancellationToken ct)
+    static async Task<IResult> Link(Guid id, string action, Db db, RecordingMediaTokens tokens, IClock clock, IOptions<PublicEndpointOptions> pub, HttpContext ctx, CancellationToken ct)
     {
         using var c = await db.OpenAsync(ct);
         var (row, access, v) = await FindAsync(c, id, ctx);
@@ -290,7 +303,10 @@ public static class RecordingLibraryEndpoints
         var expires = clock.UtcNow.AddSeconds(Math.Clamp(row.SignedUrlTtlSeconds, 30, 3600));
         var token = tokens.Create(row.Id, v.UserId, action, expires);
         await RecordingAccess.LogAsync(c, row.RecordingId, v.UserId, action, ctx, expires);
-        return Results.Ok(new { url = $"/api/v1/recordings/media/{Uri.EscapeDataString(token)}", expiresUtc = expires });
+        // Absolute, same as every other link this app hands out (meeting links, reset-password, reminder e-mails): a
+        // hard-coded "/api/v1/..." path 404s once the app is hosted under a sub-path (e.g. /meet) instead of the domain root.
+        var url = $"{pub.Value.WebBaseUrl.TrimEnd('/')}/api/v1/recordings/media/{Uri.EscapeDataString(token)}";
+        return Results.Ok(new { url, expiresUtc = expires });
     }
 
     /// <summary>
@@ -380,6 +396,52 @@ public static class RecordingLibraryEndpoints
         return Results.Accepted();
     }
 
+    /// <summary>
+    /// POST /recordings/{id}/delete: the recording's owner, or anyone with recordings.delete, may request it be deleted.
+    /// The file is never removed on the spot for an ordinary owner request: it goes through the same dual-approval
+    /// deletion workflow a retention-triggered deletion already uses (rec.RecordingDeletions, Source='MANUAL' - the
+    /// value has existed in the schema since V012 but nothing ever inserted it until now), so a policy that requires
+    /// two approvers still gets them. recordings.delete holders (Admin/SuperAdmin) delete immediately - still fully
+    /// audited, and the row/access log/audit trail are kept either way (the recording becomes PURGED, never erased).
+    /// </summary>
+    static async Task<IResult> RequestDeletion(Guid id, DeleteInput input, Db db, RecordingPaths paths, HttpContext ctx, CancellationToken ct)
+    {
+        var reason = input.Reason?.Trim();
+        if (string.IsNullOrEmpty(reason) || reason.Length > 400)
+        {
+            var val = new Validator();
+            val.Add("reason", "Enter the reason for deleting this recording (max 400 characters).");
+            return val.Problem();
+        }
+        using var c = await db.OpenAsync(ct);
+        var (row, _, v) = await FindAsync(c, id, ctx);
+        if (row is null) return NotFound();
+        if (!row.IsOwner && !v.Delete) return Problems.Create(403, "FORBIDDEN", "Only the recording's owner, or a recording administrator, can delete it.");
+        if (row.LegalHold) return Db_.Conflict("This recording is under legal hold and cannot be deleted.");
+        if (row.Status is not ("COMPLETED" or "FAILED")) return Db_.Conflict("Only a completed or failed recording can be deleted.");
+        var pending = await c.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM rec.RecordingDeletions WHERE RecordingId = @id AND [Status] = 'PENDING'", new { id = row.RecordingId });
+        if (pending > 0) return Db_.Conflict("A deletion request is already pending for this recording.");
+        var ip = ClientInfo.From(ctx).Ip;
+        // recordings.delete already carries the trust this project gave Admin/SuperAdmin for view-all/download (V017):
+        // delete immediately. Otherwise, defer to the recording's own policy - exactly as a retention-triggered deletion would.
+        var dualApproval = !v.Delete && row.PolicyCode is not null &&
+            await c.ExecuteScalarAsync<bool>("SELECT DualApprovalForDeletion FROM rec.RecordingPolicies WHERE PolicyCode = @code", new { code = row.PolicyCode });
+        var requiredApprovals = dualApproval ? 2 : 0;
+        var deletionId = await c.QuerySingleAsync<long>("""
+            INSERT rec.RecordingDeletions (RecordingId, Source, Reason, RequiredApprovals, RequestedByUserId) OUTPUT inserted.DeletionId
+            VALUES (@id, 'MANUAL', @reason, @required, @user)
+            """, new { id = row.RecordingId, reason, required = requiredApprovals, user = v.UserId });
+        await Audit.WriteAsync(c, "USER", v.UserId, "RECORDING_DELETION_REQUESTED", "Recording", id.ToString(), $"Deletion requested: {reason}", ip, privileged: true,
+            newValues: new { requiredApprovals, immediate = requiredApprovals == 0 });
+        if (requiredApprovals == 0)
+        {
+            var purged = await RetentionWorker.PurgeAsync(c, paths, row.RecordingId, deletionId, v.UserId, ip,
+                $"Recording deleted by the user ({reason}); the record and its history are kept");
+            return Results.Ok(new { status = purged ? "EXECUTED" : "CANCELLED", requiredApprovals });
+        }
+        return Results.Ok(new { status = "PENDING", requiredApprovals });
+    }
+
     // ---- Retention review and deletion approvals ------------------------------------------------------------------------
 
     static async Task<IResult> Retention(Db db, HttpContext ctx, CancellationToken ct)
@@ -410,7 +472,7 @@ public static class RecordingLibraryEndpoints
             """, args);
         return Results.Ok(new
         {
-            review = review.Select(r => Item(r, RecordingAccess.Decide(v, r))),
+            review = review.Select(r => Item(r, RecordingAccess.Decide(v, r), v)),
             deletions = deletions.Select(d => new
             {
                 id = d.Id, recordingId = d.RecordingId, meetingTitle = d.MeetingTitle, meetingCode = d.MeetingCode, owner = d.Owner, source = d.Source, reason = d.Reason,

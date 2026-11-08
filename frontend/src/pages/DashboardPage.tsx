@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'motion/react'
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  ArrowRight, CalendarCheck, CalendarClock, CalendarDays, CalendarPlus, CircleAlert, CircleCheck, Clapperboard, Clock, Handshake,
-  Hourglass, LogIn, RefreshCw, UserCheck, Users, Video, Radio,
+  ArrowRight, CalendarCheck, CalendarClock, CalendarDays, CalendarPlus, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CircleCheck, Clapperboard, Clock,
+  Handshake, Hourglass, LogIn, RefreshCw, UserCheck, Users, Video, Radio,
 } from 'lucide-react'
 import { dashboardApi } from '../api'
 import type { ActivityItem, DashboardSummary, MeetingSummary } from '../api/types'
@@ -40,16 +40,26 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [quick, setQuick] = useState<'new' | 'join' | null>(null)
 
-  const load = useCallback(() => {
-    setLoading(true)
+  const load = useCallback((opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true)
     setError(null)
     dashboardApi
       .getSummary()
       .then(setData)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Unable to load the dashboard.'))
-      .finally(() => setLoading(false))
+      .catch((e: unknown) => {
+        if (!opts?.silent) setError(e instanceof Error ? e.message : 'Unable to load the dashboard.')
+      })
+      .finally(() => {
+        if (!opts?.silent) setLoading(false)
+      })
   }, [])
-  useEffect(load, [load])
+  useEffect(() => load(), [load])
+  // "Join" only becomes available in the last few minutes before a meeting starts: without this, someone who leaves
+  // the dashboard open sees a stale snapshot and the button never appears until they reload the page themselves.
+  useEffect(() => {
+    const t = window.setInterval(() => !document.hidden && load({ silent: true }), 30_000)
+    return () => window.clearInterval(t)
+  }, [load])
 
   const fmt = useFormatters(tz)
   const hour = Number(new Intl.DateTimeFormat('en-IN', { hour: 'numeric', hour12: false, timeZone: tz }).format(new Date()))
@@ -137,16 +147,17 @@ const stagger = {
 }
 
 function DashboardContent({ data, fmt, reloading, onReload }: { data: DashboardSummary; fmt: Fmt; reloading: boolean; onReload: () => void }) {
+  const { can } = useAuth()
   const k = data.kpis
-  const kpis: { label: string; value: number; icon: ReactNode; accent: Parameters<typeof StatCard>[0]['accent']; footnote: string }[] = [
-    { label: 'Total Employees', value: k.totalEmployees, icon: <Users className="size-[18px]" />, accent: 'navy', footnote: 'Active employees' },
-    { label: "Today's Meetings", value: k.todaysMeetings, icon: <CalendarCheck className="size-[18px]" />, accent: 'brand', footnote: 'Scheduled today' },
-    { label: 'Upcoming Meetings', value: k.upcomingMeetings, icon: <CalendarClock className="size-[18px]" />, accent: 'cyan', footnote: 'Next 7 days' },
-    { label: 'Internal Meetings', value: k.internalMeetings, icon: <Video className="size-[18px]" />, accent: 'brand', footnote: 'This month' },
-    { label: 'Customer Meetings', value: k.customerMeetings, icon: <Handshake className="size-[18px]" />, accent: 'success', footnote: 'This month' },
-    { label: 'Completed Meetings', value: k.completedMeetings, icon: <CircleCheck className="size-[18px]" />, accent: 'success', footnote: 'This month' },
-    { label: 'Total Recordings', value: k.totalRecordings, icon: <Clapperboard className="size-[18px]" />, accent: 'violet', footnote: 'Verified' },
-    { label: 'Pending Recordings', value: k.pendingRecordings, icon: <Hourglass className="size-[18px]" />, accent: 'warning', footnote: 'Processing / queued' },
+  const kpis: { label: string; value: number; icon: ReactNode; accent: Parameters<typeof StatCard>[0]['accent']; footnote: string; to?: string }[] = [
+    { label: 'Total Employees', value: k.totalEmployees, icon: <Users className="size-[18px]" />, accent: 'navy', footnote: 'Active employees', to: can('employees.manage') ? '/employees' : undefined },
+    { label: "Today's Meetings", value: k.todaysMeetings, icon: <CalendarCheck className="size-[18px]" />, accent: 'brand', footnote: 'Scheduled today', to: can('meetings.view.own') ? '/meetings' : undefined },
+    { label: 'Upcoming Meetings', value: k.upcomingMeetings, icon: <CalendarClock className="size-[18px]" />, accent: 'cyan', footnote: 'Next 7 days', to: can('calendar.view') ? '/calendar' : undefined },
+    { label: 'Internal Meetings', value: k.internalMeetings, icon: <Video className="size-[18px]" />, accent: 'brand', footnote: 'This month', to: can('meetings.view.own') ? '/internal' : undefined },
+    { label: 'Customer Meetings', value: k.customerMeetings, icon: <Handshake className="size-[18px]" />, accent: 'success', footnote: 'This month', to: can('customer.meetings.view') ? '/customer-meetings' : undefined },
+    { label: 'Completed Meetings', value: k.completedMeetings, icon: <CircleCheck className="size-[18px]" />, accent: 'success', footnote: 'This month', to: can('reports.view') ? '/reports' : can('meetings.view.own') ? '/meetings' : undefined },
+    { label: 'Total Recordings', value: k.totalRecordings, icon: <Clapperboard className="size-[18px]" />, accent: 'violet', footnote: 'Verified', to: can('recordings.view.own') ? '/recordings' : undefined },
+    { label: 'Pending Recordings', value: k.pendingRecordings, icon: <Hourglass className="size-[18px]" />, accent: 'warning', footnote: 'Processing / queued', to: can('recordings.view.own') ? '/recordings' : undefined },
   ]
 
   return (
@@ -160,7 +171,7 @@ function DashboardContent({ data, fmt, reloading, onReload }: { data: DashboardS
       </motion.div>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
-        <motion.div variants={stagger.item}>
+        <motion.div variants={stagger.item} className="xl:self-start">
           <NextMeetingCard meeting={data.nextMeeting} fmt={fmt} />
         </motion.div>
         <motion.div variants={stagger.item} className="xl:col-span-2">
@@ -212,7 +223,7 @@ function NextMeetingCard({ meeting, fmt }: { meeting: MeetingSummary | null; fmt
   const now = useNow(15_000)
   if (!meeting)
     return (
-      <Card className="h-full">
+      <Card>
         <EmptyState icon={<CalendarCheck className="size-6" />} title="No upcoming meetings" description={can('meetings.create') ? "You're free for now. Schedule a meeting to get started." : "You're free for now."} action={can('meetings.create') ? <ButtonLink to="/schedule" size="sm">Schedule meeting</ButtonLink> : undefined} />
       </Card>
     )
@@ -222,8 +233,9 @@ function NextMeetingCard({ meeting, fmt }: { meeting: MeetingSummary | null; fmt
   const canJoin = meeting.joinable ?? (start - now <= JOIN_WINDOW_MS && new Date(meeting.endUtc).getTime() > now)
   const cat = categoryMeta[meeting.category]
   return (
-    <section className="relative flex h-full min-h-[260px] flex-col overflow-hidden rounded-lg bg-gradient-brand p-5 text-white shadow-raised">
-      <div className="pointer-events-none absolute -top-16 -right-16 size-56 rounded-full bg-cyan-400/15 blur-2xl" aria-hidden />
+    <section className="relative flex min-h-[190px] flex-col overflow-hidden rounded-lg bg-gradient-brand p-5 text-white shadow-[0_28px_56px_-22px_rgb(40_120_229/0.45)]">
+      <div className="pointer-events-none absolute -top-16 -right-16 size-56 animate-pulse rounded-full bg-cyan-400/20 blur-2xl" aria-hidden />
+      <div className="pointer-events-none absolute inset-y-0 -left-24 w-20 rotate-[12deg] bg-white/10 animate-shine" aria-hidden />
       <div className="pointer-events-none absolute right-5 bottom-5 opacity-[0.08]" aria-hidden>
         <Video className="size-28" />
       </div>
@@ -262,8 +274,14 @@ function NextMeetingCard({ meeting, fmt }: { meeting: MeetingSummary | null; fmt
 
 // ---- Today's schedule -------------------------------------------------------
 
+const SCHEDULE_COLLAPSED_COUNT = 3
+
 function TodaySchedule({ meetings, fmt }: { meetings: MeetingSummary[]; fmt: Fmt }) {
   const now = useNow()
+  const navigate = useNavigate()
+  const [expanded, setExpanded] = useState(false)
+  const hidden = meetings.length - SCHEDULE_COLLAPSED_COUNT
+  const visible = expanded ? meetings : meetings.slice(0, SCHEDULE_COLLAPSED_COUNT)
   return (
     <Card className="h-full">
       <CardHeader title="Today's schedule" subtitle={`${meetings.length} meeting${meetings.length === 1 ? '' : 's'}`} action={<PermittedLink permission="calendar.view" to="/calendar">Open calendar</PermittedLink>} />
@@ -271,7 +289,7 @@ function TodaySchedule({ meetings, fmt }: { meetings: MeetingSummary[]; fmt: Fmt
         <EmptyState title="Nothing scheduled today" description="Meetings you organise or are invited to will appear here." />
       ) : (
         <ol className="relative px-5 pb-4">
-          {meetings.map((m, i) => {
+          {visible.map((m, i) => {
             const start = new Date(m.startUtc).getTime()
             const end = new Date(m.endUtc).getTime()
             // The meeting's real status decides: LIVE only while the room is actually running; ended, completed or
@@ -289,12 +307,21 @@ function TodaySchedule({ meetings, fmt }: { meetings: MeetingSummary[]; fmt: Fmt
                 </div>
                 <div className="relative flex flex-col items-center">
                   <span className={cn('z-10 mt-1.5 size-2.5 rounded-full ring-4 ring-surface', live && 'animate-rec')} style={{ background: done ? colors.inkMuted : cat.color }} />
-                  {i < meetings.length - 1 && <span className="absolute top-3 bottom-[-14px] w-px bg-line" />}
+                  {i < visible.length - 1 && <span className="absolute top-3 bottom-[-14px] w-px bg-line" />}
                 </div>
                 <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => navigate(`/meetings/${m.id}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      navigate(`/meetings/${m.id}`)
+                    }
+                  }}
                   className={cn(
-                    'flex min-w-0 flex-1 flex-col gap-2 rounded-md border px-3.5 py-2.5 transition-[border-color,box-shadow] duration-150 sm:flex-row sm:items-center',
-                    live ? 'border-danger/25 bg-danger-soft/40' : 'border-line group-hover:border-line-strong group-hover:shadow-card',
+                    'flex min-w-0 flex-1 cursor-pointer flex-col gap-2 rounded-xl px-3.5 py-2.5 transition-colors duration-150 sm:flex-row sm:items-center',
+                    live ? 'bg-danger-soft/40 hover:bg-danger-soft/60' : 'hover:bg-surface-muted',
                     done && 'opacity-70',
                   )}
                   style={{ borderLeft: `3px solid ${cat.color}` }}
@@ -312,21 +339,33 @@ function TodaySchedule({ meetings, fmt }: { meetings: MeetingSummary[]; fmt: Fmt
                       {m.customerName && ` · Customer: ${m.customerName}`}
                     </p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-3">
+                  <div className="flex shrink-0 items-center gap-2.5">
                     <AvatarStack names={m.participants} max={3} size={26} />
                     {done ? (
                       <Badge tone="success">Completed</Badge>
                     ) : canJoin ? (
-                      <ButtonLink to={`/meetings/${m.id}/room`} size="sm" leftIcon={<Video className="size-3.5" />}>Join</ButtonLink>
+                      <ButtonLink to={`/meetings/${m.id}/room`} size="sm" leftIcon={<Video className="size-3.5" />} onClick={(e) => e.stopPropagation()}>Join</ButtonLink>
                     ) : (
-                      <ButtonLink to={`/meetings/${m.id}`} size="sm" variant="secondary">Details</ButtonLink>
+                      <ButtonLink to={`/meetings/${m.id}`} size="sm" variant="secondary" onClick={(e) => e.stopPropagation()}>Details</ButtonLink>
                     )}
+                    <ChevronRight className="hidden size-4 shrink-0 text-ink-muted/0 transition-[color,transform] duration-150 group-hover:translate-x-0.5 group-hover:text-ink-muted sm:block" aria-hidden />
                   </div>
                 </div>
               </li>
             )
           })}
         </ol>
+      )}
+      {hidden > 0 && (
+        <div className="border-t border-line px-5 py-2.5">
+          <button type="button" onClick={() => setExpanded((x) => !x)} className="flex w-full items-center justify-center gap-1.5 text-[12.5px] font-semibold text-brand-700 hover:underline">
+            {expanded ? (
+              <>Show fewer <ChevronUp className="size-3.5" /></>
+            ) : (
+              <>Show {hidden} more meeting{hidden === 1 ? '' : 's'} <ChevronDown className="size-3.5" /></>
+            )}
+          </button>
+        </div>
       )}
     </Card>
   )

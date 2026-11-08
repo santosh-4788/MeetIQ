@@ -72,12 +72,17 @@ public static class FinalizeCommand
         var partial = Path.Combine(outDir, $"{jobId}.mp4.partial");
         var final = Path.Combine(outDir, $"{jobId}.mp4");
         var expected = segments.Sum(s => s.Covered);
-        var ff = await finalizer.BuildMp4Async(segments.Select(s => s.File).ToList(), partial + ".mp4", remux: false, CancellationToken.None);
+        // The canvas size (landscape, or a 1:1 call's portrait size) was only ever decided live, inside the browser
+        // session that made these segments - recover it by probing the actual pixels rather than assuming landscape.
+        var (probedWidth, probedHeight) = await MediaVerifier.ProbeVideoDimensionsAsync(options.Ffmpeg.FfprobePath, segments[0].File, CancellationToken.None);
+        var width = probedWidth > 0 ? probedWidth : options.Layout.Width;
+        var height = probedHeight > 0 ? probedHeight : options.Layout.Height;
+        var ff = await finalizer.BuildMp4Async(segments.Select(s => s.File).ToList(), partial + ".mp4", remux: false, width, height, CancellationToken.None);
         VerificationResult verification;
         if (ff.ExitCode == 0)
         {
             File.Move(partial + ".mp4", partial, overwrite: true);
-            verification = await finalizer.VerifyAsync(partial, expected, CancellationToken.None);
+            verification = await finalizer.VerifyAsync(partial, expected, width, height, CancellationToken.None);
         }
         else verification = new VerificationResult(false, [$"FFmpeg exited with {ff.ExitCode}: {ff.StdErrTail}"], 0, expected, 0, "", "", "", 0, 0, 0, false, 0);
 

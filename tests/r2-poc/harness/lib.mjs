@@ -51,7 +51,10 @@ export async function stopLiveKit() {
 }
 
 export function startLiveKit() {
-  const p = spawn(path.join(ROOT, 'video-server/bin/livekit-server.exe'), ['--config', path.join(ROOT, 'video-server/config/livekit.dev.yaml')], {
+  // OIC_LIVEKIT_CONFIG: override when the default port 7880 is already taken on this machine (e.g. the live
+  // test deployment's own LiveKit service) - see video-server/config/livekit.dev.local (git-ignored, *.local).
+  const configFile = process.env.OIC_LIVEKIT_CONFIG ?? 'video-server/config/livekit.dev.yaml'
+  const p = spawn(path.join(ROOT, 'video-server/bin/livekit-server.exe'), ['--config', path.join(ROOT, configFile)], {
     env: { ...process.env, LIVEKIT_KEYS: ENV.LIVEKIT_KEYS },
     detached: true,
     stdio: 'ignore',
@@ -97,12 +100,12 @@ export async function closeParticipantBrowser() {
   browser = null
 }
 
-export async function joinParticipant(room, index, name = `Participant ${index + 1}`) {
+export async function joinParticipant(room, index, name = `Participant ${index + 1}`, orientation = 'landscape') {
   const ctx = await participantBrowser()
   const page = await ctx.newPage()
   const identity = `p${index + 1}-${room}`
   const token = await participantToken(room, identity, name)
-  const cfg = { url: ENV.LIVEKIT_URL, token, name, color: COLORS[index % COLORS.length], beepHz: 440 + index * 110 }
+  const cfg = { url: ENV.LIVEKIT_URL, token, name, color: COLORS[index % COLORS.length], beepHz: 440 + index * 110, orientation }
   await page.addInitScript((c) => {
     window.__P__ = c
     // Record the ICE servers the SFU hands to clients (must not include third-party STUN/TURN in production).

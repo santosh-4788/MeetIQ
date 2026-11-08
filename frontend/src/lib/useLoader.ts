@@ -3,8 +3,12 @@ import { useCallback, useEffect, useRef, useState, type DependencyList } from 'r
 /**
  * Loads data for a screen with loading / error state (the API's message) and a reload function.
  * Out-of-order responses are ignored, so fast filter changes never show stale results.
+ *
+ * `pollMs`, when set, silently re-fetches in the background on that interval (paused while the tab is hidden) without
+ * touching `loading` or `error` - used on screens where a server-computed flag like "can join now" would otherwise
+ * stay frozen at whatever it was when the page loaded until the visitor manually reloads it.
  */
-export function useLoader<T>(load: () => Promise<T>, deps: DependencyList, fallbackError = 'Unable to load the data.') {
+export function useLoader<T>(load: () => Promise<T>, deps: DependencyList, fallbackError = 'Unable to load the data.', pollMs?: number) {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -22,6 +26,19 @@ export function useLoader<T>(load: () => Promise<T>, deps: DependencyList, fallb
   }, [run, fallbackError])
 
   useEffect(reload, [reload])
+
+  useEffect(() => {
+    if (!pollMs) return
+    const t = window.setInterval(() => {
+      if (document.hidden) return
+      const id = ++seq.current
+      run().then((d) => id === seq.current && setData(d)).catch(() => {
+        /* a background refresh failing is not worth interrupting the screen for; the next tick tries again */
+      })
+    }, pollMs)
+    return () => window.clearInterval(t)
+  }, [run, pollMs])
+
   return { data, error, loading, reload, setData }
 }
 

@@ -84,6 +84,7 @@ export function MeetingsList({ group, idPrefix }: { group?: 'INTERNAL' | 'CUSTOM
     () => meetingsApi.list({ ...tabQuery(tab, tz, all && viewAll), category: category || group || '', search: term, page, pageSize: PAGE_SIZE }),
     [tab, tz, all, viewAll, category, group, term, page],
     'Unable to load meetings.',
+    30_000, // "Join" opens a few minutes before start: without this it stays hidden until the page is reloaded
   )
 
   const categories = group === 'INTERNAL' ? INTERNAL_CATEGORIES : group === 'CUSTOMER' ? CUSTOMER_CATEGORIES : [...INTERNAL_CATEGORIES, ...(showCustomer ? CUSTOMER_CATEGORIES : [])]
@@ -172,6 +173,13 @@ function MeetingRow({ m, tz }: { m: MeetingListItem; tz: string }) {
             <span aria-hidden>·</span>
             <span>{formatDuration(Math.round((end.getTime() - start.getTime()) / 60_000))}</span>
           </p>
+          {/* Only shown when it actually diverges from the schedule, so an on-time meeting stays uncluttered. */}
+          {m.actualStartUtc && Math.abs(parseUtc(m.actualStartUtc).getTime() - start.getTime()) > 2 * 60_000 && (
+            <p className="mt-0.5 text-[11.5px] text-ink-muted">
+              Actually started {formatTime(parseUtc(m.actualStartUtc), tz)}
+              {m.actualEndUtc && <> – {formatTime(parseUtc(m.actualEndUtc), tz)}</>}
+            </p>
+          )}
           <p className="mt-0.5 truncate text-[12.5px] text-ink-secondary">
             Organiser: <span className="text-ink">{m.organiser}</span>
             {m.customerName && <> · Customer: <span className="text-ink">{m.customerName}</span></>}

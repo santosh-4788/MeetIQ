@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useRoomContext } from '@livekit/components-react'
 import { RoomEvent, type RemoteParticipant } from 'livekit-client'
-import { Circle, CircleStop, TriangleAlert } from 'lucide-react'
+import { Circle, CircleStop, TriangleAlert, X } from 'lucide-react'
 import type { ConsentDecision, RoomRecordingState } from '../../api/recordings'
 import { errorMessage } from '../../api/types'
 import { Button } from '../../components/ui/Button'
@@ -31,6 +31,7 @@ export function useRoomRecording(api: RecordingBackend | undefined) {
   const [state, setState] = useState<RoomRecordingState | null>(null)
   const [noticeOpen, setNoticeOpen] = useState(false)
   const [startOpen, setStartOpen] = useState(false)
+  const [stopOpen, setStopOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const asked = useRef<string | null>(null)
@@ -55,14 +56,26 @@ export function useRoomRecording(api: RecordingBackend | undefined) {
     }
   }, [api, room, refresh])
 
-  // Ask once per notice version: whenever recording is possible in this meeting and this person has not answered yet.
+  const [bannerOpen, setBannerOpen] = useState(false)
+
+  // Ask once per notice version. Mandatory recording starts on its own, so advance notice is needed the moment
+  // someone joins; an optional meeting may never be recorded at all, so there nothing interrupts the call until
+  // a host actually starts recording (or it is already running) - not proactively for a call nobody is recording.
+  // A policy that only requires notification (not an individual consent decision) never blocks with a modal: the
+  // notice is shown as a dismissible banner and acknowledgement is recorded automatically, not on a forced click.
   useEffect(() => {
     const p = state?.policy
     if (!state || !p || !state.available || state.myConsent) return
     if (p.requirement === 'DISABLED' || asked.current === p.noticeVersion) return
+    const recordingNowOrSoon = state.recording?.status === 'RECORDING' || state.recording?.status === 'PENDING'
+    if (p.requirement !== 'MANDATORY' && !recordingNowOrSoon) return
     asked.current = p.noticeVersion
-    setNoticeOpen(true)
-  }, [state])
+    if (p.consentMode === 'CONSENT_REQUIRED') setNoticeOpen(true)
+    else {
+      setBannerOpen(true)
+      void api?.consent('GRANTED', p.noticeVersion).then(setState).catch(() => undefined)
+    }
+  }, [state, api])
 
   // Tell everyone when recording starts or stops.
   useEffect(() => {
@@ -106,10 +119,14 @@ export function useRoomRecording(api: RecordingBackend | undefined) {
 
   async function stop() {
     if (!api?.stop) return
+    setBusy(true)
     try {
       setState(await api.stop())
+      setStopOpen(false)
     } catch (e) {
       toast.error(errorMessage(e, 'Recording could not be stopped.'))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -144,7 +161,7 @@ export function useRoomRecording(api: RecordingBackend | undefined) {
     </button>
   ) : state?.isHost && state.policy && state.policy.requirement !== 'DISABLED' ? (
     status ? (
-      <button type="button" className="oic-ctl" data-on onClick={() => void stop()} disabled={!state.canStop} data-testid="ctl-record"
+      <button type="button" className="oic-ctl" data-on onClick={() => setStopOpen(true)} disabled={!state.canStop} data-testid="ctl-record"
         title={state.canStop ? 'Stop recording' : 'Recording is mandatory for this meeting'}>
         <CircleStop className="size-5" /> <span className="hidden xl:inline">Stop recording</span>
       </button>
@@ -172,6 +189,18 @@ export function useRoomRecording(api: RecordingBackend | undefined) {
         {p.title}{p.name ? ` · ${p.name}` : ''}{p.version ? ` v${p.version}` : ''} · Notice version {p.noticeVersion}
         {consentMode && p.stopOnWithdrawal ? ' · You can withdraw your consent at any time; the recording then stops.' : ''}
       </p>
+    </div>
+  ) : null
+
+  // Informational only - nothing to accept, nothing blocks the meeting. Self-dismisses; the host/participant can also
+  // close it early. Only ever shown for a policy that does not require an individual consent decision (see above).
+  const banner: ReactNode = bannerOpen && notice ? (
+    <div className="mx-3 mb-2 flex items-start gap-3 rounded-lg border border-line bg-surface px-4 py-3 text-ink shadow-[0_8px_24px_-8px_rgb(0_0_0/0.3)] sm:mx-4" role="status" data-testid="rec-notice-banner">
+      <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning-ink" aria-hidden />
+      <div className="min-w-0 flex-1 text-[13px] leading-5">{notice}</div>
+      <button type="button" onClick={() => setBannerOpen(false)} className="shrink-0 text-ink-secondary hover:text-ink" aria-label="Dismiss">
+        <X className="size-4" />
+      </button>
     </div>
   ) : null
 
@@ -229,8 +258,25 @@ export function useRoomRecording(api: RecordingBackend | undefined) {
         )}
         {notice}
       </Dialog>
+      <Dialog
+        open={stopOpen}
+        onClose={() => setStopOpen(false)}
+        title="Stop meeting recording?"
+        size="sm"
+        dismissible={!busy}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setStopOpen(false)} disabled={busy}>Cancel</Button>
+            <Button variant="danger" onClick={() => void stop()} loading={busy} data-testid="rec-stop-confirm">Yes, stop recording</Button>
+          </>
+        }
+      >
+        <p className="text-[13.5px] leading-6 text-ink-secondary">
+          Once stopped, recording will not continue unless an authorised host starts it again, subject to the applicable recording policy.
+        </p>
+      </Dialog>
     </>
   ) : null
 
-  return { state, indicator, control, withdraw, dialogs }
+  return { state, indicator, control, withdraw, dialogs, banner }
 }

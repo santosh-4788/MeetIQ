@@ -13,6 +13,28 @@ import { RoomLoading } from './room/RoomScreens'
 
 const GuestRoom = lazy(() => import('./room/GuestRoom'))
 
+/** Remembers an anonymous guest's own personal token for this link across a reload/closed tab/locked phone, so
+    reconnecting after a drop finds them already admitted instead of minting a new guest and waiting again. Keyed by
+    the public link token, not anything about the guest, so nothing identifying is stored. */
+function guestTokenKey(linkToken: string) {
+  return `oic.guest-token.${linkToken}`
+}
+function readStoredToken(linkToken: string): string | null {
+  try {
+    return window.localStorage.getItem(guestTokenKey(linkToken))
+  } catch {
+    return null
+  }
+}
+function storeToken(linkToken: string, personalToken: string | null) {
+  try {
+    if (personalToken) window.localStorage.setItem(guestTokenKey(linkToken), personalToken)
+    else window.localStorage.removeItem(guestTokenKey(linkToken))
+  } catch {
+    /* storage unavailable (private browsing, quota): just means the next visit asks to join again */
+  }
+}
+
 /**
  * /m/:token — the shareable meeting link. Anyone with it can ask to join (name + device check), then waits until a host admits
  * them. Signed-in colleagues who are already participants go straight to their normal meeting room. Nothing about the other
@@ -23,7 +45,9 @@ export function LinkJoinPage() {
   const navigate = useNavigate()
   const [entering, setEntering] = useState(false)
   // One waiting-room place per visit: asking again after leaving reuses the personal token instead of creating a new guest.
-  const issued = useRef<string | null>(null)
+  // Seeded from localStorage so a reconnect (reload, closed tab, locked phone) reuses the same guest identity - the
+  // server already lets an already-admitted guest straight back in (RoomEndpoints.GuestEnter) once it sees this token.
+  const issued = useRef<string | null>(readStoredToken(token))
   // The name typed by a guest is kept for this visit (asking again after leaving starts from it).
   const typedName = useRef<string | null>(null)
   const info = useLoader(
@@ -92,7 +116,12 @@ export function LinkJoinPage() {
               return null
             }
             issued.current = r.joinToken
+            storeToken(token, r.joinToken)
             return r.joinToken
+          }}
+          onInvalidToken={() => {
+            issued.current = null
+            storeToken(token, null)
           }}
           onClose={() => {
             setEntering(false)

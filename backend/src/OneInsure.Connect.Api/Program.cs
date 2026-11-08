@@ -12,6 +12,7 @@ using OneInsure.Connect.Api.Infrastructure;
 using OneInsure.Connect.Api.Meetings;
 using OneInsure.Connect.Api.Org;
 using OneInsure.Connect.Api.Recording;
+using OneInsure.Connect.Api.Reports;
 using OneInsure.Connect.Api.Security;
 using OneInsure.Connect.Api.Setup;
 
@@ -46,6 +47,8 @@ builder.Services.Configure<ReminderOptions>(builder.Configuration.GetSection("Re
 builder.Services.AddSingleton<MeetingMessaging>();
 builder.Services.AddSingleton<ReminderWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ReminderWorker>());
+builder.Services.AddSingleton<MeetingExpiryWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<MeetingExpiryWorker>());
 builder.Services.AddMemoryCache();
 // Phase 4 — video room. LiveKit:ApiKey/ApiSecret only from user secrets or environment variables; missing → join endpoints answer 503.
 builder.Services.Configure<LiveKitOptions>(builder.Configuration.GetSection("LiveKit"));
@@ -164,6 +167,8 @@ api.MapLiveKitWebhook();
 api.MapRecordingPolicyEndpoints();
 api.MapRecordingRoomEndpoints();
 api.MapRecordingLibraryEndpoints();
+api.MapReportsEndpoints();
+api.MapAuditEndpoints();
 api.MapGet("/health", async (Db db, CancellationToken ct) =>
 {
     try

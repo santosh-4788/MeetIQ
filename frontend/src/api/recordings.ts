@@ -36,7 +36,14 @@ export type RoomRecordingState = {
   isHost?: boolean
   canStart?: boolean
   canStop?: boolean
-  consent?: { ok: boolean; required: number; granted: number; pending: string[]; declined: string[] } | null
+  consent?: {
+    ok: boolean
+    required: number
+    granted: number
+    pending: string[]
+    declined: string[]
+    decisions: { identity: string; name: string; decision: ConsentDecision | 'PENDING' }[]
+  } | null
 }
 
 const meeting = (id: string) => `/meetings/${encodeURIComponent(id)}/recording`
@@ -75,6 +82,7 @@ export type RecordingItem = {
   policy: { code: string; title: string } | null
   canPlay: boolean
   canDownload: boolean
+  canDelete: boolean
   access: string
 }
 
@@ -100,6 +108,8 @@ export type RecordingDetail = {
   consents: { name: string; participantType: string; decision: ConsentDecision; noticeVersion: string; decisionUtc: string }[]
   canSetLegalHold: boolean
   canRetry: boolean
+  canDelete: boolean
+  pendingDeletion: { id: string; source: 'RETENTION' | 'MANUAL'; requiredApprovals: number; requestedUtc: string } | null
   canSeeAccessHistory: boolean
   accessHistory: AccessEntry[] | null
 }
@@ -161,6 +171,7 @@ export const recordingsApi = {
   download: (id: string) => http<SignedLink>(`${one(id)}/download`, { method: 'POST' }),
   setLegalHold: (id: string, hold: boolean, reason: string) => http<void>(`${one(id)}/legal-hold`, { method: 'PUT', body: { hold, reason } }),
   retry: (id: string) => http<void>(`${one(id)}/retry`, { method: 'POST' }),
+  requestDeletion: (id: string, reason: string) => http<{ status: 'EXECUTED' | 'PENDING' | 'CANCELLED'; requiredApprovals: number }>(`${one(id)}/delete`, { method: 'POST', body: { reason } }),
   retention: () => http<{ review: RecordingItem[]; deletions: DeletionRequest[]; canApproveFor: string[] }>('/recordings/retention'),
   approveDeletion: (id: string, note?: string) =>
     http<{ status: string; approvals: number; required: number }>(`/recordings/deletions/${encodeURIComponent(id)}/approve`, { method: 'POST', body: { note } }),

@@ -21,3 +21,11 @@ scripts/lan/.local/
 
 # Release packages (deployment/build-release.ps1)
 deployment/out/
+
+# Live test deployment's own runtime folder (self-contained published binaries, LiveKit server logs, the ASP.NET Core
+# Data Protection key ring, and the actual recording library/spool) - never source, and the key ring + recordings
+# must never reach a public repo: anyone holding that key could forge session/media tokens for the live site.
+deploy/
+
+# Claude Code: personal, machine-local tool permissions - not shared project config.
+.claude/settings.local.json

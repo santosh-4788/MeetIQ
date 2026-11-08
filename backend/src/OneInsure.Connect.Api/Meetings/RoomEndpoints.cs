@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Options;
 using OneInsure.Connect.Api.Auth;
 using OneInsure.Connect.Api.Infrastructure;
+using OneInsure.Connect.Api.Recording;
 using OneInsure.Connect.Api.Security;
 
 namespace OneInsure.Connect.Api.Meetings;
@@ -44,25 +45,29 @@ public static class RoomEndpoints
     /// <summary>Anonymous waiting-room polling, leave and guest chat (per client IP).</summary>
     public const string GuestRateLimit = "join-room";
     public const string WaitingTopic = "oic.waiting";
+    public const string HostTransferTopic = "oic.host-transfer";
+    /// <summary>One-off host notices that don't change recording/waiting/host state: muted, unmute-requested, meeting locked/unlocked.</summary>
+    public const string NoticeTopic = "oic.host-notice";
     public const int ChatMaxLength = 2000;
 
     public sealed record GuestEnterInput(string? DisplayName);
     public sealed record ChatInput(string? Body);
     public sealed record MuteInput(string? Source, string? TrackSid);
     public sealed record RemoveInput(bool? Block);
+    public sealed record LockInput(bool Locked);
 
     internal sealed record RoomMeeting(long MeetingId, Guid PublicId, string MeetingCode, string Title, string Category, string Status, DateTime StartUtc,
-        DateTime EndUtc, string TimeZoneId, bool WaitingRoomEnabled, string LiveKitRoomName, string HostName, string MeetingKind, bool IsAudioOnly);
+        DateTime EndUtc, string TimeZoneId, bool WaitingRoomEnabled, string LiveKitRoomName, string HostName, string MeetingKind, bool IsAudioOnly, bool IsLocked);
 
     internal sealed record RoomParticipant(long ParticipantId, string Identity, string Type, string Role, bool CanPublish, bool CanScreenShare, string Name);
 
     sealed record GuestRow(long MeetingId, Guid PublicId, string MeetingCode, string Title, string Category, string Status, DateTime StartUtc,
-        DateTime EndUtc, string TimeZoneId, bool WaitingRoomEnabled, string LiveKitRoomName, string HostName, string MeetingKind, bool IsAudioOnly,
+        DateTime EndUtc, string TimeZoneId, bool WaitingRoomEnabled, string LiveKitRoomName, string HostName, string MeetingKind, bool IsAudioOnly, bool IsLocked,
         long InvitationId, long ParticipantId, string Identity, string Type, string Role, bool CanPublish, bool CanScreenShare, string Name, bool AdmissionRequired);
 
     const string MeetingColumns = """
         m.MeetingId, m.PublicId, m.MeetingCode, m.Title, m.Category, m.[Status], m.ScheduledStartUtc AS StartUtc, m.ScheduledEndUtc AS EndUtc,
-        m.TimeZoneId, m.WaitingRoomEnabled, m.LiveKitRoomName, h.DisplayName AS HostName, m.MeetingKind, m.IsAudioOnly
+        m.TimeZoneId, m.WaitingRoomEnabled, m.LiveKitRoomName, h.DisplayName AS HostName, m.MeetingKind, m.IsAudioOnly, m.IsLocked
         """;
 
     public static RouteGroupBuilder MapRoomEndpoints(this RouteGroupBuilder api)
@@ -75,8 +80,11 @@ public static class RoomEndpoints
         g.MapPost("/room/waiting/{entryId}/admit", (Guid id, string entryId, RoomServices s, HttpContext ctx) => Decide(id, entryId, "ADMITTED", s, ctx));
         g.MapPost("/room/waiting/{entryId}/reject", (Guid id, string entryId, RoomServices s, HttpContext ctx) => Decide(id, entryId, "REJECTED", s, ctx));
         g.MapPost("/room/participants/{identity}/mute", Mute);
+        g.MapPost("/room/participants/{identity}/unmute-request", RequestUnmute);
         g.MapPost("/room/participants/{identity}/remove", Remove);
         g.MapPost("/room/end", End);
+        g.MapPost("/room/host-transfer/{identity}", TransferHost);
+        g.MapPost("/room/lock", SetLocked);
 
         // Customers and guests: the personal invitation token is their credential (no account, no session).
         var j = api.MapGroup("/join/{token}");
@@ -147,8 +155,19 @@ public static class RoomEndpoints
     {
         id = m.PublicId, title = m.Title, meetingCode = m.MeetingCode, category = m.Category, categoryGroup = MeetingEndpoints.CategoryGroup(m.Category),
         status = status ?? m.Status, startUtc = m.StartUtc, endUtc = m.EndUtc, timeZoneId = m.TimeZoneId, hostName = m.HostName, waitingRoomEnabled = m.WaitingRoomEnabled,
-        kind = m.MeetingKind, audioOnly = m.IsAudioOnly,
+        kind = m.MeetingKind, audioOnly = m.IsAudioOnly, locked = m.IsLocked,
     };
+
+    /// <summary>A returning participant (already attended, or already sat in the waiting room before) is never turned away by
+    /// a lock set after they first arrived - locking only keeps out people who have not shown up yet.</summary>
+    static async Task<bool> HasAttendedAsync(IDbConnection c, long participantId) =>
+        await c.ExecuteScalarAsync<int>("""
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM mtg.MeetingAttendance WHERE ParticipantId = @p)
+                     OR EXISTS (SELECT 1 FROM mtg.WaitingRoomEntries WHERE ParticipantId = @p AND [Status] = 'ADMITTED') THEN 1 ELSE 0 END
+            """, new { p = participantId }) == 1;
+
+    static IResult Locked() => Problems.Create(403, "FORBIDDEN", "The host has locked this meeting. Nobody new can join right now.",
+        new Dictionary<string, object?> { ["reason"] = "LOCKED" });
 
     static object Connection(RoomServices s, RoomMeeting m, RoomParticipant p, string name)
     {
@@ -197,6 +216,7 @@ public static class RoomEndpoints
         var now = s.Clock.UtcNow;
         var w = JoinWindow.Evaluate(m.Status, m.StartUtc, m.EndUtc, now, s.Meetings);
         if (!w.Joinable) return NotJoinable(w);
+        if (m.IsLocked && !IsHostRole(p.Role) && !await HasAttendedAsync(c, p.ParticipantId)) return Locked();
         // Colleagues who came in through the shared link (not invited) are let in by a host first, like guests.
         if (await c.ExecuteScalarAsync<int>("""
                 SELECT COUNT(*) FROM mtg.MeetingParticipants p WHERE p.ParticipantId = @id AND p.AdmissionRequired = 1
@@ -295,7 +315,47 @@ public static class RoomEndpoints
         if (!muted) return Problems.Create(404, "NOT_FOUND", "That participant is not in the meeting or is not sharing this right now.");
         await Audit.WriteAsync(c, "USER", caller.Me.UserId, "ROOM_PARTICIPANT_MUTED", "Meeting", id.ToString(), $"Host muted a participant's {source.ToLowerInvariant().Replace('_', ' ')}",
             ClientInfo.From(ctx).Ip, newValues: new { participantId = identity, source });
+        // Browsers give no on-screen cue when a remote track is force-muted; tell the affected participant directly.
+        await s.Rooms.TrySendDataAsync(caller.Meeting.LiveKitRoomName, NoticeTopic, new { type = "muted", source }, [identity], ct);
         return Results.NoContent();
+    }
+
+    /// <summary>
+    /// A host cannot force a participant's microphone back on (no browser permits that) - this just asks them to.
+    /// "Unmute all" on the host's side is simply this call looped over every currently-muted participant.
+    /// </summary>
+    static async Task<IResult> RequestUnmute(Guid id, string identity, RoomServices s, HttpContext ctx, CancellationToken ct)
+    {
+        if (!s.LiveKit.IsConfigured) return Unavailable();
+        using var c = await s.Db.OpenAsync(ct);
+        var (caller, error) = await CallerAsync(c, id, ctx, hostOnly: true);
+        if (caller is null) return error!;
+        if (await c.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM mtg.MeetingParticipants WHERE MeetingId = @m AND LiveKitIdentity = @identity",
+                new { m = caller.Meeting.MeetingId, identity }) == 0)
+            return Db_.NotFound("Participant");
+        await Audit.WriteAsync(c, "USER", caller.Me.UserId, "ROOM_UNMUTE_REQUESTED", "Meeting", id.ToString(), "Host asked a participant to unmute",
+            ClientInfo.From(ctx).Ip, newValues: new { participantId = identity });
+        await s.Rooms.TrySendDataAsync(caller.Meeting.LiveKitRoomName, NoticeTopic, new { type = "unmute-requested" }, [identity], ct);
+        return Results.NoContent();
+    }
+
+    /// <summary>Locking keeps out anyone who has not already shown up at least once (see HasAttendedAsync); it never
+    /// locks out the host, and never retroactively disconnects anyone already in the room.</summary>
+    static async Task<IResult> SetLocked(Guid id, LockInput input, RoomServices s, HttpContext ctx, CancellationToken ct)
+    {
+        if (!s.LiveKit.IsConfigured) return Unavailable();
+        using var c = await s.Db.OpenAsync(ct);
+        var (caller, error) = await CallerAsync(c, id, ctx, hostOnly: true);
+        if (caller is null) return error!;
+        var n = await c.ExecuteAsync("UPDATE mtg.Meetings SET IsLocked = @locked, ModifiedUtc = SYSUTCDATETIME(), ModifiedByUserId = @user WHERE MeetingId = @m AND IsLocked <> @locked",
+            new { locked = input.Locked, user = caller.Me.UserId, m = caller.Meeting.MeetingId });
+        if (n > 0)
+        {
+            await Audit.WriteAsync(c, "USER", caller.Me.UserId, input.Locked ? "MEETING_LOCKED" : "MEETING_UNLOCKED", "Meeting", id.ToString(),
+                input.Locked ? "Host locked the meeting" : "Host unlocked the meeting", ClientInfo.From(ctx).Ip);
+            await s.Rooms.TrySendDataAsync(caller.Meeting.LiveKitRoomName, NoticeTopic, new { type = "lock-changed", locked = input.Locked }, null, ct);
+        }
+        return Results.Ok(new { locked = input.Locked });
     }
 
     /// <summary>Removes a participant from the room. With "block": they cannot come back (personal link revoked, refused everywhere).</summary>
@@ -332,7 +392,7 @@ public static class RoomEndpoints
     }
 
     /// <summary>End for everyone: closes the LiveKit room (all participants are disconnected) and completes the meeting.</summary>
-    static async Task<IResult> End(Guid id, RoomServices s, HttpContext ctx, CancellationToken ct)
+    static async Task<IResult> End(Guid id, RoomServices s, RecordingService recording, HttpContext ctx, CancellationToken ct)
     {
         if (!s.LiveKit.IsConfigured) return Unavailable();
         using var c = await s.Db.OpenAsync(ct);
@@ -340,6 +400,12 @@ public static class RoomEndpoints
         if (caller is null) return error!;
         var m = caller.Meeting;
         if (m.Status is not ("SCHEDULED" or "LIVE")) return Db_.Conflict("This meeting is not in progress.");
+
+        // Explicit stop rather than relying on the recorder noticing the room closed: a recording must never be left
+        // dangling in PROCESSING when the host ends the meeting.
+        if (await RecordingService.MeetingAsync(c, m.MeetingId) is { } recMeeting)
+            await recording.StopAsync(c, recMeeting, "Meeting ended", caller.Me.UserId, ClientInfo.From(ctx).Ip, ct);
+
         try { await s.Rooms.DeleteRoomAsync(m.LiveKitRoomName, ct); }
         catch (LiveKitUnavailableException e) { return Unavailable(e.Message); }
 
@@ -356,6 +422,53 @@ public static class RoomEndpoints
             """, new { now, user = caller.Me.UserId, m = m.MeetingId }, tx);
         await Audit.WriteAsync(c, "USER", caller.Me.UserId, "MEETING_ENDED", "Meeting", id.ToString(), "Host ended the meeting for everyone", ClientInfo.From(ctx).Ip, tx);
         tx.Commit();
+        return Results.NoContent();
+    }
+
+    /// <summary>
+    /// Hands host privileges to another employee participant. Only the host (not a co-host) may do this. The previous host
+    /// loses host-only permissions immediately (becomes a plain attendee unless separately made co-host afterwards); LiveKit
+    /// pushes both participants' new role to every connected client at once via live metadata, so role badges and each
+    /// participant's own host controls update without a reconnect. History is kept in mtg.HostTransfers.
+    /// </summary>
+    static async Task<IResult> TransferHost(Guid id, string identity, RoomServices s, HttpContext ctx, CancellationToken ct)
+    {
+        if (!s.LiveKit.IsConfigured) return Unavailable();
+        using var c = await s.Db.OpenAsync(ct);
+        var (caller, error) = await CallerAsync(c, id, ctx, hostOnly: true);
+        if (caller is null) return error!;
+        var (me, m, p) = (caller.Me, caller.Meeting, caller.Participant!);
+        if (p.Role != "HOST") return Problems.Create(403, "FORBIDDEN", "Only the host can transfer host privileges. A co-host cannot transfer host.");
+        if (m.Status != "LIVE") return Db_.Conflict("The meeting is not in progress.");
+        if (string.Equals(identity, p.Identity, StringComparison.Ordinal)) return Db_.Conflict("You are already the host.");
+
+        var target = await c.QuerySingleOrDefaultAsync<(long ParticipantId, string Type, bool IsBlocked, long? EmployeeId)?>("""
+            SELECT ParticipantId, ParticipantType AS Type, IsBlocked, EmployeeId FROM mtg.MeetingParticipants WHERE MeetingId = @m AND LiveKitIdentity = @identity
+            """, new { m = m.MeetingId, identity });
+        if (target is null || target.Value.IsBlocked) return Db_.NotFound("Participant");
+        var (targetParticipantId, targetType, _, targetEmployeeId) = target.Value;
+        // The database also enforces this (CK_MeetingParticipants_HostIsEmployee): a guest or customer can never be host.
+        if (targetType != "EMPLOYEE" || targetEmployeeId is null)
+            return Problems.Create(409, "CONFLICT", "Only a colleague already in the meeting can become host.");
+
+        using (var tx = c.BeginTransaction())
+        {
+            await c.ExecuteAsync("""
+                UPDATE mtg.MeetingParticipants SET [Role] = 'ATTENDEE', ModifiedUtc = SYSUTCDATETIME(), ModifiedByUserId = @user WHERE ParticipantId = @prev;
+                UPDATE mtg.MeetingParticipants SET [Role] = 'HOST', ModifiedUtc = SYSUTCDATETIME(), ModifiedByUserId = @user WHERE ParticipantId = @next;
+                UPDATE mtg.Meetings SET HostEmployeeId = @newHostEmployeeId, ModifiedUtc = SYSUTCDATETIME(), ModifiedByUserId = @user WHERE MeetingId = @m;
+                INSERT mtg.HostTransfers (MeetingId, PreviousHostParticipantId, NewHostParticipantId, TransferredByUserId) VALUES (@m, @prev, @next, @user);
+                """, new { prev = p.ParticipantId, next = targetParticipantId, newHostEmployeeId = targetEmployeeId, user = me.UserId, m = m.MeetingId }, tx);
+            await Audit.WriteAsync(c, "USER", me.UserId, "HOST_TRANSFERRED", "Meeting", id.ToString(), "Host privileges transferred to another participant",
+                ClientInfo.From(ctx).Ip, tx, newValues: new { previousHostIdentity = p.Identity, newHostIdentity = identity });
+            tx.Commit();
+        }
+
+        // Live update: every client's role badges and each affected participant's own host controls refresh immediately.
+        await s.Rooms.TryUpdateParticipantMetadataAsync(m.LiveKitRoomName, p.Identity, JsonSerializer.Serialize(new { role = "ATTENDEE", type = p.Type }), ct);
+        await s.Rooms.TryUpdateParticipantMetadataAsync(m.LiveKitRoomName, identity, JsonSerializer.Serialize(new { role = "HOST", type = targetType }), ct);
+        await s.Rooms.TrySendDataAsync(m.LiveKitRoomName, HostTransferTopic,
+            new { previousIdentity = p.Identity, previousName = p.Name, newIdentity = identity }, null, ct);
         return Results.NoContent();
     }
 
@@ -441,7 +554,7 @@ public static class RoomEndpoints
             """, new { hash = Tokens.Hash(token), now, countUse });
         if (r is null) return null;
         return (new RoomMeeting(r.MeetingId, r.PublicId, r.MeetingCode, r.Title, r.Category, r.Status, r.StartUtc, r.EndUtc, r.TimeZoneId, r.WaitingRoomEnabled, r.LiveKitRoomName,
-                r.HostName, r.MeetingKind, r.IsAudioOnly),
+                r.HostName, r.MeetingKind, r.IsAudioOnly, r.IsLocked),
             new RoomParticipant(r.ParticipantId, r.Identity, r.Type, r.Role, r.CanPublish, r.CanScreenShare, r.Name), r.InvitationId, r.WaitingRoomEnabled || r.AdmissionRequired);
     }
 
@@ -465,6 +578,7 @@ public static class RoomEndpoints
         var (m, p, invitationId, admission) = g.Value;
         var w = JoinWindow.Evaluate(m.Status, m.StartUtc, m.EndUtc, now, s.Meetings);
         if (!w.Joinable) return NotJoinable(w);
+        if (m.IsLocked && !await HasAttendedAsync(c, p.ParticipantId)) return Locked();
 
         var name = p.Name;
         if (p.Type == "GUEST" && input?.DisplayName is not null)
@@ -489,6 +603,16 @@ public static class RoomEndpoints
             """, new { p = p.ParticipantId });
         if (last is { Status: "REJECTED" } rejected && rejected.DecidedUtc > now.AddMinutes(-2))
             return Problems.Create(403, "FORBIDDEN", "The host has not let you in. You can ask again in a couple of minutes, or contact the organiser.");
+
+        // Reconnecting (network blip, closed tab, phone locked) with the same still-valid link: someone a host already
+        // admitted once goes straight back in - never queued again or re-asking the host, the same way an employee's
+        // own rejoin already worked (see HasAttendedAsync for that path). Only a first-time or newly-waiting arrival
+        // (or one who was previously rejected/left) goes through the waiting room below.
+        if (last is { Status: "ADMITTED" })
+        {
+            if (await EnsureRoomAsync(s, m, ct) is { } reEnterUnavailable) return reEnterUnavailable;
+            return Results.Ok(new { status = "ADMITTED", connection = Connection(s, m, p, name), meeting = MeetingDto(m) });
+        }
 
         long entryId;
         if (last is { Status: "WAITING" } waiting) entryId = waiting.EntryId;

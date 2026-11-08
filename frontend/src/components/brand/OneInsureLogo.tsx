@@ -4,7 +4,7 @@ import { cn } from '../../lib/cn'
 export function OneInsureLogo({ height = 24, className }: { height?: number; className?: string }) {
   return (
     <img
-      src="/brand/oneinsure-logo.png"
+      src={`${import.meta.env.BASE_URL}brand/oneinsure-logo.png`}
       alt="OneInsure"
       height={height}
       style={{ height, width: 'auto' }}
