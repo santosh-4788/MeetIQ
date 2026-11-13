@@ -1,5 +1,23 @@
 # Changelog
 
+## 13 Nov 2026 — GoodDay #14217, #14218, #14219 and a text-encoding repair
+
+**Deployed 13 Nov 2026 17:56 IST** with approval ("deploy and mark as resolved in goodday"). No live meeting or recording at the time. API and website only; no database change. Backup `deploy\_backup-20261113-175604`; about 9 s of downtime; Healthy. All three tasks are Resolved in GoodDay, each with a comment.
+
+- **#14218** (Schedule, Customer PLVC):
+  - The No recording / Optional / Required choice is replaced by "Recording starts automatically…" for mandatory policies.
+  - The meeting is stored as REQUIRED. Other categories are unchanged.
+- **#14217** ("Remove this"): the occurrences error no longer stays under a valid value.
+- **#14219** (make someone else host):
+  - A labelled "Make host" button next to colleagues, instead of an unlabelled crown icon.
+  - A hint in the Participants panel.
+  - Customers and guests still cannot be host (server and database rule).
+- **Encoding repair:**
+  - A PowerShell edit had garbled UTF-8 characters on the live Schedule page (e.g. "Administration â†’ Recording policies"), in MeetingLinkEndpoints.cs (comments, and the "…" added when a title is shortened) and in three test files.
+  - A garbled comment already in RecordingPolicyEndpoints.cs was repaired too.
+  - Checked live: 0 garbled sequences in the served code.
+- **Tests:** `goodday-fixes-4` **3/3** (including a real host hand-over between two people), `doc3-instant-schedule` 10/10, `goodday-fixes-3` 5/5, API 93/93.
+
 ## 13 Nov 2026 — API Documentation page: complete guide, admin-only with a grantable role (V025)
 
 **Deployed 13 Nov 2026 17:18 IST** with approval ("yes deploy"). No live meeting or recording at the time.
