@@ -2,7 +2,12 @@
 
 ## 13 Nov 2026 — API Documentation page: complete guide, admin-only with a grantable role (V025)
 
-**Not deployed yet. It needs approval and migration V025 on the live database.**
+**Deployed 13 Nov 2026 17:18 IST** with approval ("yes deploy"). No live meeting or recording at the time.
+- **Database:** backup `Oneinsure_v_preV025_20261113_1718.bak` (copy-only, with checksum, verified). Then **V025** in one transaction, with its `SchemaMigrations` row.
+- **Files:** backup `deploy\_backup-20261113-171841`.
+- **API:** 8 s of downtime; Healthy.
+- **Website:** rebuilt.
+- **Checked on the live site:** the guide and the new menu permission are served, and the OpenAPI document answers 401 when not signed in.
 
 - **Page** (`ApiGuide.tsx`, `ApiDocsPage.tsx`): a self-explanatory guide with an "On this page" menu. Sections:
   - Quick start (6 steps)
