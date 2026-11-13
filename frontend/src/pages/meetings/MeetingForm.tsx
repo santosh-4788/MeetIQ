@@ -32,7 +32,7 @@ import { newParticipant, ParticipantRows, participantsPayload, PrarambhField, va
 import './schedule.css'
 
 /** Whether a meeting category can be recorded (GET /meetings/recording-options). */
-type RecordingOption = { category: string; policyCode: string; policyTitle: string; enabled: boolean; requirement: string }
+type RecordingOption = { category: string; policyCode: string; policyTitle: string; enabled: boolean; requirement: string; consentMode?: 'CONSENT_REQUIRED' | 'NOTIFICATION_ONLY' }
 
 const DURATIONS = [15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 420, 480]
 const MAX_GUESTS = 20
@@ -97,7 +97,7 @@ function toUtc(form: Pick<Form, 'date' | 'time' | 'duration'>, tz: string) {
 
 // ---- Pages -----------------------------------------------------------------------
 
-/** /schedule â€” new meeting (meetings.create). `?category=CUSTOMER_PLVC` preselects a category. */
+/** /schedule — new meeting (meetings.create). `?category=CUSTOMER_PLVC` preselects a category. */
 export function ScheduleMeetingPage() {
   const { user } = useAuth()
   return (
@@ -106,7 +106,7 @@ export function ScheduleMeetingPage() {
       {user?.employeeLinked === false ? (
         <Alert tone="warning" title="Your account is not linked to an employee record">
           Meetings are scheduled for employees, so you cannot schedule one yet. Ask an administrator to link your account in
-          Administration â†’ Users &amp; roles (action "Link to employee"), then reload this page.
+          Administration → Users &amp; roles (action "Link to employee"), then reload this page.
         </Alert>
       ) : (
         <MeetingForm />
@@ -115,7 +115,7 @@ export function ScheduleMeetingPage() {
   )
 }
 
-/** /meetings/:id/edit â€” edit or reschedule (host, organiser or meetings.view.all). */
+/** /meetings/:id/edit — edit or reschedule (host, organiser or meetings.view.all). */
 export function EditMeetingPage() {
   const { id = '' } = useParams()
   const { can } = useAuth()
@@ -125,7 +125,7 @@ export function EditMeetingPage() {
     <div className="flex flex-col gap-5">
       <PageHeader
         title={m?.status === 'DRAFT' ? 'Edit draft meeting' : 'Edit or reschedule meeting'}
-        description={m ? `${m.title} Â· ${m.meetingCode}` : undefined}
+        description={m ? `${m.title} · ${m.meetingCode}` : undefined}
         actions={<ButtonLink to={`/meetings/${id}`} variant="secondary" leftIcon={<ArrowLeft className="size-4" />}>Back to meeting</ButtonLink>}
       />
       {meeting.error || (!m && !meeting.loading) ? (
@@ -191,7 +191,7 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
     setErrors((x) => ({ ...x, [k]: '' }))
   }
 
-  // Which meeting types can be recorded at all (Administration â†’ Recording policies). If this type's policy is
+  // Which meeting types can be recorded at all (Administration → Recording policies). If this type's policy is
   // switched off, the recording choices are disabled with an explanation instead of silently doing nothing later.
   const [recordingOptions, setRecordingOptions] = useState<RecordingOption[] | null>(null)
   useEffect(() => {
@@ -203,12 +203,16 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
   }, [])
   const recordingOption = recordingOptions?.find((o) => o.category === form.category)
   const recordingOff = !!recordingOption && !recordingOption.enabled
+  // GoodDay #14218: a mandatory policy (e.g. Customer PLVC) leaves nothing to choose - recording starts automatically, so the
+  // No recording / Optional / Required choice is not offered (it was misleading: "No recording" was ignored by the policy anyway).
+  const recordingMandatory = !!recordingOption && recordingOption.enabled && recordingOption.requirement === 'MANDATORY'
   useEffect(() => {
     if (recordingOff && form.recordingPolicy !== 'NONE') setForm((f) => ({ ...f, recordingPolicy: 'NONE' }))
-  }, [recordingOff, form.recordingPolicy])
+    else if (recordingMandatory && form.recordingPolicy !== 'REQUIRED') setForm((f) => ({ ...f, recordingPolicy: 'REQUIRED' }))
+  }, [recordingOff, recordingMandatory, form.recordingPolicy])
 
   const customerMeeting = isCustomerCategory(form.category)
-  // Customer â€“ PLVC (new meetings): Prarambh Main ID + participant rows instead of picking a customer record (12 Nov 2026).
+  // Customer – PLVC (new meetings): Prarambh Main ID + participant rows instead of picking a customer record (12 Nov 2026).
   const plvcNew = !existing && form.category === 'CUSTOMER_PLVC'
   const [prarambh, setPrarambh] = useState('')
   const [plvcRows, setPlvcRows] = useState<ParticipantRow[]>([newParticipant(0)])
@@ -435,7 +439,7 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
                   <div>
                     {existing.prarambhMainId && <p className="mb-2 text-[13px] text-ink"><span className="font-semibold">Prarambh Main ID:</span> <span data-testid="prarambh-readonly">{existing.prarambhMainId}</span></p>}
                     <p className="text-[13px] font-semibold text-ink">Customer</p>
-                    <p className="mt-1 text-[13.5px] text-ink">{existing.customer?.name ?? 'â€”'}{existing.customer?.customerRef && <span className="ml-1.5 text-[12px] text-ink-secondary">{existing.customer.customerRef}</span>}</p>
+                    <p className="mt-1 text-[13.5px] text-ink">{existing.customer?.name ?? '—'}{existing.customer?.customerRef && <span className="ml-1.5 text-[12px] text-ink-secondary">{existing.customer.customerRef}</span>}</p>
                     <p className="text-[12px] text-ink-secondary">The customer of a meeting cannot be changed.</p>
                   </div>
                 ) : (
@@ -525,6 +529,17 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
         <Card>
           <CardHeader title="Recording and access" />
           <div className="flex flex-col gap-4 px-5 pb-5">
+            {recordingMandatory ? (
+              <div className="flex items-start gap-2.5 rounded-md border border-danger/25 bg-danger/[0.06] px-3 py-2.5 text-[13px] text-ink" data-testid="schedule-recording-mandatory">
+                <span className="mt-1 size-2.5 shrink-0 rounded-full bg-danger" aria-hidden />
+                <span>
+                  <strong>Recording starts automatically</strong> when the meeting starts — mandatory for this meeting type ({recordingOption?.policyTitle}).{' '}
+                  {recordingOption?.consentMode === 'NOTIFICATION_ONLY'
+                    ? 'Everyone is shown the recording notice and the REC indicator; no acceptance is needed.'
+                    : 'Each participant is asked to accept the recording notice.'}
+                </span>
+              </div>
+            ) : (
             <fieldset>
               <legend className="mb-1.5 text-[13px] font-semibold text-ink">Recording policy</legend>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -545,13 +560,14 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
                 <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
                 <span>
                   {recordingOff
-                    ? <>Recording is switched off for <strong className="font-semibold">{recordingOption?.policyTitle}</strong>, the recording policy used by this meeting type. An administrator can turn it on in Administration â†’ Recording policies.</>
+                    ? <>Recording is switched off for <strong className="font-semibold">{recordingOption?.policyTitle}</strong>, the recording policy used by this meeting type. An administrator can turn it on in Administration → Recording policies.</>
                     : recordingOption
                       ? <>Recording follows the <strong className="font-semibold">{recordingOption.policyTitle}</strong> policy: participants see the recording notice in the meeting, and the host starts and stops recording.</>
                       : 'Participants see the recording notice in the meeting, and the host starts and stops recording.'}
                 </span>
               </p>
             </fieldset>
+            )}
             <Switch checked={form.waitingRoom} onChange={(v) => set('waitingRoom', v)} label="Waiting room: the host admits customers and guests" />
           </div>
         </Card>
@@ -651,7 +667,7 @@ function OccurrenceConflictDialog({
         {(occConflicts ?? []).map((o) => (
           <li key={o.seq} className="rounded-md border border-line bg-surface-muted p-3">
             <p className="text-[13px] font-semibold text-ink">
-              Occurrence {o.seq} Â· {formatDate(o.startUtc, tz)}, {formatTime(o.startUtc, tz)}
+              Occurrence {o.seq} · {formatDate(o.startUtc, tz)}, {formatTime(o.startUtc, tz)}
             </p>
             <ConflictList conflicts={o.conflicts} tz={tz} />
           </li>
@@ -737,7 +753,9 @@ function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft;
               max={MAX_RECURRENCE_OCCURRENCES}
               value={String(value.endCount)}
               onChange={(e) => (set('endType', 'COUNT'), set('endCount', Number(e.target.value) || 2))}
-              error={errors['recurrence.endCount']}
+              // GoodDay #14217: the message from the last Schedule click stayed under a value that is now valid (e.g. "2").
+              // Show it only while the current value really is out of range.
+              error={value.endType === 'COUNT' && !(value.endCount >= 2 && value.endCount <= MAX_RECURRENCE_OCCURRENCES) ? errors['recurrence.endCount'] : undefined}
               className="w-28"
             />
           </div>
@@ -869,7 +887,7 @@ function PersonRow({ name, detail, status, onRemove }: { name: string; detail?: 
 }
 
 function PersonStatus({ issues, checked, checking }: { issues: Conflict[]; checked: boolean; checking: boolean }) {
-  if (checking) return <span className="inline-flex items-center gap-1 text-ink-muted"><LoaderCircle className="size-3 animate-spin" aria-hidden /> Checkingâ€¦</span>
+  if (checking) return <span className="inline-flex items-center gap-1 text-ink-muted"><LoaderCircle className="size-3 animate-spin" aria-hidden /> Checking…</span>
   if (!checked) return null
   const blocking = issues.filter((c) => c.type !== 'OUTSIDE_WORKING_HOURS')
   if (blocking.length) return <span className="inline-flex items-center gap-1 font-medium text-danger"><TriangleAlert className="size-3" aria-hidden /> {[...new Set(blocking.map((c) => conflictLabel[c.type]))].join(', ')}</span>
@@ -887,7 +905,7 @@ function AvailabilityCard({ availability, tz, draft }: { availability: Availabil
         {error ? (
           <Alert tone="warning" title="Availability could not be checked">{error}</Alert>
         ) : !checked ? (
-          <p className="text-[13px] text-ink-secondary">{checking ? 'Checking availabilityâ€¦' : 'Enter a date and time to check availability.'}</p>
+          <p className="text-[13px] text-ink-secondary">{checking ? 'Checking availability…' : 'Enter a date and time to check availability.'}</p>
         ) : (
           <>
             {conflicts.length === 0 ? (

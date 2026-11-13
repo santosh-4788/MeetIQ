@@ -323,6 +323,16 @@ export function PeoplePanel({
             </ul>
           </section>
         )}
+        {canTransferHost && (
+          // GoodDay #14219: tell the host where the hand-over is - and why a customer/guest is not offered (the server and the
+          // database refuse a non-employee host: hosts control recording, admission and ending the meeting).
+          <p className="mx-4 mt-3 flex items-start gap-2 rounded-lg bg-cyan-400/10 px-3 py-2 text-[12px] leading-4 text-cyan-100" data-testid="host-transfer-hint">
+            <Crown className="mt-px size-3.5 shrink-0" aria-hidden />
+            {sorted.some((p) => !p.isLocal && participantRole(p).type === 'EMPLOYEE')
+              ? 'To hand over hosting, use "Make host" next to a colleague. You stay in the meeting as a participant.'
+              : 'To hand over hosting, a OneInsure colleague must be in the meeting. Customers and guests cannot be host.'}
+          </p>
+        )}
         <ul className="flex flex-col py-2" data-testid="participant-list">
           {sorted.map((p) => (
             <PersonRow
@@ -458,8 +468,10 @@ function PersonRow({
       {(canMute || canRequestUnmute || canDisableCamera || canRemove || canTransferHost) && (
         <span className="flex items-center gap-1">
           {canTransferHost && (
-            <button type="button" disabled={busy} onClick={onTransferHost} title={`Make ${name} host`} aria-label={`Make ${name} host`} className="flex size-8 items-center justify-center rounded-md text-white/70 hover:bg-cyan-400/20 hover:text-cyan-300" data-testid="participant-make-host">
-              <Crown className="size-4" />
+            // GoodDay #14219: a labelled action (was an unlabelled crown icon that people did not notice).
+            <button type="button" disabled={busy} onClick={onTransferHost} title={`Make ${name} the host`} aria-label={`Make ${name} host`}
+              className="inline-flex h-8 items-center gap-1 rounded-full bg-cyan-400/15 px-2.5 text-[11.5px] font-semibold text-cyan-200 hover:bg-cyan-400/25 hover:text-white" data-testid="participant-make-host">
+              <Crown className="size-3.5" aria-hidden /> Make host
             </button>
           )}
           {canMute && (

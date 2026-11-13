@@ -31,7 +31,7 @@ const lines = (q) => sqlcmd(q).split(/\r?\n/).map((s) => s.trim()).filter(Boolea
 const results = []
 const pages = []
 async function tc(id, title, fn) {
-  log(`â–¶ ${id} ${title}`)
+  log(`▶ ${id} ${title}`)
   try {
     const actual = await fn()
     results.push({ id, title, actual, result: 'PASS' }); log(`  PASS ${id}: ${actual ?? ''}`); return true
@@ -150,7 +150,7 @@ await tc('IM-02', 'Host sees the delivery status in Invite people; a failed e-ma
   const meetings = Number(sqlcmd(`SELECT COUNT(*) FROM mtg.Meetings WHERE PrarambhMainId = '7712345' AND [Status] IN ('SCHEDULED','LIVE')`))
   const audit = sqlcmd(`SELECT COUNT(*) FROM app.AuditLog WHERE Action = 'MEETING_INVITATION_RESENT' AND EntityId = '${meetingId}'`)
   check(active === 1 && meera.length === 1 && meetings === 1 && audit === '1', `active links ${active}, meera mails ${meera.length}, live meetings ${meetings}, audit ${audit}`)
-  return `status rows shown (Sendingâ€¦/Not delivered); Send again â†’ new PENDING e-mail, ${oldActive}â†’${active} active link for that person (old revoked), Meera untouched, still 1 meeting, 1 audit row`
+  return `status rows shown (Sending…/Not delivered); Send again → new PENDING e-mail, ${oldActive}→${active} active link for that person (old revoked), Meera untouched, still 1 meeting, 1 audit row`
 })
 await api(host, 'POST', `/meetings/${meetingId}/room/end`).catch(() => {})
 
@@ -275,7 +275,7 @@ await tc('SC-03', 'Save as draft still works from the redesigned form', async ()
   return 'draft saved (status DRAFT)'
 })
 
-await tc('SC-04', 'Schedule Meeting on a phone (390Ã—844): single column, no horizontal scrolling, nothing overlapping the edges', async () => {
+await tc('SC-04', 'Schedule Meeting on a phone (390×844): single column, no horizontal scrolling, nothing overlapping the edges', async () => {
   const phone = await newPage({ width: 390, height: 844 }, true)
   await login(phone)
   await phone.goto('/schedule')
@@ -311,5 +311,5 @@ for (const b of browsers) await b.close().catch(() => {})
 const file = path.join(RESULTS, `doc3-instant-schedule-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
 fs.writeFileSync(file, JSON.stringify({ suite: 'doc3-instant-schedule', web: WEB, db: DB, results }, null, 2))
 const passed = results.filter((r) => r.result === 'PASS').length
-log(`${passed}/${results.length} passed â†’ ${file}`)
+log(`${passed}/${results.length} passed → ${file}`)
 process.exit(passed === results.length ? 0 : 1)

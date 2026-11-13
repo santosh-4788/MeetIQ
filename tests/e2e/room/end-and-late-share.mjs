@@ -1,8 +1,8 @@
 // 13 Nov 2026 (Oneinsure_connect_bugs.docx):
 //  1. Recording notice redesign: one title, the policy wording, the support address, ONE "OK, got it"; no placeholder / version /
 //     policy details for participants; compact on a phone; the acknowledgement is still recorded.
-//  2. Late joiners must see a screen share that started before they joined (host + A sharing â†’ B joins â†’ C joins â†’ A stops â†’ B shares).
-//  3. Host ends the meeting: everyone sees "Meeting Ended" at once (not "Reconnectingâ€¦"), also a participant whose network was down
+//  2. Late joiners must see a screen share that started before they joined (host + A sharing → B joins → C joins → A stops → B shares).
+//  3. Host ends the meeting: everyone sees "Meeting Ended" at once (not "Reconnecting…"), also a participant whose network was down
 //     at that moment; ending again is idempotent; the link afterwards says the meeting has ended.
 //
 // Isolated environment ONLY: LocalDB OneInsureVideoMeetingDB_Rec, API https://localhost:7192, web http://127.0.0.1:5176 (Vite --mode api),
@@ -33,7 +33,7 @@ const results = []
 const pages = []
 const consoleErrors = []
 async function tc(id, title, fn) {
-  log(`â–¶ ${id} ${title}`)
+  log(`▶ ${id} ${title}`)
   try {
     const actual = await fn()
     results.push({ id, title, actual, result: 'PASS' }); log(`  PASS ${id}: ${actual ?? ''}`); return true
@@ -123,7 +123,7 @@ async function join(p, i, name) {
 
 // ---- 1. Recording notice ------------------------------------------------------------------------------------------
 let a, b, c
-await tc('RN-01', 'Customer on a phone (390Ã—844): one clean notice - title, approved wording, support e-mail, ONE "OK, got it"; no placeholder/version/policy text; compact', async () => {
+await tc('RN-01', 'Customer on a phone (390×844): one clean notice - title, approved wording, support e-mail, ONE "OK, got it"; no placeholder/version/policy text; compact', async () => {
   a = await newPage('A-customer-phone', { width: 390, height: 844 }, true)
   await join(a, 0, 'Asha Customer')
   const card = a.getByTestId('rec-notice-banner')
@@ -137,13 +137,13 @@ await tc('RN-01', 'Customer on a phone (390Ã—844): one clean notice - title, 
   const buttons = await card.locator('button').allInnerTexts()
   check(buttons.filter((t) => t.trim()).length === 1 && /OK, got it/.test(buttons.join('')), `buttons with text: ${JSON.stringify(buttons)}`)
   const bb = await card.boundingBox()
-  check(bb.height <= 844 * 0.46 + 1 && bb.x >= 11 && bb.x + bb.width <= 390 - 11, `card ${Math.round(bb.x)},${Math.round(bb.y)} ${Math.round(bb.width)}Ã—${Math.round(bb.height)} on 390Ã—844`)
+  check(bb.height <= 844 * 0.46 + 1 && bb.x >= 11 && bb.x + bb.width <= 390 - 11, `card ${Math.round(bb.x)},${Math.round(bb.y)} ${Math.round(bb.width)}×${Math.round(bb.height)} on 390×844`)
   const ok = await a.getByTestId('rec-notice-ok').boundingBox()
   check(ok.height >= 44, `OK button ${ok.height} px`)
   await shot(a, 'rn-01-customer-phone')
   await a.touchscreen.tap(ok.x + ok.width / 2, ok.y + ok.height / 2)
   await until(async () => (await card.count()) === 0, 'card still open after OK', 3000)
-  return `card ${Math.round(bb.width)}Ã—${Math.round(bb.height)} px at y=${Math.round(bb.y)} (â‰¤ 46% of 844); 1 button "OK, got it" ${Math.round(ok.width)}Ã—${Math.round(ok.height)} px; no placeholder/version/policy text; closed on tap`
+  return `card ${Math.round(bb.width)}×${Math.round(bb.height)} px at y=${Math.round(bb.y)} (≤ 46% of 844); 1 button "OK, got it" ${Math.round(ok.width)}×${Math.round(ok.height)} px; no placeholder/version/policy text; closed on tap`
 })
 await tc('RN-02', 'Host (desktop): same clean card (wording is confirmed, so no internal note); acknowledgements recorded for host and customer; recording still mandatory', async () => {
   const card = host.getByTestId('rec-notice-banner')
@@ -175,7 +175,7 @@ await tc('SS-01', 'Customer A (desktop) presents; the host sees it', async () =>
   await until(async () => (await screenOn(host))?.w > 0, 'host does not see A\'s screen', 25_000)
   const s = await screenOn(host)
   check(/Asha/.test(s.who), `screen tile name "${s.who}"`)
-  return `host sees ${s.w}Ã—${s.h} "${s.who}"`
+  return `host sees ${s.w}×${s.h} "${s.who}"`
 })
 await tc('SS-02', 'Guest B joins on a PHONE (390×844) WHILE A is presenting: sees A\'s screen at once, without a refresh and without A restarting', async () => {
   b = await newPage('B-phone', { width: 390, height: 844 }, true)
@@ -187,7 +187,7 @@ await tc('SS-02', 'Guest B joins on a PHONE (390×844) WHILE A is presenting: se
   check(/Asha/.test(s.who), `B's screen tile name "${s.who}"`)
   check((await screenOn(host))?.w > 0, 'host lost the screen share when B joined')
   await shot(b, 'ss-02-late-joiner-B')
-  return `B sees ${s.w}Ã—${s.h} "${s.who}" ${((Date.now() - t0) / 1000).toFixed(1)} s after opening the link; host still sees it`
+  return `B sees ${s.w}×${s.h} "${s.who}" ${((Date.now() - t0) / 1000).toFixed(1)} s after opening the link; host still sees it`
 })
 await tc('SS-03', 'Guest C joins later still: also sees the same screen share; exactly one screen tile everywhere', async () => {
   c = await newPage('C')
@@ -222,7 +222,7 @@ await tc('END-01', 'Host ends for everyone (C\'s network is down at that moment)
   for (const p of [a, b, host]) await until(async () => (await p.getByTestId('meeting-ended').count()) > 0, `${p.__name} does not show "Meeting Ended"`, 10_000)
   const secs = ((Date.now() - t0) / 1000).toFixed(1)
   const after = await Promise.all([a, b].map((p) => p.evaluate(() => window.__seen.reconnecting)))
-  check(after[0] === before[0] && after[1] === before[1], `A/B showed "Reconnectingâ€¦" after the end (${before} â†’ ${after})`)
+  check(after[0] === before[0] && after[1] === before[1], `A/B showed "Reconnecting…" after the end (${before} → ${after})`)
   const txt = await b.getByTestId('meeting-ended').innerText()
   check(/The host has ended this meeting/.test(txt) && txt.includes(meeting.meetingCode), `ended screen text: ${txt}`)
   await shot(b, 'end-01-B-meeting-ended')
@@ -249,7 +249,7 @@ await tc('END-02', 'Ending again is idempotent (204, nothing processed twice); t
   check(n === '1', `${n} MEETING_ENDED audit rows`)
   const j = await b.evaluate(async (u) => (await fetch(`/api/v1/join/${u.split('/join/')[1]}`)).json(), link(1))
   check(j.status === 'ENDED', `join info status ${j.status}`)
-  return `second End â†’ 204; 1 MEETING_ENDED audit row; join link status ${j.status}`
+  return `second End → 204; 1 MEETING_ENDED audit row; join link status ${j.status}`
 })
 await tc('END-03', 'No browser errors during the run', async () => {
   // C was deliberately offline when the meeting ended: when it comes back, the LiveKit SDK logs its own errors about the dead
@@ -265,5 +265,5 @@ for (const br of browsers) await br.close().catch(() => {})
 const file = path.join(RESULTS, `end-and-late-share-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
 fs.writeFileSync(file, JSON.stringify({ suite: 'end-and-late-share', web: WEB, db: DB, results }, null, 2))
 const passed = results.filter((r) => r.result === 'PASS').length
-log(`${passed}/${results.length} passed â†’ ${file}`)
+log(`${passed}/${results.length} passed → ${file}`)
 process.exit(passed === results.length ? 0 : 1)

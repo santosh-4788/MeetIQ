@@ -46,7 +46,7 @@ const pages = []
 async function tc(id, title, fn) {
   if (ONLY.length && !ONLY.includes(id)) return true
   const t0 = Date.now()
-  log(`â–¶ ${id} ${title}`)
+  log(`▶ ${id} ${title}`)
   try {
     const actual = await fn()
     results.push({ id, title, result: 'PASSED', evidence: actual ?? '', ms: Date.now() - t0 })
@@ -167,7 +167,7 @@ const okConsent = okJoin && await tc('L-02', 'Host presses Record: the participa
   await until(() => host.getByText(/Consent given by everyone required/).isVisible(), 'host dialog never turned ready after the peer accepted', 15_000)
   await shot(host, 'L-02c-start-dialog-ready')
   const rows = scalar(`SELECT COUNT(*) AS v FROM mtg.MeetingConsent WHERE MeetingId = ${mid} AND Decision = 'GRANTED' AND EvidenceHash IS NOT NULL`)
-  return `peer was asked automatically and accepted; host dialog turned ready; ${rows} GRANTED consent rows with evidence hash; notice shown: "${notice.slice(0, 60)}â€¦"`
+  return `peer was asked automatically and accepted; host dialog turned ready; ${rows} GRANTED consent rows with evidence hash; notice shown: "${notice.slice(0, 60)}…"`
 })
 
 const okStart = okConsent && await tc('L-03', 'Recording starts; REC appears only after the recorder confirms capture; start-up time measured', async () => {
@@ -187,7 +187,7 @@ const okStart = okConsent && await tc('L-03', 'Recording starts; REC appears onl
   metrics.startServerSeconds = +audit?.s
   await shot(host, 'L-03-rec-indicator-host')
   await shot(peer, 'L-03-rec-indicator-peer')
-  return `first indicator "${early}" â†’ REC on host after ${uiSeconds.toFixed(1)} s (click â†’ REC); server-measured start request â†’ capture confirmed ${audit?.s} s; peer sees REC`
+  return `first indicator "${early}" → REC on host after ${uiSeconds.toFixed(1)} s (click → REC); server-measured start request → capture confirmed ${audit?.s} s; peer sees REC`
 })
 
 const okStop = okStart && await tc('L-04', `Record ~${RECORD_SECONDS}s, host stops with confirmation; REC clears without leaving; meeting continues`, async () => {
@@ -213,7 +213,7 @@ const okStop = okStart && await tc('L-04', `Record ~${RECORD_SECONDS}s, host sto
   return `indicator changed to "${afterClick}" ${firstChange.toFixed(1)} s after confirm, cleared after ${cleared.toFixed(1)} s on host (peer too); toast "Recording stopped successfully": ${toast}; both still in the room, meeting LIVE, Record button: "${label}"`
 })
 
-const okDone = okStop && await tc('L-05', 'MP4 finalised and verified â†’ COMPLETED; file probed independently', async () => {
+const okDone = okStop && await tc('L-05', 'MP4 finalised and verified → COMPLETED; file probed independently', async () => {
   const seen = new Set()
   await until(() => {
     const s = scalar(`SELECT [Status] AS v FROM rec.MeetingRecordings WHERE PublicId = '${rec1}'`)
@@ -226,10 +226,10 @@ const okDone = okStop && await tc('L-05', 'MP4 finalised and verified â†’ C
   const v = probe.streams.find((s) => s.codec_type === 'video'), a = probe.streams.find((s) => s.codec_type === 'audio')
   check(v?.codec_name === 'h264' && a?.codec_name === 'aac', 'unexpected codecs')
   metrics.finalizeSeconds = +r.FinalizeSeconds
-  return `states ${[...seen].join('â†’')}; ${r.DurationSeconds} s, ${(r.FileSizeBytes / 1048576).toFixed(2)} MB, ${v.codec_name}/${a.codec_name} ${v.width}x${v.height}, ffprobe duration ${(+probe.format.duration).toFixed(1)} s; capture end â†’ verified ${r.FinalizeSeconds} s`
+  return `states ${[...seen].join('→')}; ${r.DurationSeconds} s, ${(r.FileSizeBytes / 1048576).toFixed(2)} MB, ${v.codec_name}/${a.codec_name} ${v.width}x${v.height}, ffprobe duration ${(+probe.format.duration).toFixed(1)} s; capture end → verified ${r.FinalizeSeconds} s`
 })
 
-const okCrash = okDone && await tc('L-06', 'Second recording in the same meeting; recorder process killed mid-recording â†’ relaunched; peer network drop â†’ state re-synced', async () => {
+const okCrash = okDone && await tc('L-06', 'Second recording in the same meeting; recorder process killed mid-recording → relaunched; peer network drop → state re-synced', async () => {
   await host.getByTestId('ctl-record').click()
   await host.getByTestId('rec-start-confirm').click()
   await until(async () => (await recStatus(host)) === 'RECORDING', 'second recording never reached REC', 60_000, 200)
@@ -256,7 +256,7 @@ const okCrash = okDone && await tc('L-06', 'Second recording in the same meeting
     return s === 'COMPLETED'
   }, 'second recording not COMPLETED', 300_000, 1000)
   const d = scalar(`SELECT JSON_VALUE(VerificationDetails, '$.joinedParts') AS v FROM rec.MeetingRecordings WHERE PublicId = '${rec2}'`)
-  return `recorder pid ${pid} killed â†’ relaunched (part 2), recording stayed RECORDING; peer offline 8 s â†’ REC re-synced; stopped â†’ COMPLETED, parts joined: ${d}`
+  return `recorder pid ${pid} killed → relaunched (part 2), recording stayed RECORDING; peer offline 8 s → REC re-synced; stopped → COMPLETED, parts joined: ${d}`
 })
 
 const okRelogin = okDone && await tc('L-07', 'Host logs out (server session invalidated) and back in: both recordings still in the Recording Library, playable', async () => {
@@ -279,7 +279,7 @@ const okRelogin = okDone && await tc('L-07', 'Host logs out (server session inva
   check(play.status === 200, `play ${play.status}`)
   const range = await host.evaluate(async (url) => { const r = await fetch(url, { headers: { Range: 'bytes=0-1023' } }); return { s: r.status, t: r.headers.get('content-type'), n: (await r.arrayBuffer()).byteLength } }, play.data.url)
   check(range.s === 206 && range.t === 'video/mp4' && range.n === 1024, `media ${JSON.stringify(range)}`)
-  return `old cookie â†’ 401 after logout; after re-login the library lists ${ids.filter((i) => i === rec1 || i === rec2).length} recording(s) of this meeting; signed play URL â†’ HTTP 206 video/mp4`
+  return `old cookie → 401 after logout; after re-login the library lists ${ids.filter((i) => i === rec1 || i === rec2).length} recording(s) of this meeting; signed play URL → HTTP 206 video/mp4`
 })
 
 const okAccess = okDone && await tc('L-08', 'Access control: attendee (not host/organiser) cannot open it; administrator can', async () => {
@@ -291,7 +291,7 @@ const okAccess = okDone && await tc('L-08', 'Access control: attendee (not host/
   check(a.status === 200, `admin got ${a.status}`)
   await admin.context().browser().close()
   pages.splice(pages.indexOf(admin), 1)
-  return 'attendee â†’ 404 (not visible); Admin (recordings.view.all) â†’ 200'
+  return 'attendee → 404 (not visible); Admin (recordings.view.all) → 200'
 })
 
 okJoin && await tc('L-09', 'Host ends the meeting', async () => {
@@ -334,7 +334,7 @@ await tc('L-10', 'Daily logout test mode while IN a meeting: warning with countd
   await login(admin, SECRET.admin)
   await api(admin, 'POST', `/meetings/${m2}/room/end`)
   for (const p of [admin, other]) { await p.context().browser().close(); pages.splice(pages.indexOf(p), 1) }
-  return `warning: "${warning.slice(0, 140)}"; at the cutoff the admin stayed in the call with the banner, /auth/session â†’ 401, ${revoked} session(s) revoked (DAILY_LOGOUT_TEST), other participant unaffected; leaving â†’ "Your daily session has ended. Please log in again to continue."; sign-in again works`
+  return `warning: "${warning.slice(0, 140)}"; at the cutoff the admin stayed in the call with the banner, /auth/session → 401, ${revoked} session(s) revoked (DAILY_LOGOUT_TEST), other participant unaffected; leaving → "Your daily session has ended. Please log in again to continue."; sign-in again works`
 })
 
 await tc('L-11', 'Daily logout test mode outside a meeting: redirected to the login flow with the daily message at the cutoff', async () => {
@@ -370,4 +370,4 @@ await tc('L-12', 'Production daily logout configuration (not changed by the test
 for (const b of browsers) await b.close().catch(() => {})
 const file = path.join(OUT, `live-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
 fs.writeFileSync(file, JSON.stringify({ web: WEB, metrics, results }, null, 2))
-log(`\n${results.filter((r) => r.result === 'PASSED').length}/${results.length} passed Â· metrics ${JSON.stringify(metrics)} Â· ${file}`)
+log(`\n${results.filter((r) => r.result === 'PASSED').length}/${results.length} passed · metrics ${JSON.stringify(metrics)} · ${file}`)

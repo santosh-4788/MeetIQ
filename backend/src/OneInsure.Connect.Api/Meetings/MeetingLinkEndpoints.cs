@@ -13,10 +13,10 @@ namespace OneInsure.Connect.Api.Meetings;
 /// <summary>
 /// Instant meetings and shareable meeting links (Advanced features, Phase B).
 /// <list type="bullet">
-/// <item>POST /meetings/instant â€” a meeting that starts now: no calendar check, no invitation e-mails; the host shares its link.</item>
-/// <item>/meetings/{id}/link â€” the meeting's shareable link (copy, replace, withdraw). Hosts, co-hosts and the organiser only.</item>
-/// <item>GET /meetings/by-code/{code} â€” "Join meeting" by code, for meetings the signed-in user may already see (no anonymous lookup).</item>
-/// <item>Anonymous /m/{token} â€” the link page. Asking to join creates a participant (GUEST, or EMPLOYEE when signed in) that must be
+/// <item>POST /meetings/instant — a meeting that starts now: no calendar check, no invitation e-mails; the host shares its link.</item>
+/// <item>/meetings/{id}/link — the meeting's shareable link (copy, replace, withdraw). Hosts, co-hosts and the organiser only.</item>
+/// <item>GET /meetings/by-code/{code} — "Join meeting" by code, for meetings the signed-in user may already see (no anonymous lookup).</item>
+/// <item>Anonymous /m/{token} — the link page. Asking to join creates a participant (GUEST, or EMPLOYEE when signed in) that must be
 /// admitted from the waiting room, and hands back a personal token: from there the existing /join/{token} flow is used unchanged.</item>
 /// </list>
 /// The link itself is a bearer secret (256 random bits); only its SHA-256 identifies it. A Data Protection-encrypted copy lets hosts copy
@@ -353,7 +353,7 @@ public static class MeetingLinkEndpoints
         return ((row.Value.MeetingId, row.Value.Status), null);
     }
 
-    static string Shorten(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "â€¦";
+    static string Shorten(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
 
     // ---- Join by code (signed in) ----------------------------------------------------------------------------------
 
@@ -528,7 +528,7 @@ public static class MeetingLinkEndpoints
     sealed record Mine(long ParticipantId, bool IsBlocked, bool NeedsAdmission);
 
     /// <summary>
-    /// GET /m/{token} â€” only what a person needs to decide to join (title, organiser, time). Nothing about the other participants.
+    /// GET /m/{token} — only what a person needs to decide to join (title, organiser, time). Nothing about the other participants.
     /// A signed-in participant is sent to their normal meeting room instead.
     /// </summary>
     static async Task<IResult> LinkInfo(string token, LinkServices s, HttpContext ctx, CancellationToken ct)
@@ -552,7 +552,7 @@ public static class MeetingLinkEndpoints
     }
 
     /// <summary>
-    /// POST /m/{token}/request â€” creates the asking person's participant row (admission always required) and a personal token
+    /// POST /m/{token}/request — creates the asking person's participant row (admission always required) and a personal token
     /// for the existing waiting-room flow (/join/{token}/enter, polling, chat, recording notice).
     /// </summary>
     static async Task<IResult> LinkRequest(string token, LinkRequestInput? input, LinkServices s, HttpContext ctx, CancellationToken ct)

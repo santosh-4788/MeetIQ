@@ -12,9 +12,9 @@ using OneInsure.Connect.Domain.Recording;
 namespace OneInsure.Connect.Api.Recording;
 
 /// <summary>
-/// Administration â†’ Recording policies: /api/v1/admin/recording-policies (+ /categories) and /api/v1/admin/recording/health.
+/// Administration → Recording policies: /api/v1/admin/recording-policies (+ /categories) and /api/v1/admin/recording/health.
 /// Reading: recordings.policy.manage, admin.settings or audit.view. Changing: recordings.policy.manage only (V012, SuperAdmin by
-/// default) â€” recording consent wording, retention and access are compliance decisions, not day-to-day settings, so the broader
+/// default) — recording consent wording, retention and access are compliance decisions, not day-to-day settings, so the broader
 /// admin.settings (also held by the Admin role) is deliberately not enough. Every change is audited (privileged, old + new values).
 /// </summary>
 public static partial class RecordingPolicyEndpoints
@@ -253,7 +253,7 @@ public static partial class RecordingPolicyEndpoints
         foreach (var (cat, policy) in items)
             await c.ExecuteAsync("UPDATE rec.RecordingPolicyCategories SET PolicyCode = @policy, ModifiedUtc = SYSUTCDATETIME(), ModifiedByUserId = @user WHERE Category = @cat AND PolicyCode <> @policy",
                 new { policy, cat, user = ctx.User.UserId() }, tx);
-        await AuditChangeAsync(c, tx, ctx, "RECORDING_POLICY_CATEGORIES_UPDATED", "RecordingPolicy", "categories", "Meeting category â†’ recording policy mapping changed",
+        await AuditChangeAsync(c, tx, ctx, "RECORDING_POLICY_CATEGORIES_UPDATED", "RecordingPolicy", "categories", "Meeting category → recording policy mapping changed",
             before.ToDictionary(x => x.Category, x => x.PolicyCode), items.ToDictionary(x => x.Category, x => x.Policy));
         tx.Commit();
         return Results.Ok((await RecordingPolicyStore.CategoriesAsync(c)).Select(x => new { category = x.Category, policyCode = x.PolicyCode }));
@@ -271,7 +271,7 @@ public static partial class RecordingPolicyEndpoints
         return Results.Ok(new
         {
             available = items.All(i => i.Ok), environment = options.Value.DeploymentEnvironment.ToString(),
-            recorder = "R2 recorder â€” proof of concept (headless Microsoft Edge + FFmpeg). Not production-ready.",
+            recorder = "R2 recorder — proof of concept (headless Microsoft Edge + FFmpeg). Not production-ready.",
             items = items.Select(i => new { name = i.Name, ok = i.Ok, detail = i.Detail }),
             activeJobs = jobs.Active, queuedJobs = jobs.Queued, failedLast24h = jobs.Failed24h,
         });
