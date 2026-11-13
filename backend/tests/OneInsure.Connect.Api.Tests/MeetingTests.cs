@@ -31,8 +31,9 @@ public sealed partial class MeetingTests(ApiFixture fx)
     }
 
     static object Meeting(string title, DateTime start, DateTime end, Guid[]? employees = null, string category = "TEAM", string status = "SCHEDULED",
-        object[]? guests = null, Guid? customerId = null, bool overrideConflicts = false, string? overrideReason = null) =>
-        new { title, category, startUtc = start, endUtc = end, employeeIds = employees ?? [], guests, customerId, status, recordingPolicy = "OPTIONAL", overrideConflicts, overrideReason };
+        object[]? guests = null, Guid? customerId = null, bool overrideConflicts = false, string? overrideReason = null, string? prarambhMainId = null) =>
+        new { title, category, startUtc = start, endUtc = end, employeeIds = employees ?? [], guests, customerId, status, recordingPolicy = "OPTIONAL", overrideConflicts, overrideReason,
+            prarambhMainId = prarambhMainId ?? (category == "CUSTOMER_PLVC" ? "100200300" : null) };
 
     async Task<Guid> Create(TestClient c, object body)
     {
@@ -139,7 +140,9 @@ public sealed partial class MeetingTests(ApiFixture fx)
         Assert.True(errors.TryGetProperty("endUtc", out _));
         Assert.True((await Json(await host.PostAsync("/api/v1/meetings", Meeting("Too long", Slot(12, 1), Slot(12, 10))))).GetProperty("errors").TryGetProperty("endUtc", out _));
         Assert.True((await Json(await host.PostAsync("/api/v1/meetings", Meeting("Past", Slot(-1, 5), Slot(-1, 6))))).GetProperty("errors").TryGetProperty("startUtc", out _));
-        Assert.True((await Json(await host.PostAsync("/api/v1/meetings", Meeting("No customer", Slot(12, 5), Slot(12, 6), category: "CUSTOMER_PLVC")))).GetProperty("errors").TryGetProperty("customerId", out _));
+        // PLVC (12 Nov 2026): without a customer record, participant rows are required (the first becomes the customer).
+        Assert.True((await Json(await host.PostAsync("/api/v1/meetings", Meeting("No customer", Slot(12, 5), Slot(12, 6), category: "CUSTOMER_PLVC")))).GetProperty("errors").TryGetProperty("participants", out _));
+        Assert.True((await Json(await host.PostAsync("/api/v1/meetings", Meeting("No customer", Slot(12, 5), Slot(12, 6), category: "CUSTOMER_GENERAL")))).GetProperty("errors").TryGetProperty("customerId", out _));
         Assert.True((await Json(await host.PostAsync("/api/v1/meetings", Meeting("Unknown employee", Slot(12, 5), Slot(12, 6), [Guid.NewGuid()])))).GetProperty("errors").TryGetProperty("employeeIds", out _));
         Assert.True((await Json(await host.PostAsync("/api/v1/meetings", Meeting("Bad guest", Slot(12, 5), Slot(12, 6), guests: [new { name = "G", email = "nope" }])))).GetProperty("errors").TryGetProperty("guests[0].email", out _));
 

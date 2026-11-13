@@ -46,7 +46,13 @@ function toForm(e: Employee): Form {
 }
 
 /** Add / edit drawer. `employee` null = closed, 'new' = add. The employee code is editable only when adding. */
-export function EmployeeFormDrawer({ employee, masters, onClose }: { employee: Employee | 'new' | null; masters: Masters | null; onClose: (savedId?: string) => void }) {
+export function EmployeeFormDrawer({ employee, masters, onClose, defaults }: {
+  employee: Employee | 'new' | null
+  masters: Masters | null
+  onClose: (savedId?: string) => void
+  /** Prefill when adding (e.g. the official e-mail of the user account the new employee is for). */
+  defaults?: Partial<Form>
+}) {
   const editing = employee && employee !== 'new' ? employee : null
   const [form, setForm] = useState<Form>(empty)
   const [manager, setManager] = useState<PickedEmployee | null>(null)
@@ -56,7 +62,7 @@ export function EmployeeFormDrawer({ employee, masters, onClose }: { employee: E
 
   useEffect(() => {
     if (!employee) return
-    setForm(editing ? toForm(editing) : empty)
+    setForm(editing ? toForm(editing) : { ...empty, ...defaults })
     setManager(editing?.reportingManagerId ? { id: editing.reportingManagerId, displayName: editing.reportingManagerName ?? 'Reporting manager' } : null)
     setErrors({})
     setError(null)

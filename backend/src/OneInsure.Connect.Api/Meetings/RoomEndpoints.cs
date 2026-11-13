@@ -1,4 +1,4 @@
-﻿using System.Data;
+using System.Data;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -83,6 +83,7 @@ public static class RoomEndpoints
         g.MapPost("/room/participants/{identity}/unmute-request", RequestUnmute);
         g.MapPost("/room/participants/{identity}/remove", Remove);
         g.MapPost("/room/end", End);
+        g.MapPost("/room/extend", Extend);
         g.MapPost("/room/host-transfer/{identity}", TransferHost);
         g.MapPost("/room/lock", SetLocked);
 
@@ -151,11 +152,13 @@ public static class RoomEndpoints
         return (new Caller(me, m, p), null);
     }
 
-    static object MeetingDto(RoomMeeting m, string? status = null) => new
+    static object MeetingDto(RoomServices s, RoomMeeting m, string? status = null) => new
     {
         id = m.PublicId, title = m.Title, meetingCode = m.MeetingCode, category = m.Category, categoryGroup = MeetingEndpoints.CategoryGroup(m.Category),
         status = status ?? m.Status, startUtc = m.StartUtc, endUtc = m.EndUtc, timeZoneId = m.TimeZoneId, hostName = m.HostName, waitingRoomEnabled = m.WaitingRoomEnabled,
         kind = m.MeetingKind, audioOnly = m.IsAudioOnly, locked = m.IsLocked,
+        // When the server ends the call by itself if nobody extends it (null = never; see MeetingAutoEndWorker).
+        autoEndUtc = MeetingAutoEnd.AutoEndUtc(m.EndUtc, s.Meetings),
     };
 
     /// <summary>A returning participant (already attended, or already sat in the waiting room before) is never turned away by
@@ -172,7 +175,11 @@ public static class RoomEndpoints
     static object Connection(RoomServices s, RoomMeeting m, RoomParticipant p, string name)
     {
         var isHost = IsHostRole(p.Role);
-        var screen = p.CanPublish && (isHost || p.CanScreenShare);
+        // Screen sharing in every meeting (12 Nov 2026, business decision): anyone allowed to speak may present - employees,
+        // customers and guests, in every category, audio-only included (audio-only removes the camera, never the screen).
+        // The per-participant CanScreenShare column is no longer consulted; whether the BROWSER can capture a screen is
+        // decided client-side (unsupported devices get an explanation instead of a broken button).
+        var screen = p.CanPublish;
         var metadata = JsonSerializer.Serialize(new { role = p.Role, type = p.Type });
         var (token, exp) = s.Tokens.CreateParticipantToken(new ParticipantGrant(m.LiveKitRoomName, p.Identity, name, metadata, p.CanPublish, screen, isHost, !m.IsAudioOnly), s.Clock.UtcNow);
         return new
@@ -230,18 +237,32 @@ public static class RoomEndpoints
         var ip = ClientInfo.From(ctx).Ip;
         if (IsHostRole(p.Role) && m.Status == "SCHEDULED")
         {
+            // Started early (allowed up to JoinEarlyMinutes before the start): the booked duration counts from the actual start,
+            // so the end-time countdown, the host's Extend/End prompt and the automatic end come after the length the organiser
+            // chose - not at the originally booked end (GoodDay CVPJMP, reopened 13 Nov: a 09:15-09:30 meeting started at 09:02
+            // showed nothing "after 15 minutes"). A late start keeps its booked end (the host is prompted to extend).
+            var early = now < m.StartUtc;
+            var duration = m.EndUtc - m.StartUtc;
             var started = await c.ExecuteAsync("""
-                UPDATE mtg.Meetings SET [Status] = 'LIVE', ActualStartUtc = COALESCE(ActualStartUtc, @now), ModifiedUtc = SYSUTCDATETIME(), ModifiedByUserId = @user
+                UPDATE mtg.Meetings SET [Status] = 'LIVE', ActualStartUtc = COALESCE(ActualStartUtc, @now),
+                    ScheduledStartUtc = CASE WHEN @early = 1 THEN @now ELSE ScheduledStartUtc END,
+                    ScheduledEndUtc = CASE WHEN @early = 1 THEN @newEnd ELSE ScheduledEndUtc END,
+                    ModifiedUtc = SYSUTCDATETIME(), ModifiedByUserId = @user
                 WHERE MeetingId = @id AND [Status] = 'SCHEDULED'
-                """, new { now, user = me.UserId, id = m.MeetingId });
+                """, new { now, user = me.UserId, id = m.MeetingId, early, newEnd = now + duration });
             if (started > 0)
-                await Audit.WriteAsync(c, "USER", me.UserId, "MEETING_STARTED", "Meeting", id.ToString(), "Meeting started (host joined)", ip);
+            {
+                await Audit.WriteAsync(c, "USER", me.UserId, "MEETING_STARTED", "Meeting", id.ToString(),
+                    early ? $"Meeting started early (host joined); the {(int)Math.Round(duration.TotalMinutes)}-minute slot now runs from the actual start" : "Meeting started (host joined)", ip,
+                    newValues: early ? new { bookedStartUtc = m.StartUtc, bookedEndUtc = m.EndUtc, startUtc = now, endUtc = now + duration } : null);
+                if (early) m = m with { StartUtc = now, EndUtc = now + duration };
+            }
             status = "LIVE";
         }
         var connection = Connection(s, m, p, p.Name);
         await Audit.WriteAsync(c, "USER", me.UserId, "MEETING_JOIN_TOKEN_ISSUED", "Meeting", id.ToString(), $"Room access granted ({p.Role.ToLowerInvariant()})", ip,
             newValues: new { participantId = p.Identity, role = p.Role, ttlMinutes = s.LiveKit.TokenTtlMinutes });
-        return Results.Ok(new { connection, meeting = MeetingDto(m, status) });
+        return Results.Ok(new { connection, meeting = MeetingDto(s, m, status) });
     }
 
     // ---- Waiting room (host side) --------------------------------------------------------------------------------
@@ -399,30 +420,54 @@ public static class RoomEndpoints
         var (caller, error) = await CallerAsync(c, id, ctx, hostOnly: true);
         if (caller is null) return error!;
         var m = caller.Meeting;
+        // Idempotent: a repeated "End for all" (double click, retry after a network drop) of a meeting that has already
+        // ended is a success, not an error - nothing is processed twice.
+        if (m.Status == "COMPLETED") return Results.NoContent();
         if (m.Status is not ("SCHEDULED" or "LIVE")) return Db_.Conflict("This meeting is not in progress.");
 
-        // Explicit stop rather than relying on the recorder noticing the room closed: a recording must never be left
-        // dangling in PROCESSING when the host ends the meeting.
-        if (await RecordingService.MeetingAsync(c, m.MeetingId) is { } recMeeting)
-            await recording.StopAsync(c, recMeeting, "Meeting ended", caller.Me.UserId, ClientInfo.From(ctx).Ip, ct);
-
-        try { await s.Rooms.DeleteRoomAsync(m.LiveKitRoomName, ct); }
+        try { await MeetingAutoEnd.CloseRoomAsync(c, m.MeetingId, m.LiveKitRoomName, s.Rooms, recording, caller.Me.UserId, ClientInfo.From(ctx).Ip, ct); }
         catch (LiveKitUnavailableException e) { return Unavailable(e.Message); }
 
-        var now = s.Clock.UtcNow;
         using var tx = c.BeginTransaction();
-        await c.ExecuteAsync("""
-            UPDATE mtg.Meetings SET [Status] = 'COMPLETED', ActualStartUtc = COALESCE(ActualStartUtc, @now),
-                ActualEndUtc = CASE WHEN ActualStartUtc IS NOT NULL AND ActualStartUtc > @now THEN ActualStartUtc ELSE @now END,
-                ModifiedUtc = SYSUTCDATETIME(), ModifiedByUserId = @user
-            WHERE MeetingId = @m AND [Status] IN ('SCHEDULED', 'LIVE');
-            UPDATE mtg.MeetingAttendance SET LeftUtc = CASE WHEN @now < JoinedUtc THEN JoinedUtc ELSE @now END, LeaveReason = 'MEETING_ENDED'
-            WHERE MeetingId = @m AND LeftUtc IS NULL;
-            UPDATE mtg.WaitingRoomEntries SET [Status] = 'LEFT' WHERE MeetingId = @m AND [Status] = 'WAITING';
-            """, new { now, user = caller.Me.UserId, m = m.MeetingId }, tx);
+        await MeetingAutoEnd.CompleteAsync(c, tx, m.MeetingId, s.Clock.UtcNow, caller.Me.UserId);
         await Audit.WriteAsync(c, "USER", caller.Me.UserId, "MEETING_ENDED", "Meeting", id.ToString(), "Host ended the meeting for everyone", ClientInfo.From(ctx).Ip, tx);
         tx.Commit();
         return Results.NoContent();
+    }
+
+    public sealed record ExtendInput(int Minutes);
+
+    /// <summary>
+    /// Host/co-host: pushes the scheduled end of a LIVE meeting back by 5-<see cref="MeetingOptions.MaxExtendMinutes"/> minutes
+    /// (from the later of the current end and now), which also moves the automatic end. Everyone in the room is told at once.
+    /// </summary>
+    static async Task<IResult> Extend(Guid id, ExtendInput input, RoomServices s, HttpContext ctx, CancellationToken ct)
+    {
+        using var c = await s.Db.OpenAsync(ct);
+        var (caller, error) = await CallerAsync(c, id, ctx, hostOnly: true);
+        if (caller is null) return error!;
+        var m = caller.Meeting;
+        if (input.Minutes < 5 || input.Minutes > s.Meetings.MaxExtendMinutes)
+            return Problems.Create(400, "VALIDATION_FAILED", $"Choose between 5 and {s.Meetings.MaxExtendMinutes} minutes.");
+        var now = s.Clock.UtcNow;
+        var newEnd = (m.EndUtc > now ? m.EndUtc : now).AddMinutes(input.Minutes);
+        if (newEnd - m.StartUtc > TimeSpan.FromHours(s.Meetings.MaxDurationHours))
+            return Db_.Conflict($"A meeting cannot run longer than {s.Meetings.MaxDurationHours} hours.");
+        using (var tx = c.BeginTransaction())
+        {
+            var n = await c.ExecuteAsync("""
+                UPDATE mtg.Meetings SET ScheduledEndUtc = @newEnd, ModifiedUtc = SYSUTCDATETIME(), ModifiedByUserId = @user
+                WHERE MeetingId = @m AND [Status] = 'LIVE'
+                """, new { newEnd, user = caller.Me.UserId, m = m.MeetingId }, tx);
+            if (n == 0) { tx.Rollback(); return Db_.Conflict("This meeting is not in progress."); }
+            await Audit.WriteAsync(c, "USER", caller.Me.UserId, "MEETING_EXTENDED", "Meeting", id.ToString(),
+                $"Host extended the meeting by {input.Minutes} min (ends {newEnd:yyyy-MM-dd HH:mm} UTC)", ClientInfo.From(ctx).Ip, tx,
+                newValues: new { previousEndUtc = m.EndUtc, endUtc = newEnd });
+            tx.Commit();
+        }
+        var autoEndUtc = MeetingAutoEnd.AutoEndUtc(newEnd, s.Meetings);
+        await s.Rooms.TrySendDataAsync(m.LiveKitRoomName, NoticeTopic, new { type = "end-changed", endUtc = newEnd, autoEndUtc, minutes = input.Minutes }, null, ct);
+        return Results.Ok(new { endUtc = newEnd, autoEndUtc });
     }
 
     /// <summary>
@@ -595,7 +640,7 @@ public static class RoomEndpoints
         if (!admission)
         {
             if (await EnsureRoomAsync(s, m, ct) is { } unavailable) return unavailable;
-            return Results.Ok(new { status = "ADMITTED", connection = Connection(s, m, p, name), meeting = MeetingDto(m) });
+            return Results.Ok(new { status = "ADMITTED", connection = Connection(s, m, p, name), meeting = MeetingDto(s, m) });
         }
 
         var last = await c.QuerySingleOrDefaultAsync<(long EntryId, string Status, DateTime? DecidedUtc)?>("""
@@ -611,7 +656,7 @@ public static class RoomEndpoints
         if (last is { Status: "ADMITTED" })
         {
             if (await EnsureRoomAsync(s, m, ct) is { } reEnterUnavailable) return reEnterUnavailable;
-            return Results.Ok(new { status = "ADMITTED", connection = Connection(s, m, p, name), meeting = MeetingDto(m) });
+            return Results.Ok(new { status = "ADMITTED", connection = Connection(s, m, p, name), meeting = MeetingDto(s, m) });
         }
 
         long entryId;
@@ -638,7 +683,7 @@ public static class RoomEndpoints
                 ClientInfo.From(ctx).Ip, newValues: new { participantId = p.Identity });
             await SignalWaitingChangedAsync(s, c, m, ct);
         }
-        return Results.Json(new { status = "WAITING", entryId = s.Ids.Protect(entryId, name), pollAfterMs = 3000, name, meeting = MeetingDto(m) }, statusCode: 202);
+        return Results.Json(new { status = "WAITING", entryId = s.Ids.Protect(entryId, name), pollAfterMs = 3000, name, meeting = MeetingDto(s, m) }, statusCode: 202);
     }
 
     /// <summary>GET /join/{token}/entry/{entryId} — WAITING, ADMITTED (with the LiveKit connection), REJECTED, LEFT or ENDED.</summary>
@@ -663,7 +708,7 @@ public static class RoomEndpoints
         }
         if (!s.LiveKit.IsConfigured) return Unavailable();
         if (await EnsureRoomAsync(s, m, ct) is { } unavailable) return unavailable;
-        return Results.Ok(new { status = "ADMITTED", connection = Connection(s, m, p, name ?? p.Name), meeting = MeetingDto(m) });
+        return Results.Ok(new { status = "ADMITTED", connection = Connection(s, m, p, name ?? p.Name), meeting = MeetingDto(s, m) });
     }
 
     static async Task<IResult> GuestLeave(string token, string entryId, RoomServices s, CancellationToken ct)

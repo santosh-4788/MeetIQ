@@ -136,7 +136,7 @@ public sealed class MeetingLinkTests(ApiFixture fx)
         var claims = Claims(admitted.GetProperty("connection").GetProperty("token").GetString()!);
         Assert.Equal("Lata Link", claims.GetProperty("name").GetString());
         Assert.False(claims.GetProperty("video").GetProperty("roomAdmin").GetBoolean());
-        Assert.DoesNotContain("screen_share", Sources(claims));
+        Assert.Contains("screen_share", Sources(claims)); // 12 Nov 2026: screen sharing for everyone who can speak, guests included
         Assert.Equal(HttpStatusCode.OK, (await guest.Http.GetAsync($"/api/v1/join/{personal}/chat")).StatusCode);
         Assert.Equal(1, await Count("SELECT COUNT(*) FROM mtg.MeetingParticipants p JOIN mtg.Meetings m ON m.MeetingId = p.MeetingId WHERE m.PublicId = @id AND p.JoinSource = 'LINK' AND p.AdmissionRequired = 1 AND p.ParticipantType = 'GUEST'", new { id = m.Id }));
         Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE EntityId = @id AND [Action] = 'MEETING_LINK_USED'", new { id = m.Id.ToString() }));

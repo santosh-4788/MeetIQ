@@ -9,6 +9,7 @@ using OneInsure.Connect.Api.Dashboard;
 using OneInsure.Connect.Api.Email;
 using OneInsure.Connect.Api.Employees;
 using OneInsure.Connect.Api.Infrastructure;
+using OneInsure.Connect.Api.Integrations;
 using OneInsure.Connect.Api.Meetings;
 using OneInsure.Connect.Api.Org;
 using OneInsure.Connect.Api.Recording;
@@ -32,6 +33,9 @@ if (string.IsNullOrWhiteSpace(connectionString))
         "Server: environment variable ConnectionStrings__OneInsure. It is never stored in appsettings.");
 
 builder.Services.Configure<SecurityOptions>(builder.Configuration.GetSection("Security"));
+builder.Services.Configure<DailyLogoutOptions>(builder.Configuration.GetSection("Security:DailyLogout"));
+builder.Services.AddSingleton<DailyLogoutService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<DailyLogoutService>());
 builder.Services.Configure<PublicEndpointOptions>(builder.Configuration.GetSection("PublicEndpoints"));
 builder.Services.AddSingleton(new Db(connectionString));
 builder.Services.AddSingleton<IClock, SystemClock>();
@@ -49,6 +53,8 @@ builder.Services.AddSingleton<ReminderWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ReminderWorker>());
 builder.Services.AddSingleton<MeetingExpiryWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MeetingExpiryWorker>());
+builder.Services.AddSingleton<MeetingAutoEndWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<MeetingAutoEndWorker>());
 builder.Services.AddMemoryCache();
 // Phase 4 — video room. LiveKit:ApiKey/ApiSecret only from user secrets or environment variables; missing → join endpoints answer 503.
 builder.Services.Configure<LiveKitOptions>(builder.Configuration.GetSection("LiveKit"));
@@ -68,6 +74,18 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<RecorderWorker>())
 builder.Services.AddSingleton<RetentionWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RetentionWorker>());
 builder.Services.AddScoped<RecordingService>();
+// External integration API (12 Nov 2026): API keys per portal, webhooks, OpenAPI document for /api/ext/v1.
+builder.Services.Configure<IntegrationOptions>(builder.Configuration.GetSection("Integrations"));
+builder.Services.AddScoped<ExternalApiEndpoints.ExtServices>();
+builder.Services.AddHttpClient(WebhookWorker.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(10))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false }); // no redirects: the SSRF check covers the URL actually called
+builder.Services.AddSingleton<WebhookWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<WebhookWorker>());
+builder.Services.AddOpenApi(ExternalApiEndpoints.DocumentName, o =>
+{
+    o.ShouldInclude = d => d.GroupName == ExternalApiEndpoints.DocumentName;
+    o.AddDocumentTransformer<ExternalApiDocument>();
+});
 // Development only: LiveKit cannot trust the self-signed https dev certificate, so its webhooks arrive on an extra
 // plain-http listener bound to loopback that serves only the webhook path (LiveKit:WebhookListenUrl, e.g. http://127.0.0.1:5080).
 // A second API instance on the same PC (e.g. a test instance) skips the listener instead of failing to start.
@@ -145,6 +163,7 @@ if (webhookListener is not null)
 if (!app.Environment.IsDevelopment()) app.UseHsts();
 app.UseSecurityHeaders();
 app.UseCsrfProtection();
+app.UseExternalApi();
 app.UseAuthentication();
 app.UseRateLimiter();
 app.UseAuthorization();
@@ -152,6 +171,7 @@ app.UsePendingPasswordChangeGate();
 
 var api = app.MapGroup("/api/v1");
 api.MapAuthEndpoints();
+api.MapDailyLogoutEndpoints();
 api.MapAccountEndpoints();
 api.MapOrgEndpoints();
 api.MapEmployeeEndpoints();
@@ -169,6 +189,9 @@ api.MapRecordingRoomEndpoints();
 api.MapRecordingLibraryEndpoints();
 api.MapReportsEndpoints();
 api.MapAuditEndpoints();
+api.MapIntegrationAdminEndpoints();
+app.MapExternalApi();
+app.MapOpenApi("/api/ext/openapi/{documentName}.json");
 api.MapGet("/health", async (Db db, CancellationToken ct) =>
 {
     try

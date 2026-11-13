@@ -17,14 +17,22 @@ internal sealed record RecMeeting(long MeetingId, Guid PublicId, string MeetingC
 
 internal sealed record RecParticipant(long ParticipantId, string Identity, string Role, string Type, string Name);
 
-internal sealed record ActiveRecording(long RecordingId, Guid PublicId, string Status, DateTime? StartedUtc, DateTime CreatedUtc, string? PolicyCode);
+internal sealed record ActiveRecording(long RecordingId, Guid PublicId, string Status, DateTime? StartedUtc, DateTime CreatedUtc, string? PolicyCode, string? JobState)
+{
+    /// <summary>A stop was requested and the recorder is ending capture: the row is still PENDING/RECORDING (it keeps the one-active-recording
+    /// slot so no second recorder can start), but the meeting is told "STOPPING" at once instead of "RECORDING".</summary>
+    public bool Stopping => JobState == "STOPPING";
+    public string EffectiveStatus => Stopping ? "STOPPING" : Status;
+}
 
 internal sealed record ConsentRow(long ParticipantId, string Identity, string Role, string Type, string Name, string? Decision);
 
 /// <summary>Outcome of a start attempt: either a recording id or a refusal (HTTP status, problem code, message).</summary>
-internal sealed record StartResult(Guid? RecordingId, int Status, string Code, string Message)
+internal sealed record StartResult(Guid? RecordingId, int Status, string Code, string Message, Guid? RequestId = null)
 {
     public static StartResult Ok(Guid id) => new(id, 200, "STARTED", "Recording started.");
+    /// <summary>Consent is still needed: a consent request is open and every participant has been asked (nothing is recording yet).</summary>
+    public static StartResult Requested(Guid requestId) => new(null, 200, "CONSENT_REQUESTED", "Every participant has been asked to accept recording.", requestId);
     public static StartResult No(int status, string code, string message) => new(null, status, code, message);
 }
 
@@ -33,11 +41,13 @@ internal sealed record StartResult(Guid? RecordingId, int Status, string Code, s
 /// IP, user agent and an evidence hash), start/stop, automatic start for mandatory recording, and the live REC state pushed to every
 /// participant over LiveKit (room metadata for late joiners + a data message on topic "oic.recording").
 /// </summary>
-public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService rooms, RecorderHealth health, RecorderWorker worker,
+public sealed partial class RecordingService(Db db, IClock clock, LiveKitRoomService rooms, RecorderHealth health, RecorderWorker worker,
     IOptions<RecordingOptions> options, IOptions<LiveKitOptions> liveKit, ILogger<RecordingService> log)
 {
     public const string Topic = "oic.recording";
     internal Db Db => db;
+    IClock Clock => clock;
+    LiveKitRoomService Rooms => rooms;
     RecordingOptions O => options.Value;
 
     internal const string MeetingColumns = """
@@ -50,8 +60,9 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
 
     internal static Task<ActiveRecording?> ActiveAsync(IDbConnection c, long meetingId, IDbTransaction? tx = null) =>
         c.QuerySingleOrDefaultAsync<ActiveRecording>("""
-            SELECT RecordingId, PublicId, [Status], StartedUtc, CreatedUtc, PolicyCode FROM rec.MeetingRecordings
-            WHERE MeetingId = @meetingId AND [Status] IN ('PENDING', 'RECORDING')
+            SELECT r.RecordingId, r.PublicId, r.[Status], r.StartedUtc, r.CreatedUtc, r.PolicyCode, j.[State] AS JobState
+            FROM rec.MeetingRecordings r LEFT JOIN rec.RecordingJobs j ON j.RecordingId = r.RecordingId
+            WHERE r.MeetingId = @meetingId AND r.[Status] IN ('PENDING', 'RECORDING')
             """, new { meetingId }, tx);
 
     /// <summary>Every participant of the meeting with their latest consent decision for the CURRENT notice version.</summary>
@@ -118,6 +129,8 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
         var rows = await ConsentRowsAsync(c, m.MeetingId, p.NoticeVersion);
         var mine = me is null ? null : rows.FirstOrDefault(r => r.ParticipantId == me.ParticipantId)?.Decision;
         var refusal = await RefusalAsync(c, m, mp);
+        var request = await RequestViewAsync(c, m, me, isHost, ct);
+        var lastRequest = request is null ? await LastClosedRequestAsync(c, m.MeetingId) : null;
         object? consent = null;
         if (isHost)
         {
@@ -130,7 +143,10 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
                 pending = check.Pending.Select(r => r.Name), declined = check.Declined.Select(r => r.Name),
                 // Per-participant breakdown so the host can see, at a glance in the Participants panel (not only in the
                 // start-recording dialog), who has granted/declined/not yet responded - keyed by LiveKit identity.
-                decisions = check.Required.Select(r => new { identity = r.Identity, name = r.Name, decision = r.Decision ?? "PENDING" }),
+                // While a consent request is open, the breakdown is that request's (GRANTED/PENDING/DENIED/DISCONNECTED).
+                decisions = request is not null
+                    ? request.Members.Select(x => (object)new { identity = x.Identity, name = x.Name, decision = x.Status })
+                    : check.Required.Select(r => (object)new { identity = r.Identity, name = r.Name, decision = r.Decision ?? "PENDING" }),
             };
         }
         return new
@@ -140,16 +156,19 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
             unavailableCode = refusal?.Code,
             policy = new
             {
-                code = p.PolicyCode, title = p.Title, name = p.PolicyName, version = p.PolicyVersion, confirmed = p.IsConfirmed,
+                code = p.PolicyCode, title = p.Title, name = p.PolicyName, version = p.PolicyVersion, confirmed = p.NoticeConfirmed,
                 requirement = mp.EffectiveRequirement, consentMode = p.ConsentMode, noticeText = p.NoticeText, noticeVersion = p.NoticeVersion,
                 consentFromAll = p.ConsentFromAll, stopOnWithdrawal = p.StopOnWithdrawal,
             },
-            recording = active is null ? null : new { id = active.PublicId, status = active.Status, startedUtc = active.StartedUtc, createdUtc = active.CreatedUtc },
+            recording = active is null ? null : new { id = active.PublicId, status = active.EffectiveStatus, startedUtc = active.StartedUtc, createdUtc = active.CreatedUtc },
             lastRecording = last is null ? null : new { id = last.Value.PublicId, status = last.Value.Status, reason = last.Value.FailureReason ?? last.Value.StopReason },
             myConsent = mine,
+            request = request?.Body,
+            lastRequest,
             isHost,
-            canStart = isHost && active is null && refusal is null && m.Status == "LIVE",
-            canStop = isHost && active is not null && mp.EffectiveRequirement != "MANDATORY",
+            canStart = isHost && active is null && request is null && refusal is null && m.Status == "LIVE",
+            canCancelRequest = isHost && request is not null,
+            canStop = isHost && active is not null && !active.Stopping && mp.EffectiveRequirement != "MANDATORY",
             consent,
         };
     }
@@ -171,7 +190,7 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
     // ---- Consent --------------------------------------------------------------------------------------------------------
 
     /// <summary>Appends a decision to mtg.MeetingConsent. The evidence hash covers who, what, which wording (its SHA-256), when, IP and user agent.</summary>
-    internal async Task RecordConsentAsync(IDbConnection c, IDbTransaction? tx, RecMeeting m, RecParticipant p, PolicyRow policy, string decision, ClientInfo client, string actorType, long? userId)
+    internal async Task<long> RecordConsentAsync(IDbConnection c, IDbTransaction? tx, RecMeeting m, RecParticipant p, PolicyRow policy, string decision, ClientInfo client, string actorType, long? userId)
     {
         var at = clock.UtcNow;
         var evidence = JsonSerializer.Serialize(new
@@ -181,13 +200,15 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
             utc = at.ToString("O"), ip = client.Ip, userAgent = client.UserAgent,
         });
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(evidence));
-        await c.ExecuteAsync("""
+        var consentId = await c.ExecuteScalarAsync<long>("""
             INSERT mtg.MeetingConsent (MeetingId, ParticipantId, ConsentType, NoticeVersion, Decision, DecisionUtc, IpAddress, UserAgent, EvidenceHash)
-            VALUES (@m, @p, 'RECORDING', @version, @decision, @at, @ip, @ua, @hash)
+            VALUES (@m, @p, 'RECORDING', @version, @decision, @at, @ip, @ua, @hash);
+            SELECT CAST(SCOPE_IDENTITY() AS BIGINT);
             """, new { m = m.MeetingId, p = p.ParticipantId, version = policy.NoticeVersion, decision, at, ip = client.Ip, ua = client.UserAgent, hash }, tx);
         await Audit.WriteAsync(c, actorType, userId, "RECORDING_CONSENT_" + decision, "Meeting", m.PublicId.ToString(),
             $"Recording {(policy.ConsentMode == "CONSENT_REQUIRED" ? "consent" : "notice acknowledgement")}: {decision.ToLowerInvariant()} ({p.Type.ToLowerInvariant()})", client.Ip, tx,
             newValues: new { participantId = p.Identity, decision, noticeVersion = policy.NoticeVersion, evidenceSha256 = Convert.ToHexStringLower(hash) });
+        return consentId;
     }
 
     /// <summary>A participant's decision; withdrawal/denial stops a running recording when the policy says so; a grant may auto-start a mandatory recording.</summary>
@@ -206,7 +227,16 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
             return Problems.Create(409, "NOTICE_CHANGED", "The recording notice has changed. Please read the current notice and answer again.",
                 new Dictionary<string, object?> { ["noticeVersion"] = mp.Policy.NoticeVersion });
         if (m.Status is not ("SCHEDULED" or "LIVE")) return Db_.Conflict("This meeting is not in progress.");
-        await RecordConsentAsync(c, null, m, p, mp.Policy, decision, ClientInfo.From(ctx), actorType, userId);
+        // A repeated identical answer (double click, a retry after a network error) is not a new decision: the evidence row
+        // already exists, so it is reused rather than appended again.
+        var latest = await c.QuerySingleOrDefaultAsync<(long ConsentId, string Decision)?>("""
+            SELECT TOP (1) ConsentId, Decision FROM mtg.MeetingConsent WHERE MeetingId = @m AND ParticipantId = @p AND ConsentType = 'RECORDING' AND NoticeVersion = @v
+            ORDER BY DecisionUtc DESC, ConsentId DESC
+            """, new { m = m.MeetingId, p = p.ParticipantId, v = mp.Policy.NoticeVersion });
+        var consentId = latest is { } l && l.Decision == decision ? l.ConsentId
+            : await RecordConsentAsync(c, null, m, p, mp.Policy, decision, ClientInfo.From(ctx), actorType, userId);
+        // The host's consent request (if one is open): this answer is this person's answer to it.
+        await AnswerRequestAsync(c, m, p, decision, consentId, actorType, userId, ClientInfo.From(ctx).Ip, ct);
 
         if (decision != "GRANTED" && mp.Policy.ConsentMode == "CONSENT_REQUIRED" && mp.Policy.StopOnWithdrawal && await ActiveAsync(c, m.MeetingId) is not null)
             await StopAsync(c, m, $"Recording consent {(decision == "WITHDRAWN" ? "withdrawn" : "declined")} by a participant", null, ClientInfo.From(ctx).Ip, ct);
@@ -217,7 +247,8 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
 
     // ---- Start / stop ---------------------------------------------------------------------------------------------------
 
-    internal async Task<StartResult> StartAsync(IDbConnection c, RecMeeting m, RecParticipant? starter, long? userId, bool acceptNotice, string? noticeVersion, HttpContext? ctx, CancellationToken ct)
+    internal async Task<StartResult> StartAsync(IDbConnection c, RecMeeting m, RecParticipant? starter, long? userId, bool acceptNotice, string? noticeVersion, HttpContext? ctx, CancellationToken ct,
+        long? fromRequestId = null)
     {
         if (m.Status != "LIVE") return StartResult.No(409, "CONFLICT", "Recording can start once the meeting is live (a host has joined).");
         var mp = await RecordingPolicyStore.ForMeetingAsync(c, m.Category, m.MeetingRecordingPolicy);
@@ -233,14 +264,27 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
                 await RecordConsentAsync(c, null, m, starter, p, "GRANTED", ctx is null ? new ClientInfo(null, null) : ClientInfo.From(ctx), "USER", userId);
         }
         if (await ActiveAsync(c, m.MeetingId) is not null) return StartResult.No(409, "ALREADY_RECORDING", "This meeting is already being recorded.");
+        // A consent request is already waiting for answers: pressing Start again returns it (no second request, no recording yet).
+        if (fromRequestId is null && starter is not null && await OpenRequestAsync(c, m, ct) is { } waiting)
+            return StartResult.Requested(waiting.PublicId);
 
         var present = await PresentAsync(c, m, ct);
         var rows = await ConsentRowsAsync(c, m.MeetingId, p.NoticeVersion);
         var check = CheckConsent(p, rows, present, starter?.ParticipantId);
         // The shared policy gate (the same code the R2 recorder runs again before it joins the room).
         var decision = RecordingPolicyGate.Evaluate(p.ToGate(mp.Kind), O.DeploymentEnvironment, mp.Kind, check.Ok);
+        // The shared gate only knows "consent from ALL participants". A consent-required policy limited to the person starting
+        // (or, for an automatic start, the hosts) must be enforced here too, or a client could start without that consent.
+        if (decision.Allowed && p.ConsentMode == "CONSENT_REQUIRED" && !check.Ok)
+            decision = new PolicyDecision(false, "CONSENT_MISSING", "Recording consent has not been given by everyone required.");
         if (!decision.Allowed)
         {
+            // A host asked to record but someone's consent is missing: open a consent request. It is stored (rec.RecordingRequests),
+            // so every participant - including guests and anyone who joins or reconnects while it is pending - is asked from the
+            // server's state, not only by a one-off message. Recording starts when everyone in it has accepted (EvaluateRequestAsync).
+            // The policy itself is unchanged: recording still needs everyone's consent.
+            if (decision.Code == "CONSENT_MISSING" && starter is not null && fromRequestId is null && p.ConsentMode == "CONSENT_REQUIRED")
+                return StartResult.Requested(await OpenOrCreateRequestAsync(c, m, starter, userId, p, present, ctx is null ? null : ClientInfo.From(ctx).Ip, ct));
             var who = check.Pending.Count + check.Declined.Count > 0
                 ? $" Waiting for: {string.Join(", ", check.Pending.Concat(check.Declined).Select(r => r.Name).Distinct())}." : "";
             return StartResult.No(409, decision.Code, decision.Code == "CONSENT_MISSING" ? $"Recording consent has not been given by everyone required.{who}" : decision.Message);
@@ -253,9 +297,11 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
             {
                 var created = await c.QuerySingleAsync<(long Id, Guid PublicId)>("""
                     DECLARE @out TABLE (RecordingId BIGINT, PublicId UNIQUEIDENTIFIER); -- OUTPUT INTO: the table has a trigger
-                    INSERT rec.MeetingRecordings (MeetingId, OwnerEmployeeId, CustomerId, [Status], CreatedByUserId, StartedByUserId, PolicyCode, PolicyVersion, PolicySnapshotJson)
+                    INSERT rec.MeetingRecordings (MeetingId, OwnerEmployeeId, CustomerId, [Status], CreatedByUserId, StartedByUserId, PolicyCode, PolicyVersion, PolicySnapshotJson,
+                        PrarambhMainId, IntegrationId)
                     OUTPUT inserted.RecordingId, inserted.PublicId INTO @out
-                    VALUES (@m, @owner, @customer, 'PENDING', @user, @user, @code, @version, @snapshot);
+                    SELECT @m, @owner, @customer, 'PENDING', @user, @user, @code, @version, @snapshot, mm.PrarambhMainId, mm.IntegrationId
+                    FROM mtg.Meetings mm WHERE mm.MeetingId = @m;
                     SELECT RecordingId, PublicId FROM @out;
                     """, new
                 {
@@ -266,7 +312,9 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
                 await c.ExecuteAsync("INSERT rec.RecordingJobs (RecordingId, IdempotencyKey, Engine) VALUES (@id, @key, 'R2_CHROMIUM')",
                     new { id = created.Id, key = $"rec:{created.PublicId:N}" }, tx);
                 await Audit.WriteAsync(c, userId is null ? "SYSTEM" : "USER", userId, "RECORDING_STARTED", "Recording", created.PublicId.ToString(),
-                    userId is null ? "Mandatory recording started automatically" : "Host started recording", ctx is null ? null : ClientInfo.From(ctx).Ip, tx,
+                    userId is null ? "Mandatory recording started automatically"
+                        : fromRequestId is null ? "Host started recording" : "Host started recording: every participant accepted the recording request",
+                    ctx is null ? null : ClientInfo.From(ctx).Ip, tx,
                     newValues: new { meeting = m.PublicId, policy = p.PolicyCode, requirement = mp.EffectiveRequirement });
                 tx.Commit();
                 publicId = created.PublicId;
@@ -285,14 +333,18 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
     /// <summary>Asks the recorder to stop (it finalises and verifies the file), or cancels a job the recorder has not picked up yet.</summary>
     internal async Task<bool> StopAsync(IDbConnection c, RecMeeting m, string reason, long? userId, string? ip, CancellationToken ct)
     {
+        // A consent request still waiting for answers is withdrawn too (host pressed Stop/Cancel, or the meeting ended).
+        var cancelled = await c.QuerySingleOrDefaultAsync<RequestRow>(RequestSelect + " WHERE r.MeetingId = @m AND r.[Status] = 'OPEN'", new { m = m.MeetingId }) is { } open
+            && await CloseRequestAsync(c, m, open, "CANCELLED", reason == "Stopped by the host" ? "Cancelled by the host" : reason, userId, ip, ct);
         var active = await ActiveAsync(c, m.MeetingId);
-        if (active is null) return false;
+        if (active is null) return cancelled;
+        if (active.Stopping) return true; // already stopping: a repeated stop (double click, retry after a timeout) is a no-op
         using (var tx = c.BeginTransaction())
         {
-            var cancelled = await c.ExecuteAsync("""
+            var unclaimed = await c.ExecuteAsync("""
                 UPDATE rec.RecordingJobs SET [State] = 'FAILED', LastError = @reason, ModifiedUtc = SYSUTCDATETIME() WHERE RecordingId = @r AND [State] = 'QUEUED';
                 """, new { r = active.RecordingId, reason }, tx);
-            if (cancelled > 0)
+            if (unclaimed > 0)
                 await c.ExecuteAsync("""
                     UPDATE rec.MeetingRecordings SET [Status] = 'FAILED', FailureReason = N'Stopped before the recorder started.', StopReason = @reason, EndedUtc = SYSUTCDATETIME(), ModifiedUtc = SYSUTCDATETIME(), ModifiedByUserId = @userId
                     WHERE RecordingId = @r AND [Status] = 'PENDING'
@@ -305,7 +357,7 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
             await Audit.WriteAsync(c, userId is null ? "SYSTEM" : "USER", userId, "RECORDING_STOP_REQUESTED", "Recording", active.PublicId.ToString(), reason.Length > 400 ? reason[..400] : reason, ip, tx);
             tx.Commit();
         }
-        await BroadcastAsync(c, rooms, m.MeetingId, ct, stopping: true);
+        await BroadcastAsync(c, rooms, m.MeetingId, ct);
         worker.Kick();
         return true;
     }
@@ -327,13 +379,15 @@ public sealed class RecordingService(Db db, IClock clock, LiveKitRoomService roo
     }
 
     /// <summary>Pushes the meeting's recording state to everyone in the room: room metadata (late joiners) + a data message (now).</summary>
-    internal static async Task BroadcastAsync(IDbConnection c, LiveKitRoomService rooms, long meetingId, CancellationToken ct, bool stopping = false)
+    internal static async Task BroadcastAsync(IDbConnection c, LiveKitRoomService rooms, long meetingId, CancellationToken ct)
     {
         var m = await MeetingAsync(c, meetingId);
         if (m is null) return;
         var active = await ActiveAsync(c, meetingId);
-        var status = active is null ? "OFF" : stopping ? "STOPPING" : active.Status;
-        var state = new { oicRecording = new { status, id = active?.PublicId, startedUtc = active?.StartedUtc, atUtc = DateTime.UtcNow } };
+        var status = active is null ? "OFF" : active.EffectiveStatus;
+        // The open consent request travels in the room metadata too, so a participant who joins or reconnects is told at once.
+        var request = await c.ExecuteScalarAsync<Guid?>("SELECT PublicId FROM rec.RecordingRequests WHERE MeetingId = @meetingId AND [Status] = 'OPEN'", new { meetingId });
+        var state = new { oicRecording = new { status, id = active?.PublicId, startedUtc = active?.StartedUtc, request, atUtc = DateTime.UtcNow } };
         await rooms.TryUpdateRoomMetadataAsync(m.LiveKitRoomName, JsonSerializer.Serialize(state), ct);
         await rooms.TrySendDataAsync(m.LiveKitRoomName, Topic, new { type = "recording-changed", status }, null, ct);
     }

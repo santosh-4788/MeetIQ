@@ -24,6 +24,7 @@ public static class RecordingRoomEndpoints
         g.MapPost("/start", Start);
         g.MapPost("/stop", Stop);
         g.MapPost("/consent", Consent);
+        g.MapPost("/request/remove", RemoveFromRequest);
 
         var j = api.MapGroup("/join/{token}/recording");
         j.MapGet("", GuestState).RequireRateLimiting(RoomEndpoints.GuestRateLimit);
@@ -64,7 +65,9 @@ public static class RecordingRoomEndpoints
         if (caller is null) return error!;
         if (!caller.IsHost) return Problems.Create(403, "FORBIDDEN", "Only the host or a co-host can start recording.");
         var r = await s.StartAsync(c, caller.Meeting, caller.Participant, caller.Me.UserId, input?.AcceptNotice ?? false, input?.NoticeVersion, ctx, ct);
-        if (r.RecordingId is null) return Problems.Create(r.Status, r.Code, r.Message);
+        // Started, or (consent still needed) a consent request is open and everyone has been asked: either way the caller gets the
+        // meeting's actual recording state (recording / request), never an optimistic one.
+        if (r.RecordingId is null && r.RequestId is null) return Problems.Create(r.Status, r.Code, r.Message);
         return Results.Ok(await s.StateAsync(c, caller.Meeting, caller.Participant, true, ct));
     }
 
@@ -77,9 +80,31 @@ public static class RecordingRoomEndpoints
         var mp = await RecordingPolicyStore.ForMeetingAsync(c, caller.Meeting.Category, caller.Meeting.MeetingRecordingPolicy);
         if (mp?.EffectiveRequirement == "MANDATORY")
             return Problems.Create(409, "RECORDING_MANDATORY", "Recording is mandatory for this meeting and stops when the meeting ends.");
-        if (!await s.StopAsync(c, caller.Meeting, "Stopped by the host", caller.Me.UserId, ClientInfo.From(ctx).Ip, ct))
-            return Db_.Conflict("This meeting is not being recorded.");
+        // Idempotent: stopping a recording that has already stopped (double click, a retry after a network error, another host
+        // stopping it first) is not an error - the caller simply gets the meeting's actual recording state back.
+        await s.StopAsync(c, caller.Meeting, "Stopped by the host", caller.Me.UserId, ClientInfo.From(ctx).Ip, ct);
         return Results.Ok(await s.StateAsync(c, caller.Meeting, caller.Participant, true, ct));
+    }
+
+    public sealed record RemoveInput(string? Identity);
+
+    /// <summary>Host only: takes a participant who has left (Disconnected, not accepted) out of the pending consent request.</summary>
+    static async Task<IResult> RemoveFromRequest(Guid id, RemoveInput input, RecordingService s, HttpContext ctx, CancellationToken ct)
+    {
+        using var c = await s.Db.OpenAsync(ct);
+        var (caller, error) = await CallerAsync(c, id, ctx);
+        if (caller is null) return error!;
+        if (!caller.IsHost) return Problems.Create(403, "FORBIDDEN", "Only the host or a co-host can change the recording request.");
+        if (string.IsNullOrWhiteSpace(input.Identity) || input.Identity.Length > 100)
+        {
+            var v = new Validator();
+            v.Add("identity", "Identity is required.");
+            return v.Problem();
+        }
+        if (await s.RemoveRequestMemberAsync(c, caller.Meeting, input.Identity, caller.Me.UserId, ClientInfo.From(ctx).Ip, ct) is { } problem)
+            return Problems.Create(409, "CONFLICT", problem);
+        var m = (await RecordingService.MeetingAsync(c, caller.Meeting.MeetingId))!;
+        return Results.Ok(await s.StateAsync(c, m, caller.Participant, true, ct));
     }
 
     static async Task<IResult> Consent(Guid id, ConsentInput input, RecordingService s, HttpContext ctx, CancellationToken ct)

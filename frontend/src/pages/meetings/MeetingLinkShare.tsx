@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Check, Clock, Copy, Link2, Link2Off, Mail, RefreshCw, Repeat, Share2, Users } from 'lucide-react'
-import { meetingsApi, type MeetingLink } from '../../api/meetings'
+import { Check, Clock, Copy, Link2, Link2Off, Mail, MessageCircle, RefreshCw, Repeat, Send, Share2, Users } from 'lucide-react'
+import { invitationEmailsApi, meetingsApi, type CustomerJoinLink, type InvitationEmailState, type MeetingLink } from '../../api/meetings'
 import { errorMessage } from '../../api/types'
 import { Card, CardHeader } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
@@ -70,6 +70,9 @@ export function LinkShareBox({ link, title, isRecurring, onReplace, onWithdraw }
       <div className="flex flex-wrap gap-2">
         <a
           className="inline-flex h-9 items-center gap-1.5 rounded-md border border-line bg-surface px-3.5 text-[13px] font-medium text-ink transition-colors hover:border-line-strong hover:bg-surface-muted"
+          // A new browsing context: opening the mail app must never unload the page (this dialog is used inside a live call).
+          target="_blank"
+          rel="noopener noreferrer"
           href={`mailto:?subject=${encodeURIComponent(`Meeting invitation: ${title}`)}&body=${encodeURIComponent(invitationText(title, link.url))}`}
         >
           <Mail className="size-3.5" /> E-mail
@@ -177,10 +180,151 @@ export function MeetingLinkCard({ meetingId, title, isRecurring }: { meetingId: 
   )
 }
 
-export function ShareLinkDialog({ open, onClose, meetingId, title }: { open: boolean; onClose: () => void; meetingId: string; title: string }) {
+export function ShareLinkDialog({ open, onClose, meetingId, title, customer, guests, customerMeeting }: {
+  open: boolean
+  onClose: () => void
+  meetingId: string
+  title: string
+  /** Instant customer meeting: the customer's personal join link (shown once, right after starting). */
+  customer?: CustomerJoinLink | null
+  /** Customer meeting: offer to create the customer's personal link when none was handed in. */
+  customerMeeting?: boolean
+  /** Instant PLVC meeting: the other participants' personal join links (shown once, right after starting). */
+  guests?: CustomerJoinLink[]
+}) {
   return (
     <Dialog open={open} onClose={onClose} title="Invite people" description="Share this link. Everyone who uses it waits until a host lets them in." size="md">
+      {(customer?.email || guests?.some((g) => g.email)) && <InvitationEmails meetingId={meetingId} active={open} />}
+      {customer ? <CustomerLink customer={customer} title={title} /> : customerMeeting ? <SendToCustomer meetingId={meetingId} title={title} /> : null}
+      {guests?.map((g) => <CustomerLink key={g.joinUrl} customer={g} title={title} />)}
       <LinkBody meetingId={meetingId} title={title} active={open} />
     </Dialog>
+  )
+}
+
+/**
+ * Instant meeting: each participant was e-mailed their own personal link when the meeting started (13 Nov 2026). Shows the
+ * delivery state per address, refreshed while sending, and "Send again" for one that failed (a fresh personal link for that
+ * person only - the meeting is never created again).
+ */
+function InvitationEmails({ meetingId, active }: { meetingId: string; active: boolean }) {
+  const toast = useToast()
+  const [items, setItems] = useState<InvitationEmailState[] | null>(null)
+  const [resending, setResending] = useState<string | null>(null)
+  const load = useCallback(() => invitationEmailsApi.status(meetingId).then(setItems).catch(() => undefined), [meetingId])
+  const settled = !!items && items.every((i) => i.status === 'SENT' || i.status === 'FAILED' || i.status === 'CANCELLED')
+  useEffect(() => {
+    if (!active) return
+    void load()
+    if (settled) return
+    const t = window.setInterval(() => void load(), 4000)
+    return () => window.clearInterval(t)
+  }, [active, load, settled])
+  if (!items || items.length === 0) return null
+  return (
+    <div className="mb-4 rounded-md border border-line bg-surface-muted p-3" data-testid="invitation-emails">
+      <p className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold text-ink"><Mail className="size-3.5 text-brand-600" aria-hidden /> Invitation e-mails</p>
+      <ul className="flex flex-col gap-1.5">
+        {items.map((i) => (
+          <li key={i.email} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px]" data-testid="invitation-email" data-status={i.status}>
+            <span className="min-w-0 flex-1 truncate text-ink-secondary" title={i.email}>{i.email}</span>
+            {i.status === 'SENT' ? <span className="font-semibold text-success">Sent</span>
+              : i.status === 'FAILED' ? <span className="font-semibold text-danger">Not delivered</span>
+              : i.status === 'CANCELLED' ? <span className="text-ink-secondary">Cancelled</span>
+              : <span className="text-ink-secondary">Sending…</span>}
+            {i.status === 'FAILED' && (
+              <Button size="sm" variant="secondary" loading={resending === i.email} data-testid="invitation-resend"
+                onClick={async () => {
+                  setResending(i.email)
+                  try {
+                    await invitationEmailsApi.resend(meetingId, i.email)
+                    toast.success(`The invitation was e-mailed to ${i.email} again with a new personal link.`)
+                    await load()
+                  } catch (e) {
+                    toast.error(errorMessage(e, 'The invitation could not be sent again.'))
+                  } finally {
+                    setResending(null)
+                  }
+                }}>
+                Send again
+              </Button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/** "91" + a 10-digit Indian mobile; numbers already carrying a country code are kept. Null if it is not a usable number. */
+export function whatsappNumber(mobile?: string | null) {
+  const d = (mobile ?? '').replace(/\D/g, '').replace(/^0+/, '')
+  if (d.length === 10) return `91${d}`
+  return d.length >= 11 && d.length <= 15 ? d : null
+}
+
+/**
+ * Customer meeting (GoodDay #14195): creates the customer's personal join link on request and shows it with WhatsApp /
+ * E-mail / Copy. WhatsApp opens the host's own WhatsApp with the message ready - no SMS gateway or paid service.
+ */
+export function SendToCustomer({ meetingId, title }: { meetingId: string; title: string }) {
+  const [link, setLink] = useState<CustomerJoinLink | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  if (link) return <CustomerLink customer={link} title={title} />
+  return (
+    <div className="mb-4 flex flex-col items-start gap-2 rounded-md border border-brand-200 bg-brand-50 p-3.5" data-testid="send-to-customer">
+      <p className="text-[13px] font-semibold text-ink">Send the link to the customer</p>
+      <p className="text-[12px] text-ink-secondary">Creates the customer's personal join link to send by WhatsApp or e-mail. The link in their invitation e-mail keeps working.</p>
+      {error && <Alert tone="danger">{error}</Alert>}
+      <Button size="sm" loading={busy} leftIcon={<Send className="size-3.5" />} data-testid="send-to-customer-button"
+        onClick={async () => {
+          setBusy(true)
+          setError(null)
+          try { setLink(await meetingsApi.customerLink(meetingId)) } catch (e) { setError(errorMessage(e, "The customer's link could not be created.")) } finally { setBusy(false) }
+        }}>
+        Send link to customer
+      </Button>
+    </div>
+  )
+}
+
+/** The customer's personal link: joins as the customer (their name and record), not as an anonymous guest. */
+function CustomerLink({ customer, title }: { customer: CustomerJoinLink; title: string }) {
+  const [copied, setCopied] = useState(false)
+  async function copy() {
+    if (await copyText(customer.joinUrl)) {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
+    }
+  }
+  const text = `Dear ${customer.name},\n\n${invitationText(title, customer.joinUrl).replace('\n\nThe host lets you in from the waiting room.', '')}`
+  const wa = whatsappNumber(customer.mobile)
+  const action = 'inline-flex h-9 items-center gap-1.5 rounded-md border border-line bg-surface px-3.5 text-[13px] font-medium text-ink transition-colors hover:border-line-strong hover:bg-surface-muted'
+  return (
+    <div className="mb-4 flex flex-col gap-2 rounded-md border border-brand-200 bg-brand-50 p-3.5" data-testid="customer-link">
+      <p className="text-[13px] font-semibold text-ink">Link for {customer.name}</p>
+      <p className="text-[12px] text-ink-secondary">Personal to this customer — send it only to them. They join as the customer named in this meeting.</p>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <input readOnly value={customer.joinUrl} className="h-10 min-w-0 flex-1 rounded-md border border-line bg-surface px-3 text-[13px] text-ink" onFocus={(e) => e.target.select()} data-testid="customer-link-url" aria-label={`Join link for ${customer.name}`} />
+        <Button onClick={() => void copy()} leftIcon={copied ? <Check className="size-4" /> : <Copy className="size-4" />} className="sm:w-[136px]">
+          {copied ? 'Copied' : 'Copy link'}
+        </Button>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {wa && (
+          <a className={action} target="_blank" rel="noopener noreferrer" href={`https://wa.me/${wa}?text=${encodeURIComponent(text)}`} data-testid="customer-whatsapp">
+            <MessageCircle className="size-3.5 text-[#16A34A]" /> WhatsApp {customer.mobile}
+          </a>
+        )}
+        {customer.email && (
+          <a className={action} target="_blank" rel="noopener noreferrer" data-testid="customer-email"
+            href={`mailto:${encodeURIComponent(customer.email)}?subject=${encodeURIComponent(`Meeting invitation: ${title}`)}&body=${encodeURIComponent(text)}`}>
+            <Mail className="size-3.5" /> E-mail {customer.email}
+          </a>
+        )}
+        {!wa && !customer.email && <p className="text-[12px] text-ink-secondary">No mobile number or e-mail on the customer record: copy the link and send it another way.</p>}
+      </div>
+    </div>
   )
 }

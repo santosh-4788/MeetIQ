@@ -47,13 +47,16 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
         public IRecorderRun? Run { get; set; }
         public DateTime LaunchedUtc { get; set; }
         public DateTime? StopRequestedUtc { get; set; }
+        /// <summary>When the recorder reported that capture ended after a stop request (it is then only building/verifying the MP4).</summary>
+        public DateTime? CaptureEndedUtc { get; set; }
         public bool Killed { get; set; }
         public Task? Processing { get; set; }
     }
 
     sealed record JobRow(long JobId, long RecordingId, string IdempotencyKey, string Engine, string State, int Attempt, string? SpoolPath);
     sealed record JobInfo(long JobId, long RecordingId, Guid RecordingPublicId, long MeetingId, string JobState, string RecordingStatus, int LaunchCount,
-        int? RecorderPid, string MeetingStatus, string? PolicyCode, DateTime? StartedUtc, long OwnerEmployeeId, string MeetingCode);
+        int? RecorderPid, string MeetingStatus, string? PolicyCode, DateTime? StartedUtc, long OwnerEmployeeId, string MeetingCode, DateTime CreatedUtc,
+        string? PrarambhMainId = null);
 
     /// <summary>Wakes the worker (a recording was started or stopped).</summary>
     public void Kick()
@@ -129,7 +132,8 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
     async Task<JobInfo?> InfoAsync(IDbConnection c, long jobId) =>
         await c.QuerySingleOrDefaultAsync<JobInfo>("""
             SELECT j.JobId, j.RecordingId, r.PublicId AS RecordingPublicId, r.MeetingId, j.[State] AS JobState, r.[Status] AS RecordingStatus, j.LaunchCount,
-                   j.RecorderPid, m.[Status] AS MeetingStatus, r.PolicyCode, r.StartedUtc, r.OwnerEmployeeId, m.MeetingCode
+                   j.RecorderPid, m.[Status] AS MeetingStatus, r.PolicyCode, r.StartedUtc, r.OwnerEmployeeId, m.MeetingCode, r.CreatedUtc,
+                   COALESCE(r.PrarambhMainId, m.PrarambhMainId) AS PrarambhMainId
             FROM rec.RecordingJobs j JOIN rec.MeetingRecordings r ON r.RecordingId = j.RecordingId JOIN mtg.Meetings m ON m.MeetingId = r.MeetingId
             WHERE j.JobId = @jobId
             """, new { jobId });
@@ -203,13 +207,14 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
         var late = DateTime.SpecifyKind(m.EndUtc, DateTimeKind.Utc).AddMinutes(meetingOptions.Value.JoinLateMinutes) - clock.UtcNow;
         var maxMinutes = (int)Math.Clamp(Math.Ceiling(late.TotalMinutes), 1, O.MaxDurationMinutes);
         var launch = new RecorderLaunch("record", jobKey, dir, m.LiveKitRoomName, m.Title, mp.Kind == MeetingRecordingKind.Customer ? "customer" : "internal",
-            consentOk, maxMinutes, RecorderEnvironment(mp));
+            consentOk, maxMinutes, RecorderEnvironment(mp)) { OnChange = Kick };
         await c.ExecuteAsync("UPDATE rec.RecordingJobs SET LaunchCount = @launchNo, EngineJobId = @jobKey, SpoolPath = @dir, ModifiedUtc = SYSUTCDATETIME() WHERE JobId = @j",
             new { launchNo, jobKey, dir, j = info.JobId });
         var run = launcher.Start(launch);
         r.Run = run;
         r.LaunchedUtc = clock.UtcNow;
         r.StopRequestedUtc = null;
+        r.CaptureEndedUtc = null;
         r.Killed = false;
         await c.ExecuteAsync("""
             UPDATE rec.RecordingJobs SET [State] = CASE WHEN [State] = 'STARTING' THEN 'ACTIVE' ELSE [State] END, RecorderPid = @pid, LastError = NULL, ModifiedUtc = SYSUTCDATETIME()
@@ -277,10 +282,18 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
         var run = r.Run;
         if (run.Started && info.RecordingStatus == "PENDING")
         {
-            await c.ExecuteAsync("""
+            var n = await c.ExecuteAsync("""
                 UPDATE rec.MeetingRecordings SET [Status] = 'RECORDING', StartedUtc = COALESCE(StartedUtc, @now), ModifiedUtc = SYSUTCDATETIME() WHERE RecordingId = @id AND [Status] = 'PENDING'
                 """, new { now, id = r.RecordingId });
             await BroadcastAsync(c, r.MeetingId, ct);
+            if (n > 0)
+            {
+                // Measured start-up time: from the host's start request (row created) to the recorder confirming that it captures media.
+                var startup = Math.Round((now - DateTime.SpecifyKind(info.CreatedUtc, DateTimeKind.Utc)).TotalSeconds, 1);
+                log.LogInformation("Recording {Recording}: capture confirmed {Seconds}s after the start request", info.RecordingPublicId, startup);
+                await Audit.WriteAsync(c, "SYSTEM", null, "RECORDING_CAPTURE_STARTED", "Recording", info.RecordingPublicId.ToString(),
+                    $"Recorder confirmed capture {startup:F1}s after the start request", null, newValues: new { startupSeconds = startup, launch = info.LaunchCount });
+            }
         }
         var stopWanted = info.JobState == "STOPPING" || info.MeetingStatus != "LIVE" || (!run.Started && now - r.LaunchedUtc > TimeSpan.FromSeconds(O.StartTimeoutSeconds));
         if (stopWanted && r.StopRequestedUtc is null && !run.HasExited)
@@ -291,11 +304,39 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
                 await c.ExecuteAsync("UPDATE rec.RecordingJobs SET [State] = 'STOPPING', ModifiedUtc = SYSUTCDATETIME() WHERE JobId = @j AND [State] = 'ACTIVE'", new { j = r.JobId });
             if (!run.Started) await c.ExecuteAsync("UPDATE rec.RecordingJobs SET LastError = N'The recorder did not start recording in time.' WHERE JobId = @j", new { j = r.JobId });
         }
-        if (r.StopRequestedUtc is { } asked && !run.HasExited && !r.Killed && now - asked > TimeSpan.FromSeconds(O.StopTimeoutSeconds))
+        // Capture has ended after a stop request: the recorder is now only building and verifying the MP4. The meeting is no
+        // longer being recorded, so release the REC state at once (PROCESSING) instead of waiting for the transcode to finish;
+        // the recording still becomes COMPLETED only after the library copy is verified (PostProcessAsync).
+        if (r.StopRequestedUtc is { } requested && r.CaptureEndedUtc is null && run.CaptureEnded)
         {
-            log.LogWarning("Recorder for job {Job} did not stop within {Seconds}s: terminating it", r.JobId, O.StopTimeoutSeconds);
-            r.Killed = true;
-            run.Kill();
+            r.CaptureEndedUtc = now;
+            var n = await c.ExecuteAsync("""
+                UPDATE rec.MeetingRecordings SET [Status] = 'PROCESSING', EndedUtc = COALESCE(EndedUtc, @now), ModifiedUtc = SYSUTCDATETIME()
+                WHERE RecordingId = @id AND [Status] IN ('PENDING', 'RECORDING')
+                """, new { now, id = r.RecordingId });
+            if (n > 0)
+            {
+                var stopSeconds = Math.Round((now - requested).TotalSeconds, 1);
+                log.LogInformation("Recording {Recording}: capture ended {Seconds}s after the stop request; finalising", info.RecordingPublicId, stopSeconds);
+                await Audit.WriteAsync(c, "SYSTEM", null, "RECORDING_CAPTURE_ENDED", "Recording", info.RecordingPublicId.ToString(),
+                    $"Capture ended {stopSeconds:F1}s after the stop request; building and verifying the MP4", null, newValues: new { stopSeconds });
+                await BroadcastAsync(c, r.MeetingId, ct);
+            }
+        }
+        if (r.StopRequestedUtc is { } asked && !run.HasExited && !r.Killed)
+        {
+            // Until capture ends the recorder only has to stop MediaRecorder and flush (StopTimeoutSeconds). After that it builds
+            // and verifies the MP4, which scales with the recording's length: killing it then would discard a healthy finalisation
+            // and force the whole transcode to run again, so that phase gets a budget proportional to the recorded duration.
+            var (since, budget) = r.CaptureEndedUtc is { } ended
+                ? (ended, FinalizeBudgetSeconds(info.StartedUtc is { } s ? (ended - DateTime.SpecifyKind(s, DateTimeKind.Utc)).TotalSeconds : 0))
+                : (asked, O.StopTimeoutSeconds);
+            if (now - since > TimeSpan.FromSeconds(budget))
+            {
+                log.LogWarning("Recorder for job {Job} did not finish within {Seconds}s: terminating it", r.JobId, budget);
+                r.Killed = true;
+                run.Kill();
+            }
         }
         if (!run.HasExited) return;
 
@@ -311,6 +352,9 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
         }
         await BeginProcessingAsync(c, r, retry: false, ct);
     }
+
+    /// <summary>Time allowed for building and verifying the MP4 after capture ended (measured: ~0.2x real time; allow ample headroom under load).</summary>
+    internal double FinalizeBudgetSeconds(double recordedSeconds) => Math.Max(O.StopTimeoutSeconds, 120 + 0.75 * Math.Max(0, recordedSeconds));
 
     async Task BeginProcessingAsync(IDbConnection c, Running r, bool retry, CancellationToken ct)
     {
@@ -408,14 +452,17 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
             await c.ExecuteAsync("UPDATE rec.MeetingRecordings SET [Status] = 'VERIFYING', ModifiedUtc = SYSUTCDATETIME() WHERE RecordingId = @id", new { id = r.RecordingId });
             var root = paths.StorageRoot ?? throw new InvalidOperationException("Recording:StorageRoot is not configured.");
             var now = clock.UtcNow;
-            // Opaque key: no meeting, customer or employee data in the folder or file name itself (day-wise so one
-            // month's folder never grows unbounded). The meeting code is still findable - it is written into the
-            // file's own MP4 metadata below, and into the Content-Disposition filename a user downloads it as.
-            var key = $"{now:yyyy}/{now:MM}/{now:dd}/{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16))}.mp4";
+            // Date-wise storage (12 Nov 2026): YYYYMMDD/ folder by the recording's START date in Asia/Kolkata, file named
+            // [PrarambhMainId-]MeetingCode-REC<id>.mp4 (never a customer name or e-mail). Existing recordings keep their old
+            // keys - playback resolves whatever StorageKey a row holds. See documentation/RECORDING_STORAGE_STRUCTURE.md.
+            var key = RecordingStorageKeys.Build(info.StartedUtc ?? info.CreatedUtc, info.MeetingCode, r.RecordingId, info.PrarambhMainId);
+            for (var dup = 2; File.Exists(RecordingPaths.Resolve(root, key)) || File.Exists(RecordingPaths.Resolve(root, key) + ".partial")
+                || await c.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM rec.MeetingRecordings WHERE StorageKey = @key", new { key }) > 0; dup++)
+                key = RecordingStorageKeys.Build(info.StartedUtc ?? info.CreatedUtc, info.MeetingCode, r.RecordingId, info.PrarambhMainId, dup);
             var dest = RecordingPaths.Resolve(root, key);
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             var partial = dest + ".partial";
-            var tag = await verifier.TagMetadataAsync(source, partial, info.MeetingCode, ct);
+            var tag = await verifier.TagMetadataAsync(source, partial, info.MeetingCode, ct, info.PrarambhMainId);
             if (tag.ExitCode != 0)
             {
                 log.LogWarning("Metadata tagging failed for recording job {Job}, falling back to a plain copy: {Err}", r.JobId, tag.StdErrTail);
@@ -477,10 +524,13 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
                 if (merged is not null) TryDelete(merged);
             }
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException)
+        catch (Exception e)
         {
+            // Any failure (not only IO/JSON: also SQL errors or a recorder that cannot be launched for "finalize") must end in
+            // FAILED with the reason. Otherwise the row stays PROCESSING/VERIFYING and the job is re-claimed and retried forever.
             log.LogError(e, "Post-processing of recording job {Job} failed", r.JobId);
-            await FailAsync(c, r.RecordingId, r.JobId, $"Post-processing failed: {e.Message}", ct);
+            try { await FailAsync(c, r.RecordingId, r.JobId, $"Post-processing failed: {e.Message}", ct); }
+            catch (Exception e2) { log.LogError(e2, "Could not mark recording job {Job} as failed", r.JobId); }
         }
     }
 

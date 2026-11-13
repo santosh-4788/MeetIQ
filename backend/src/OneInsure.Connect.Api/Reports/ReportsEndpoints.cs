@@ -28,7 +28,7 @@ public static class ReportsEndpoints
 
     sealed record Row(Guid Id, string MeetingCode, string Title, string Category, string Status, DateTime StartUtc, DateTime EndUtc,
         DateTime? ActualStartUtc, DateTime? ActualEndUtc, string HostName, string? Department, string? CustomerName, int ParticipantCount,
-        string RecordingPolicy, string? RecordingStatus);
+        string RecordingPolicy, string? RecordingStatus, string? PrarambhMainId, string? PlvcIdentification);
 
     sealed record SummaryRow(int Total, int Completed, int Cancelled, int LiveOrScheduled, int CustomerMeetings, int InternalMeetings,
         double TotalHours, int WithRecording);
@@ -62,10 +62,13 @@ public static class ReportsEndpoints
             WHERE m.[Status] <> 'DRAFT'
               AND (@from IS NULL OR m.ScheduledEndUtc > @from) AND (@to IS NULL OR m.ScheduledStartUtc < @to)
               AND (@cat IS NULL OR m.Category = @cat OR (@cat = 'CUSTOMER' AND m.Category IN ('CUSTOMER_PLVC', 'CUSTOMER_GENERAL'))
-                   OR (@cat = 'INTERNAL' AND m.Category NOT IN ('CUSTOMER_PLVC', 'CUSTOMER_GENERAL')))
+                   OR (@cat = 'INTERNAL' AND m.Category NOT IN ('CUSTOMER_PLVC', 'CUSTOMER_GENERAL'))
+                   -- V024: identified PLVC (verified Prarambh mapping) vs unidentified PLVC
+                   OR (@cat = 'CUSTOMER_PLVC_IDENTIFIED' AND m.PlvcIdentification = 'IDENTIFIED')
+                   OR (@cat = 'CUSTOMER_PLVC_UNIDENTIFIED' AND m.PlvcIdentification = 'UNIDENTIFIED'))
               AND (@st IS NULL OR m.[Status] = @st)
               AND (@dept IS NULL OR h.DepartmentId = @dept)
-              AND (@search IS NULL OR m.Title LIKE @like OR m.MeetingCode LIKE @like)
+              AND (@search IS NULL OR m.Title LIKE @like OR m.MeetingCode LIKE @like OR m.PrarambhMainId LIKE @like)
             """;
         return (where, prm, null);
     }
@@ -98,14 +101,14 @@ public static class ReportsEndpoints
                 ISNULL(SUM(CASE WHEN m.[Status] IN ('LIVE', 'SCHEDULED') THEN 1 ELSE 0 END), 0) AS LiveOrScheduled,
                 ISNULL(SUM(CASE WHEN m.Category IN ('CUSTOMER_PLVC', 'CUSTOMER_GENERAL') THEN 1 ELSE 0 END), 0) AS CustomerMeetings,
                 ISNULL(SUM(CASE WHEN m.Category NOT IN ('CUSTOMER_PLVC', 'CUSTOMER_GENERAL') THEN 1 ELSE 0 END), 0) AS InternalMeetings,
-                ISNULL(SUM(DATEDIFF(MINUTE, m.ScheduledStartUtc, m.ScheduledEndUtc)) / 60.0, 0) AS TotalHours,
+                CAST(ISNULL(SUM(DATEDIFF(MINUTE, m.ScheduledStartUtc, m.ScheduledEndUtc)) / 60.0, 0) AS FLOAT) AS TotalHours,
                 ISNULL(SUM(CASE WHEN m.RecordingPolicy <> 'NONE' THEN 1 ELSE 0 END), 0) AS WithRecording
             {FromSql} {where};
 
             SELECT m.PublicId AS Id, m.MeetingCode, m.Title, m.Category, m.[Status], m.ScheduledStartUtc AS StartUtc, m.ScheduledEndUtc AS EndUtc,
                    m.ActualStartUtc, m.ActualEndUtc, h.DisplayName AS HostName, d.Name AS Department, cu.FullName AS CustomerName,
                    (SELECT COUNT(*) FROM mtg.MeetingParticipants x WHERE x.MeetingId = m.MeetingId) AS ParticipantCount, m.RecordingPolicy,
-                   (SELECT TOP (1) r.[Status] FROM rec.MeetingRecordings r WHERE r.MeetingId = m.MeetingId ORDER BY r.RecordingId DESC) AS RecordingStatus
+                   (SELECT TOP (1) r.[Status] FROM rec.MeetingRecordings r WHERE r.MeetingId = m.MeetingId ORDER BY r.RecordingId DESC) AS RecordingStatus, m.PrarambhMainId, m.PlvcIdentification
             {FromSql} {where}
             ORDER BY m.ScheduledStartUtc DESC, m.MeetingId
             OFFSET @skip ROWS FETCH NEXT @size ROWS ONLY;
@@ -118,7 +121,7 @@ public static class ReportsEndpoints
             id = r.Id, meetingCode = r.MeetingCode, title = r.Title, category = r.Category, categoryGroup = MeetingEndpoints.CategoryGroup(r.Category),
             status = r.Status, startUtc = r.StartUtc, endUtc = r.EndUtc, actualStartUtc = r.ActualStartUtc, actualEndUtc = r.ActualEndUtc,
             hostName = r.HostName, department = r.Department, customerName = r.CustomerName, participantCount = r.ParticipantCount,
-            recordingPolicy = r.RecordingPolicy, recordingStatus = r.RecordingStatus,
+            recordingPolicy = r.RecordingPolicy, recordingStatus = r.RecordingStatus, prarambhMainId = r.PrarambhMainId, plvcIdentification = r.PlvcIdentification,
         }).ToList();
 
         return Results.Ok(new
@@ -146,7 +149,7 @@ public static class ReportsEndpoints
             SELECT TOP (@top) m.PublicId AS Id, m.MeetingCode, m.Title, m.Category, m.[Status], m.ScheduledStartUtc AS StartUtc, m.ScheduledEndUtc AS EndUtc,
                    m.ActualStartUtc, m.ActualEndUtc, h.DisplayName AS HostName, d.Name AS Department, cu.FullName AS CustomerName,
                    (SELECT COUNT(*) FROM mtg.MeetingParticipants x WHERE x.MeetingId = m.MeetingId) AS ParticipantCount, m.RecordingPolicy,
-                   (SELECT TOP (1) r.[Status] FROM rec.MeetingRecordings r WHERE r.MeetingId = m.MeetingId ORDER BY r.RecordingId DESC) AS RecordingStatus
+                   (SELECT TOP (1) r.[Status] FROM rec.MeetingRecordings r WHERE r.MeetingId = m.MeetingId ORDER BY r.RecordingId DESC) AS RecordingStatus, m.PrarambhMainId, m.PlvcIdentification
             {FromSql} {where}
             ORDER BY m.ScheduledStartUtc DESC, m.MeetingId
             """, prm);
@@ -154,12 +157,12 @@ public static class ReportsEndpoints
         var sb = new StringBuilder();
         void Line(params string?[] fields) => sb.AppendLine(string.Join(',', fields.Select(Csv)));
         Line("Meeting code", "Title", "Category", "Status", "Scheduled start (UTC)", "Scheduled end (UTC)", "Actual start (UTC)", "Actual end (UTC)",
-            "Host", "Department", "Customer", "Participants", "Recording policy", "Recording status");
+            "Host", "Department", "Customer", "Participants", "Recording policy", "Recording status", "Prarambh Main ID", "PLVC identification");
         foreach (var r in rows)
             Line(r.MeetingCode, r.Title, MeetingEndpoints.CategoryGroup(r.Category), r.Status,
                 r.StartUtc.ToString("u", CultureInfo.InvariantCulture), r.EndUtc.ToString("u", CultureInfo.InvariantCulture),
                 r.ActualStartUtc?.ToString("u", CultureInfo.InvariantCulture), r.ActualEndUtc?.ToString("u", CultureInfo.InvariantCulture),
-                r.HostName, r.Department, r.CustomerName, r.ParticipantCount.ToString(CultureInfo.InvariantCulture), r.RecordingPolicy, r.RecordingStatus);
+                r.HostName, r.Department, r.CustomerName, r.ParticipantCount.ToString(CultureInfo.InvariantCulture), r.RecordingPolicy, r.RecordingStatus, r.PrarambhMainId, r.PlvcIdentification);
 
         var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray(); // BOM: Excel needs it to read UTF-8 correctly
         return Results.File(bytes, "text/csv", $"meeting-report-{DateTime.UtcNow:yyyyMMdd-HHmm}.csv");

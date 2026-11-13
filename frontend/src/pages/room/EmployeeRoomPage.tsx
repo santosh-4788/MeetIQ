@@ -52,12 +52,19 @@ function Flow({ m, back, reload }: { m: MeetingDetail; back: ReactNode; reload: 
       loadChat: () => roomApi.chat(m.id),
       postChat: (body) => roomApi.postChat(m.id, body),
       keepAlive: () => authApi.me(),
+      hasEnded: () => meetingsApi.get(m.id).then((d) => d.status === 'COMPLETED' || d.status === 'CANCELLED'),
       recording: {
         state: () => roomRecordingApi.state(m.id),
         consent: (decision, version) => roomRecordingApi.consent(m.id, decision, version),
-        ...(joined.connection.isHost ? { start: (version: string) => roomRecordingApi.start(m.id, version), stop: () => roomRecordingApi.stop(m.id) } : {}),
+        ...(joined.connection.isHost
+          ? {
+              start: (version: string) => roomRecordingApi.start(m.id, version),
+              stop: () => roomRecordingApi.stop(m.id),
+              removeFromRequest: (identity: string) => roomRecordingApi.removeFromRequest(m.id, identity),
+            }
+          : {}),
       },
-      ...(m.my.canShareLink ? { share: { meetingId: m.id, openOnStart: !!entry.invite } } : {}),
+      ...(m.my.canShareLink ? { share: { meetingId: m.id, openOnStart: !!entry.invite, customer: entry.customer ?? null, guests: entry.guests ?? [], noCustomer: !!entry.noCustomer || m.plvcIdentification === 'UNIDENTIFIED' } } : {}),
     }
     if (joined.connection.isHost)
       b.host = {
@@ -68,6 +75,7 @@ function Flow({ m, back, reload }: { m: MeetingDetail; back: ReactNode; reload: 
         requestUnmute: (identity) => roomApi.requestUnmute(m.id, identity),
         remove: (identity, block) => roomApi.remove(m.id, identity, block),
         end: () => roomApi.end(m.id),
+        extend: (minutes) => roomApi.extend(m.id, minutes),
         setLocked: (locked) => roomApi.setLocked(m.id, locked).then(() => undefined),
         // A co-host may admit/mute/remove/end, but only the literal host may hand off host privileges.
         ...(joined.connection.role === 'HOST' ? { transferHost: (identity: string) => roomApi.transferHost(m.id, identity) } : {}),
@@ -88,7 +96,9 @@ function Flow({ m, back, reload }: { m: MeetingDetail; back: ReactNode; reload: 
       <RoomExitScreen
         exit={exit}
         title={m.title}
-        back={back}
+        meetingCode={m.meetingCode}
+        timeZoneId={tz}
+        back={exit.kind === 'ended' ? <CanvasButton variant="secondary" leftIcon={<ArrowLeft className="size-4" />} onClick={() => navigate('/dashboard')}>Back to Home</CanvasButton> : back}
         rejoin={<CanvasButton leftIcon={<RotateCw className="size-4" />} onClick={() => (setError(null), setPhase('prejoin'), reload())}>Rejoin</CanvasButton>}
       />
     )

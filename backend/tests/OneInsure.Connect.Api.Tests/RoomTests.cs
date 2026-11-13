@@ -249,13 +249,13 @@ public sealed class RoomTests(ApiFixture fx)
         Assert.Equal(HttpStatusCode.NoContent, (await host.PostAsync($"/api/v1/meetings/{m.Id}/room/waiting/{hostEntryId}/admit")).StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, (await host.PostAsync($"/api/v1/meetings/{m.Id}/room/waiting/{hostEntryId}/admit")).StatusCode);
 
-        // Admitted: the poll now carries the LiveKit connection — no roomAdmin, no screen share, the chosen name.
+        // Admitted: the poll now carries the LiveKit connection — no roomAdmin, screen share allowed (12 Nov 2026), the chosen name.
         var admitted = await Json(await gita.Http.GetAsync($"/api/v1/join/{gitaToken}/entry/{entryId}"));
         Assert.Equal("ADMITTED", admitted.GetProperty("status").GetString());
         var guestClaims = Claims(admitted.GetProperty("connection").GetProperty("token").GetString()!);
         Assert.False(guestClaims.GetProperty("video").GetProperty("roomAdmin").GetBoolean());
         Assert.True(guestClaims.GetProperty("video").GetProperty("canPublish").GetBoolean());
-        Assert.DoesNotContain("screen_share", Sources(guestClaims));
+        Assert.Contains("screen_share", Sources(guestClaims)); // 12 Nov 2026: guests may present too
         Assert.Equal("Gita G.", guestClaims.GetProperty("name").GetString());
         Assert.Equal(m.Room, guestClaims.GetProperty("video").GetProperty("room").GetString());
         Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE EntityId = @id AND [Action] = 'WAITING_ROOM_ADMITTED'", new { id = m.Id.ToString() }));
@@ -353,7 +353,12 @@ public sealed class RoomTests(ApiFixture fx)
         Assert.Contains(fx.LiveKit.For(m.Room), c => c.Method == "DeleteRoom");
         Assert.Equal(1, await Count("SELECT COUNT(*) FROM mtg.Meetings WHERE MeetingId = @mid AND [Status] = 'COMPLETED' AND ActualEndUtc IS NOT NULL AND ActualEndUtc >= ActualStartUtc", new { mid = m.Mid }));
         Assert.Equal(0, await Count("SELECT COUNT(*) FROM mtg.MeetingAttendance WHERE MeetingId = @mid AND LeftUtc IS NULL", new { mid = m.Mid }));
-        Assert.Equal(HttpStatusCode.Conflict, (await host.PostAsync($"/api/v1/meetings/{m.Id}/room/end")).StatusCode);
+        // Ending again is idempotent (13 Nov 2026): 204, nothing processed twice (one audit row, one DeleteRoom, below).
+        var deletes = fx.LiveKit.For(m.Room).Count(c => c.Method == "DeleteRoom");
+        Assert.Equal(HttpStatusCode.NoContent, (await host.PostAsync($"/api/v1/meetings/{m.Id}/room/end")).StatusCode);
+        Assert.Equal(deletes, fx.LiveKit.For(m.Room).Count(c => c.Method == "DeleteRoom"));
+        // Everyone is told in-band before the room closes.
+        Assert.Contains(fx.LiveKit.For(m.Room), c => c.Method == "SendData" && c.Body.GetProperty("topic").GetString() == "oic.meeting");
         foreach (var action in new[] { "ROOM_PARTICIPANT_MUTED", "ROOM_PARTICIPANT_REMOVED", "MEETING_ENDED" })
             Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog a JOIN auth.Users u ON u.UserId = a.ActorUserId WHERE a.EntityId = @id AND a.[Action] = @action AND u.Email = N'rhost@test.invalid'",
                 new { id = m.Id.ToString(), action }));

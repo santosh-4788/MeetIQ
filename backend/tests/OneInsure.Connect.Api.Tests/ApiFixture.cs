@@ -27,8 +27,10 @@ public sealed class ApiFixture : IAsyncLifetime
     public async Task InitializeAsync()
     {
         var root = FindRepoRoot();
+        // OIC_TEST_DATA_PATH: folder for the test database files, for LocalDB instances with a broken default folder.
+        var dataPath = Environment.GetEnvironmentVariable("OIC_TEST_DATA_PATH") is { Length: > 0 } dp ? $" -DataPath \"{dp}\"" : "";
         var psi = new ProcessStartInfo("powershell.exe",
-            $"-NoProfile -ExecutionPolicy Bypass -File \"{Path.Combine(root, "database", "deploy-database.ps1")}\" -Server \"{Server}\" -Database {Database} -CreateDatabase")
+            $"-NoProfile -ExecutionPolicy Bypass -File \"{Path.Combine(root, "database", "deploy-database.ps1")}\" -Server \"{Server}\" -Database {Database} -CreateDatabase{dataPath}")
         { RedirectStandardOutput = true, RedirectStandardError = true };
         using (var p = Process.Start(psi)!)
         {
@@ -51,6 +53,9 @@ public sealed class ApiFixture : IAsyncLifetime
         // Meeting tests queue many e-mails; one worker run must drain the outbox so EmailTests' "nothing is sent twice" holds in any order.
         Environment.SetEnvironmentVariable("Email__BatchSize", "1000");
         Environment.SetEnvironmentVariable("Reminders__PollSeconds", "3600"); // tests drive the reminder worker with RunOnceAsync
+        Environment.SetEnvironmentVariable("Meetings__AutoEndPollSeconds", "3600"); // tests drive the auto-end worker with RunOnceAsync
+        Environment.SetEnvironmentVariable("Integrations__WebhookPollSeconds", "3600"); // tests drive the webhook worker with RunOnceAsync
+        Environment.SetEnvironmentVariable("Integrations__AllowPrivateWebhookTargets", "true"); // the test receiver listens on localhost
         // Phase 4: a fictitious LiveKit. Server calls (Twirp RoomService) go to FakeLiveKit instead of the network.
         Environment.SetEnvironmentVariable("LiveKit__PublicUrl", LiveKitPublicUrl);
         Environment.SetEnvironmentVariable("LiveKit__ApiUrl", "http://livekit.test");

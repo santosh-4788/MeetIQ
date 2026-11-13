@@ -37,7 +37,11 @@ export type RoomMeetingInfo = {
   kind?: MeetingKind
   audioOnly?: boolean
   locked?: boolean
+  /** When the server ends the call by itself unless a host extends it (scheduled end + grace); null = never. */
+  autoEndUtc?: string | null
 }
+
+export type EndTimes = { endUtc: string; autoEndUtc: string | null }
 
 export type JoinResponse = { connection: RoomConnection; meeting: RoomMeetingInfo }
 
@@ -70,6 +74,8 @@ export const roomApi = {
   remove: (id: string, identity: string, block = false) =>
     http<void>(`${one(id)}/room/participants/${encodeURIComponent(identity)}/remove`, { method: 'POST', body: { block } }),
   end: (id: string) => http<void>(`${one(id)}/room/end`, { method: 'POST' }),
+  /** Host/co-host: push the scheduled end (and the automatic end) back by `minutes`. */
+  extend: (id: string, minutes: number) => http<EndTimes>(`${one(id)}/room/extend`, { method: 'POST', body: { minutes } }),
   /** Only the host (not a co-host) may call this. The previous host becomes a plain attendee at once. */
   transferHost: (id: string, identity: string) => http<void>(`${one(id)}/room/host-transfer/${encodeURIComponent(identity)}`, { method: 'POST' }),
   /** Keeps out anyone who hasn't already attended once; never locks out the host or people already in the room. */

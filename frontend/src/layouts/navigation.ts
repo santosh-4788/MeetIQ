@@ -1,6 +1,6 @@
 ﻿import type { LucideIcon } from 'lucide-react'
 import {
-  Bell, Building, CalendarDays, CalendarPlus, ChartColumn, Clapperboard, Handshake, IdCard, LayoutDashboard, ScrollText, Settings, ShieldCheck, Users, Video,
+  Bell, Building, CalendarDays, CalendarPlus, ChartColumn, Clapperboard, FileCode2, Handshake, IdCard, LayoutDashboard, ScrollText, Settings, ShieldCheck, Users, Video,
 } from 'lucide-react'
 
 export type NavItem = {
@@ -51,6 +51,7 @@ export const navigation: NavSection[] = [
       { to: '/admin', label: 'Administration', icon: ShieldCheck, permission: 'admin.settings', phase: 5,
         planned: ['Users, roles and permission matrix', 'SMTP, meeting, recording, security and retention settings', 'System health and background service status'] },
       { to: '/audit-log', label: 'Audit Log', icon: ScrollText, permission: 'audit.view' },
+      { to: '/api-docs', label: 'API Documentation', icon: FileCode2, permission: 'integrations.manage' },
       { to: '/settings', label: 'Settings', icon: Settings },
     ],
   },

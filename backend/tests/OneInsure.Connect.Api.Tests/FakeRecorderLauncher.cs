@@ -71,6 +71,8 @@ public sealed class FakeRun(RecorderLaunch launch) : IRecorderRun
     public int? ProcessId => 4242;
     public bool HasExited { get; private set; }
     public bool Started { get; set; }
+    /// <summary>Set by a test: the recorder reported "recording_finished" (capture over, MP4 still being built).</summary>
+    public bool CaptureEnded { get; set; }
     public bool StopRequested { get; private set; }
     public bool Killed { get; private set; }
 

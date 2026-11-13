@@ -7,7 +7,7 @@ import type { DbMeetingCategory, MeetingState, RecordingPolicy } from './meeting
 export type ReportFilters = {
   from?: string
   to?: string
-  category?: 'CUSTOMER' | 'INTERNAL' | DbMeetingCategory
+  category?: 'CUSTOMER' | 'INTERNAL' | DbMeetingCategory | 'CUSTOMER_PLVC_IDENTIFIED' | 'CUSTOMER_PLVC_UNIDENTIFIED'
   department?: string
   status?: MeetingState
   search?: string
@@ -29,6 +29,9 @@ export type ReportMeetingRow = {
   hostName: string
   department: string | null
   customerName: string | null
+  /** Customer – PLVC: the Prarambh Main ID it was created with (null otherwise). */
+  prarambhMainId?: string | null
+  plvcIdentification?: 'IDENTIFIED' | 'UNIDENTIFIED' | null
   participantCount: number
   recordingPolicy: RecordingPolicy
   recordingStatus: string | null

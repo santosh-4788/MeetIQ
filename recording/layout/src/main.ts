@@ -320,7 +320,27 @@ function draw() {
   const people = [...room.remoteParticipants.values()].sort((a, b) => (a.joinedAt?.getTime() ?? 0) - (b.joinedAt?.getTime() ?? 0))
   const sharer = people.find((p) => videoFor(p, Track.Source.ScreenShare))
 
-  if (sharer) {
+  if (sharer && H > W) {
+    // Portrait canvas (a 1:1 call locked portrait because a phone camera was portrait, before anyone presented): a
+    // side strip left the 16:9 screen at ~3/4 of an already narrow width. Give the screen the full width at the top and
+    // put the cameras side by side underneath.
+    const shareH = Math.round(stage.w * 9 / 16)
+    const main: Rect = { x: stage.x, y: stage.y, w: stage.w, h: shareH }
+    ctx.fillStyle = '#000'
+    ctx.fillRect(main.x, main.y, main.w, main.h)
+    drawCover(videoFor(sharer, Track.Source.ScreenShare)!, main, true)
+    ctx.fillStyle = C.label
+    ctx.fillRect(main.x, main.y, Math.min(260, main.w), 26)
+    ctx.fillStyle = C.text
+    ctx.font = '600 13px "Segoe UI", sans-serif'
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(`${sharer.name || sharer.identity} is presenting`, main.x + 10, main.y + 13, main.w - 20)
+    const below: Rect = { x: stage.x, y: main.y + main.h + 10, w: stage.w, h: stage.h - main.h - 10 }
+    const n = Math.max(people.length, 1)
+    const tw = (below.w - 10 * (n - 1)) / n
+    people.forEach((p, i) => drawTile(p, { x: below.x + i * (tw + 10), y: below.y, w: tw, h: below.h }, true))
+  } else if (sharer) {
     const stripW = Math.round(stage.w * 0.22)
     const main: Rect = { x: stage.x, y: stage.y, w: stage.w - stripW - 10, h: stage.h }
     ctx.fillStyle = '#000'
@@ -417,13 +437,17 @@ function blobToBase64(blob: Blob) {
   })
 }
 
-const ORIENTATION_DETECT_MS = 4000
+// Upper bound only: the wait ends as soon as every participant whose camera is ON has delivered a frame (participants
+// with the camera off have nothing to wait for). Was a flat 4000 ms whenever anyone had the camera off - measured as
+// the single largest fixed delay in recorder start-up.
+const ORIENTATION_DETECT_MS = 1500
 const ORIENTATION_POLL_MS = 200
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 /**
- * Device-adaptive canvas size (approved spec): a one-to-one call (<=2 real participants) records portrait
- * (height x width, i.e. the configured landscape canvas rotated) if either camera is portrait; a group call
+ * Device-adaptive canvas size: a one-to-one call (<=2 real participants) records portrait (height x width, i.e. the
+ * configured landscape canvas rotated) only if every participant's camera is portrait (12 Nov 2026: was "either camera",
+ * which recorded a desktop's screen share in a phone-shaped frame); a group call
  * (3+) always stays the configured landscape size - no detection needed there. Give cameras a few seconds to
  * publish before deciding, since a camera that hasn't reported a frame yet reads as "unknown", not "landscape".
  * This runs once, before the recorder starts, and never re-evaluates once the canvas is locked.
@@ -434,10 +458,17 @@ async function decideCanvasSize() {
     if (room.remoteParticipants.size > 2) return // group call: keep the configured landscape size
     const people = [...room.remoteParticipants.values()]
     const frames = people.map((p) => videoFor(p, Track.Source.Camera)).filter((f): f is VideoFrame => !!f)
-    const allReported = people.length > 0 && frames.length >= people.length
+    const cameraOn = people.filter((p) => { const pub = p.getTrackPublication(Track.Source.Camera); return !!pub && !pub.isMuted }).length
+    const allReported = frames.length >= cameraOn
     if (allReported || performance.now() >= deadline) {
       if (room.remoteParticipants.size > 2) return // someone joined mid-wait, making this a group call after all
-      if (frames.some((f) => f.displayHeight > f.displayWidth)) applyCanvasSize(cfg.height, cfg.width)
+      // Portrait only when EVERY participant is on a portrait camera (in practice: everyone on a phone). A desktop/laptop
+      // participant - landscape camera, or camera off - can present at any moment, and MediaRecorder cannot change the
+      // canvas size later, so a desktop + phone call that locked portrait recorded the desktop's screen share squeezed
+      // into a phone-shaped frame. Already presenting at lock time: landscape as well.
+      const presenting = people.some((p) => videoFor(p, Track.Source.ScreenShare))
+      const portraitFrames = frames.filter((f) => f.displayHeight > f.displayWidth).length
+      if (!presenting && people.length > 0 && portraitFrames === people.length) applyCanvasSize(cfg.height, cfg.width)
       return
     }
     await sleep(ORIENTATION_POLL_MS)

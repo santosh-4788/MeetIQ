@@ -184,3 +184,10 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* While a meeting room / pre-join / room status screen is on top, the sign-in layout's footer ("Need help? …", ©) is not
+   rendered at all - it used to show through, and on phones sit on top of, the room's control bar. The room shows the
+   support contact itself (Settings panel / More sheet). */
+body:has(.oic-room, .oic-room-canvas) .oic-auth-footer {
+  display: none;
+}

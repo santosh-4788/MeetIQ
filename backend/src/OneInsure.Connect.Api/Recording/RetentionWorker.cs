@@ -69,23 +69,14 @@ public sealed class RetentionWorker(Db db, IClock clock, RecordingPaths paths, I
                         await ArchiveAsync(c, d, ct);
                         archived++;
                         break;
-                    case "DELETE":
-                        if (d.DualApprovalForDeletion)
-                        {
-                            requests += await c.ExecuteAsync("""
-                                INSERT rec.RecordingDeletions (RecordingId, Source, Reason, RequiredApprovals)
-                                SELECT @id, 'RETENTION', N'Retention period expired (policy action: delete). Two approvals are required.', 2
-                                WHERE NOT EXISTS (SELECT 1 FROM rec.RecordingDeletions WHERE RecordingId = @id AND [Status] IN ('PENDING', 'REJECTED'))
-                                """, new { id = d.RecordingId });
-                        }
-                        else
-                        {
-                            var deletionId = await c.QuerySingleAsync<long>("""
-                                INSERT rec.RecordingDeletions (RecordingId, Source, Reason, RequiredApprovals) OUTPUT inserted.DeletionId
-                                VALUES (@id, 'RETENTION', N'Retention period expired (policy action: delete, no approval required by the policy).', 0)
-                                """, new { id = d.RecordingId });
-                            if (await PurgeAsync(c, paths, d.RecordingId, deletionId, null, null)) purged++;
-                        }
+                    // No automatic deletion (12 Nov 2026, business decision with Compliance agreement): recordings stay until an
+                    // authorised person deletes them manually. A policy still carrying the old DELETE action is treated as
+                    // REVIEW_ONLY - flagged for review, never purged or queued for purge by this worker.
+                    case "DELETE" when d.RetentionReviewUtc is null:
+                        await c.ExecuteAsync("UPDATE rec.MeetingRecordings SET RetentionReviewUtc = @now, ModifiedUtc = SYSUTCDATETIME() WHERE RecordingId = @id", new { now, id = d.RecordingId });
+                        await Audit.WriteAsync(c, "SYSTEM", null, "RECORDING_RETENTION_REVIEW", "Recording", d.PublicId.ToString(),
+                            "Retention period expired: flagged for review (automatic deletion is disabled - delete manually if required)", null);
+                        reviewed++;
                         break;
                 }
             }

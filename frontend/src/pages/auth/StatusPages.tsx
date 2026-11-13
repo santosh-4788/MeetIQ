@@ -1,4 +1,4 @@
-import { useLocation } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { Clock, Headset, LockKeyhole, LogOut, ShieldAlert } from 'lucide-react'
 import { AuthCard, AuthHeading } from '../../layouts/AuthLayout'
 import { Button, ButtonLink } from '../../components/ui/Button'
@@ -49,13 +49,18 @@ export function AccountLockedPage() {
 }
 
 export function SessionExpiredPage() {
+  const { endReason } = useAuth()
+  const [params] = useSearchParams()
+  const daily = endReason === 'daily' || params.get('reason') === 'daily'
   return (
     <AuthCard>
       <AuthHeading
         tone="warning"
         icon={<Clock className="size-6" />}
-        title="Your session has expired"
-        description="For your security, you were signed out (after a period of inactivity, or because the session was ended on the server or from another device). Please sign in again to continue."
+        title={daily ? 'Your daily session has ended' : 'Your session has expired'}
+        description={daily
+          ? 'Your daily session has ended. Please log in again to continue.'
+          : 'For your security, you were signed out (after a period of inactivity, or because the session was ended on the server or from another device). Please sign in again to continue.'}
       />
       <ButtonLink to="/login" fullWidth size="lg">Sign in again</ButtonLink>
     </AuthCard>

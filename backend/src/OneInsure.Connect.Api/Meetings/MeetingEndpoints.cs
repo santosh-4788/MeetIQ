@@ -18,14 +18,16 @@ public static class MeetingEndpoints
     public sealed record GuestInput(string? Name, string? Email);
     public sealed record MeetingInput(string? Title, string? Description, string? Agenda, string? Category, DateTime? StartUtc, DateTime? EndUtc,
         string? TimeZoneId, Guid? HostEmployeeId, Guid[]? EmployeeIds, Guid? CustomerId, GuestInput[]? Guests, string? RecordingPolicy,
-        bool? WaitingRoomEnabled, string? Status, string? Purpose, string? PolicyNumber, bool OverrideConflicts, string? OverrideReason);
+        bool? WaitingRoomEnabled, string? Status, string? Purpose, string? PolicyNumber, bool OverrideConflicts, string? OverrideReason,
+        string? PrarambhMainId = null, GuestInput[]? Participants = null);
     public sealed record MeetingUpdateInput(string? Title, string? Description, string? Agenda, string? Category, DateTime? StartUtc, DateTime? EndUtc,
         string? TimeZoneId, string? RecordingPolicy, bool? WaitingRoomEnabled, string? Status, string? Purpose, string? PolicyNumber,
         bool OverrideConflicts, string? OverrideReason);
     public sealed record RecurrenceInput(string? Pattern, int? Interval, string[]? ByWeekdays, string? EndType, int? EndCount, DateTime? EndUntilUtc);
     public sealed record RecurringMeetingInput(string? Title, string? Description, string? Agenda, string? Category, DateTime? StartUtc, DateTime? EndUtc,
         string? TimeZoneId, Guid? HostEmployeeId, Guid[]? EmployeeIds, Guid? CustomerId, GuestInput[]? Guests, string? RecordingPolicy,
-        bool? WaitingRoomEnabled, string? Purpose, string? PolicyNumber, bool OverrideConflicts, string? OverrideReason, RecurrenceInput? Recurrence);
+        bool? WaitingRoomEnabled, string? Purpose, string? PolicyNumber, bool OverrideConflicts, string? OverrideReason, RecurrenceInput? Recurrence,
+        string? PrarambhMainId = null, GuestInput[]? Participants = null);
     public sealed record CancelInput(string? Reason);
     public sealed record CancelSeriesInput(string? Reason, string? Scope);
     public sealed record RespondInput(string? Response);
@@ -220,8 +222,17 @@ public static class MeetingEndpoints
         using var c = await db.OpenAsync();
         var me = await Actor.LoadAsync(c, ctx.User);
         if (me.EmployeeId is null) return NoEmployee();
+        return await CreateCoreAsync(c, i, me, ClientInfo.From(ctx).Ip, msg, clock, mo.Value);
+    }
+
+    /// <summary>
+    /// One-off meeting creation, shared by the portal (POST /meetings) and the external API (which passes its integration and the
+    /// mapped host as <paramref name="me"/>). <paramref name="created"/> receives the new meeting's public id on success.
+    /// </summary>
+    internal static async Task<IResult> CreateCoreAsync(IDbConnection c, MeetingInput i, Actor me, string? ip, MeetingMessaging msg, IClock clock, MeetingOptions o,
+        long? integrationId = null, string? externalReference = null, Action<Guid>? created = null)
+    {
         var now = clock.UtcNow;
-        var o = mo.Value;
 
         var v = new Validator();
         var title = v.Required("title", i.Title, 200, "Title");
@@ -239,6 +250,9 @@ public static class MeetingEndpoints
         var recording = Upper(i.RecordingPolicy) ?? "NONE";
         if (!RecordingPolicies.Contains(recording)) v.Add("recordingPolicy", "Recording policy must be NONE, OPTIONAL or REQUIRED.");
         var guests = ValidateGuests(v, i.Guests);
+        var prarambh = Plvc.ValidatePrarambh(v, i.PrarambhMainId, category);
+        var people = Plvc.ValidateParticipants(v, i.Participants);
+        Plvc.Person? newCustomer = null;
         var overrideReason = v.Optional("overrideReason", i.OverrideReason, 500, "Override reason");
         if (i.OverrideConflicts && overrideReason is null && me.Override) v.Add("overrideReason", "Give a reason for booking despite the conflict.");
         if (!v.IsValid) return v.Problem();
@@ -247,6 +261,7 @@ public static class MeetingEndpoints
         if (isCustomer && !me.Customers) return Problems.Create(403, "FORBIDDEN", "You do not have permission to schedule customer meetings.");
         if (i.OverrideConflicts && !me.Override) return Problems.Create(403, "FORBIDDEN", "You do not have permission to override calendar conflicts.");
 
+        if (me.EmployeeId is null) return NoEmployee();
         long hostId = me.EmployeeId.Value;
         long hostDept;
         if (i.HostEmployeeId is { } hostPublic)
@@ -260,7 +275,10 @@ public static class MeetingEndpoints
         CustomerPick? customer = null;
         if (isCustomer)
         {
-            if (i.CustomerId is null) v.Add("customerId", "Select the customer for a customer meeting.");
+            // PLVC (and customer meetings created with participant rows): the first participant becomes the customer.
+            if (i.CustomerId is null && people.Count > 0) { newCustomer = people[0]; people = people.Skip(1).ToList(); }
+            else if (i.CustomerId is null) v.Add(category == Plvc.Category ? "participants" : "customerId",
+                category == Plvc.Category ? "Add at least one participant (name and e-mail)." : "Select the customer for a customer meeting.");
             else
             {
                 customer = await c.QuerySingleOrDefaultAsync<CustomerPick>("SELECT CustomerId, PolicyNumber FROM crm.Customers WHERE PublicId = @id AND IsActive = 1", new { id = i.CustomerId });
@@ -269,6 +287,8 @@ public static class MeetingEndpoints
         }
         else if (i.CustomerId is not null) v.Add("customerId", "Only customer meetings (CUSTOMER_PLVC, CUSTOMER_GENERAL) can include a customer.");
         if (!v.IsValid || employees is null) return v.Problem();
+        foreach (var p in people)
+            if (!guests.Any(g => string.Equals(g.Email, p.Email, StringComparison.OrdinalIgnoreCase))) guests.Add((p.Name, p.Email));
         (employees, guests) = await PromoteEmployeeGuests(c, employees, guests);
 
         var employeeIds = new List<long> { hostId, me.EmployeeId.Value };
@@ -280,6 +300,11 @@ public static class MeetingEndpoints
 
         return await Booking(c, scheduled, async tx =>
         {
+            if (newCustomer is not null)
+            {
+                var nc = await Plvc.EnsureCustomerAsync(c, tx, newCustomer, prarambh, hostId, me.UserId, ip);
+                customer = new CustomerPick(nc.CustomerId, nc.PolicyNumber);
+            }
             var warnings = new List<ConflictDto>();
             List<ConflictDto> conflicts = [];
             if (scheduled)
@@ -300,15 +325,16 @@ public static class MeetingEndpoints
                     (meetingId, publicId) = await c.QuerySingleAsync<(long, Guid)>("""
                         INSERT mtg.Meetings (MeetingCode, Title, Description, Agenda, Category, CreatedByEmployeeId, HostEmployeeId, DepartmentId, CustomerId,
                             PolicyNumber, Purpose, ScheduledStartUtc, ScheduledEndUtc, TimeZoneId, [Status], RecordingPolicy, WaitingRoomEnabled, LiveKitRoomName,
-                            OverrideConflictReason, CreatedByUserId)
+                            OverrideConflictReason, CreatedByUserId, PrarambhMainId, IntegrationId, ExternalReference)
                         OUTPUT inserted.MeetingId, inserted.PublicId
                         VALUES (@code, @title, @description, @agenda, @category, @creator, @hostId, @hostDept, @customerId, @policyNumber, @purpose, @start, @end,
-                            @tz, @status, @recording, @waiting, @room, @overrideNote, @user)
+                            @tz, @status, @recording, @waiting, @room, @overrideNote, @user, @prarambh, @integrationId, @externalReference)
                         """, new
                     {
                         code, title, description, agenda, category, creator = me.EmployeeId, hostId, hostDept, customerId = customer?.CustomerId,
                         policyNumber = policyNumber ?? customer?.PolicyNumber, purpose, start, end, tz, status, recording, waiting = i.WaitingRoomEnabled ?? true,
                         room = MeetingMessaging.NewOpaqueId("oic_", 16), overrideNote = conflicts.Count > 0 ? overrideReason : null, user = me.UserId,
+                        prarambh, integrationId, externalReference,
                     }, tx);
                 }
                 catch (SqlException e) when (e.IsUniqueViolation() && e.Message.Contains("MeetingCode") && attempt < 5) { }
@@ -329,8 +355,7 @@ public static class MeetingEndpoints
                 await msg.SendAsync(c, tx, info, recipients, MessageKind.Invited, me.UserId);
                 await msg.ScheduleRemindersAsync(c, tx, info, recipients);
             }
-            var ip = ClientInfo.From(ctx).Ip;
-            await Audit.WriteAsync(c, "USER", me.UserId, scheduled ? "MEETING_SCHEDULED" : "MEETING_DRAFT_CREATED", "Meeting", publicId.ToString(),
+            await Audit.WriteAsync(c, integrationId is null ? "USER" : "INTEGRATION", me.UserId, scheduled ? "MEETING_SCHEDULED" : "MEETING_DRAFT_CREATED", "Meeting", publicId.ToString(),
                 $"Meeting {code} {(scheduled ? "scheduled" : "saved as draft")}", ip, tx, newValues: new
                 {
                     meetingCode = code, title, category, status, startUtc = start, endUtc = end, timeZoneId = tz, recordingPolicy = recording,
@@ -340,7 +365,8 @@ public static class MeetingEndpoints
                 await Audit.WriteAsync(c, "USER", me.UserId, "MEETING_CONFLICT_OVERRIDDEN", "Meeting", publicId.ToString(),
                     $"Booked despite {conflicts.Count} calendar conflict(s)", ip, tx, privileged: true,
                     newValues: new { reason = overrideReason, conflicts = conflicts.Select(x => new { employeeId = x.EmployeeId, x.Type, x.StartUtc, x.EndUtc }) });
-            return Results.Json(new { id = publicId, meetingCode = code, status, warnings, overriddenConflicts = conflicts.Count }, statusCode: 201);
+            created?.Invoke(publicId);
+            return Results.Json(new { id = publicId, meetingCode = code, status, warnings, overriddenConflicts = conflicts.Count, prarambhMainId = prarambh }, statusCode: 201);
         });
     }
 
@@ -397,6 +423,9 @@ public static class MeetingEndpoints
         var recording = Upper(i.RecordingPolicy) ?? "NONE";
         if (!RecordingPolicies.Contains(recording)) v.Add("recordingPolicy", "Recording policy must be NONE, OPTIONAL or REQUIRED.");
         var guests = ValidateGuests(v, i.Guests);
+        var prarambh = Plvc.ValidatePrarambh(v, i.PrarambhMainId, category);
+        var people = Plvc.ValidateParticipants(v, i.Participants);
+        Plvc.Person? newCustomer = null;
         var overrideReason = v.Optional("overrideReason", i.OverrideReason, 500, "Override reason");
         if (i.OverrideConflicts && overrideReason is null && me.Override) v.Add("overrideReason", "Give a reason for booking despite the conflict.");
         var rule = i.StartUtc is null ? null : ValidateRecurrence(v, i.Recurrence, DateTime.SpecifyKind(i.StartUtc.Value, DateTimeKind.Utc), now);
@@ -420,7 +449,10 @@ public static class MeetingEndpoints
         CustomerPick? customer = null;
         if (isCustomer)
         {
-            if (i.CustomerId is null) v.Add("customerId", "Select the customer for a customer meeting.");
+            // PLVC (and customer meetings created with participant rows): the first participant becomes the customer.
+            if (i.CustomerId is null && people.Count > 0) { newCustomer = people[0]; people = people.Skip(1).ToList(); }
+            else if (i.CustomerId is null) v.Add(category == Plvc.Category ? "participants" : "customerId",
+                category == Plvc.Category ? "Add at least one participant (name and e-mail)." : "Select the customer for a customer meeting.");
             else
             {
                 customer = await c.QuerySingleOrDefaultAsync<CustomerPick>("SELECT CustomerId, PolicyNumber FROM crm.Customers WHERE PublicId = @id AND IsActive = 1", new { id = i.CustomerId });
@@ -429,6 +461,8 @@ public static class MeetingEndpoints
         }
         else if (i.CustomerId is not null) v.Add("customerId", "Only customer meetings (CUSTOMER_PLVC, CUSTOMER_GENERAL) can include a customer.");
         if (!v.IsValid || employees is null || rule is null) return v.Problem();
+        foreach (var p in people)
+            if (!guests.Any(g => string.Equals(g.Email, p.Email, StringComparison.OrdinalIgnoreCase))) guests.Add((p.Name, p.Email));
         (employees, guests) = await PromoteEmployeeGuests(c, employees, guests);
 
         var employeeIds = new List<long> { hostId, me.EmployeeId.Value };
@@ -440,8 +474,14 @@ public static class MeetingEndpoints
             rule.Value.EndUntilUtc, firstStart, firstEnd, tz!);
         if (occurrences.Count == 0) return Problems.Create(400, "VALIDATION", "The recurrence rule produces no meetings. Check the days of the week and end date.");
 
+        var ip = ClientInfo.From(ctx).Ip;
         return await Booking(c, true, async tx =>
         {
+            if (newCustomer is not null)
+            {
+                var nc = await Plvc.EnsureCustomerAsync(c, tx, newCustomer, prarambh, hostId, me.UserId, ip);
+                customer = new CustomerPick(nc.CustomerId, nc.PolicyNumber);
+            }
             var (seriesId, seriesPublicId) = await c.QuerySingleAsync<(long, Guid)>("""
                 INSERT mtg.MeetingSeries (Pattern, IntervalCount, ByWeekdaysMask, EndType, EndCount, EndUntilUtc, TimeZoneId, CreatedByEmployeeId)
                 OUTPUT inserted.SeriesId, inserted.PublicId
@@ -478,16 +518,16 @@ public static class MeetingEndpoints
                         (meetingId, publicId) = await c.QuerySingleAsync<(long, Guid)>("""
                             INSERT mtg.Meetings (MeetingCode, Title, Description, Agenda, Category, CreatedByEmployeeId, HostEmployeeId, DepartmentId, CustomerId,
                                 PolicyNumber, Purpose, ScheduledStartUtc, ScheduledEndUtc, TimeZoneId, [Status], RecordingPolicy, WaitingRoomEnabled, LiveKitRoomName,
-                                OverrideConflictReason, CreatedByUserId, SeriesId, SeriesSeq)
+                                OverrideConflictReason, CreatedByUserId, SeriesId, SeriesSeq, PrarambhMainId)
                             OUTPUT inserted.MeetingId, inserted.PublicId
                             VALUES (@code, @title, @description, @agenda, @category, @creator, @hostId, @hostDept, @customerId, @policyNumber, @purpose, @start, @end,
-                                @tz, 'SCHEDULED', @recording, @waiting, @room, @overrideNote, @user, @seriesId, @seq)
+                                @tz, 'SCHEDULED', @recording, @waiting, @room, @overrideNote, @user, @seriesId, @seq, @prarambh)
                             """, new
                         {
                             code, title, description, agenda, category, creator = me.EmployeeId, hostId, hostDept, customerId = customer?.CustomerId,
                             policyNumber = policyNumber ?? customer?.PolicyNumber, purpose, start, end, tz, recording, waiting = i.WaitingRoomEnabled ?? true,
                             room = MeetingMessaging.NewOpaqueId("oic_", 16), overrideNote = check.Conflicts.Count > 0 ? overrideReason : null, user = me.UserId,
-                            seriesId, seq,
+                            seriesId, seq, prarambh,
                         }, tx);
                     }
                     catch (SqlException e) when (e.IsUniqueViolation() && e.Message.Contains("MeetingCode") && attempt < 5) { }
@@ -515,7 +555,6 @@ public static class MeetingEndpoints
                     new Dictionary<string, object?> { ["occurrenceConflicts"] = allConflicts });
             }
 
-            var ip = ClientInfo.From(ctx).Ip;
             await Audit.WriteAsync(c, "USER", me.UserId, "MEETING_SERIES_SCHEDULED", "MeetingSeries", seriesPublicId.ToString(),
                 $"Recurring meeting '{title}' scheduled: {created.Count} occurrence(s)", ip, tx, newValues: new
                 {
@@ -636,6 +675,8 @@ public static class MeetingEndpoints
         if (!Categories.Contains(category)) v.Add("category", "Unknown meeting category.");
         else if (IsCustomerCategory(category) != IsCustomerCategory(m.Category))
             v.Add("category", "A customer meeting cannot become an internal meeting (or the other way round). Cancel it and create a new one.");
+        else if ((category == Plvc.Category) != (m.Category == Plvc.Category))
+            v.Add("category", "A Customer – PLVC meeting cannot change category (it carries a Prarambh Main ID). Cancel it and create a new one.");
         var status = Upper(i.Status) ?? m.Status;
         if (status is not ("DRAFT" or "SCHEDULED")) v.Add("status", "Status must be DRAFT or SCHEDULED. Use cancel to cancel a meeting.");
         else if (m.Status == "SCHEDULED" && status == "DRAFT") v.Add("status", "A scheduled meeting cannot go back to draft.");
@@ -1005,7 +1046,7 @@ public static class MeetingEndpoints
         DateTime StartUtc, DateTime EndUtc, string TimeZoneId, DateTime? ActualStartUtc, DateTime? ActualEndUtc, string RecordingPolicy, bool WaitingRoomEnabled,
         int ScheduleVersion, string? CancelReason, string? OverrideConflictReason, string? Purpose, string? PolicyNumber, long HostEmployeeId, Guid HostId, string HostName,
         long CreatedByEmployeeId, Guid CreatedById, string CreatedByName, Guid? CustomerId, string? CustomerName, string? CustomerRef, string? Department,
-        DateTime CreatedUtc, DateTime? ModifiedUtc, string MeetingKind, bool IsAudioOnly, Guid? SeriesId, int? SeriesSeq);
+        DateTime CreatedUtc, DateTime? ModifiedUtc, string MeetingKind, bool IsAudioOnly, Guid? SeriesId, int? SeriesSeq, string? PrarambhMainId, string? IntegrationName);
     sealed record ParticipantRow(long ParticipantId, string Id, string Type, long? EmployeeRowId, Guid? EmployeeId, string Name, string? Department,
         string? GuestEmail, string Role, string ResponseStatus, bool IsRequired);
     sealed record InvitationRow(long ParticipantId, DateTime CreatedUtc, DateTime ExpiresUtc, DateTime? RevokedUtc, int UseCount, DateTime? LastUsedUtc);
@@ -1019,10 +1060,11 @@ public static class MeetingEndpoints
                    m.ScheduledEndUtc AS EndUtc, m.TimeZoneId, m.ActualStartUtc, m.ActualEndUtc, m.RecordingPolicy, m.WaitingRoomEnabled, m.ScheduleVersion,
                    m.CancelReason, m.OverrideConflictReason, m.Purpose, m.PolicyNumber, m.HostEmployeeId, h.PublicId AS HostId, h.DisplayName AS HostName,
                    m.CreatedByEmployeeId, cb.PublicId AS CreatedById, cb.DisplayName AS CreatedByName, cu.PublicId AS CustomerId, cu.FullName AS CustomerName,
-                   cu.CustomerRef, d.Name AS Department, m.CreatedUtc, m.ModifiedUtc, m.MeetingKind, m.IsAudioOnly, ms.PublicId AS SeriesId, m.SeriesSeq
+                   cu.CustomerRef, d.Name AS Department, m.CreatedUtc, m.ModifiedUtc, m.MeetingKind, m.IsAudioOnly, ms.PublicId AS SeriesId, m.SeriesSeq,
+                   m.PrarambhMainId, ai.Name AS IntegrationName
             FROM mtg.Meetings m JOIN org.Employees h ON h.EmployeeId = m.HostEmployeeId JOIN org.Employees cb ON cb.EmployeeId = m.CreatedByEmployeeId
             LEFT JOIN crm.Customers cu ON cu.CustomerId = m.CustomerId LEFT JOIN org.Departments d ON d.DepartmentId = m.DepartmentId
-            LEFT JOIN mtg.MeetingSeries ms ON ms.SeriesId = m.SeriesId
+            LEFT JOIN mtg.MeetingSeries ms ON ms.SeriesId = m.SeriesId LEFT JOIN app.ApiIntegrations ai ON ai.IntegrationId = m.IntegrationId
             WHERE m.PublicId = @id AND {Visible}
             """, new { id, emp = me.EmployeeId, all = me.ViewAll });
         if (m is null) return MeetingNotFound();
@@ -1058,6 +1100,8 @@ public static class MeetingEndpoints
             actualStartUtc = m.ActualStartUtc, actualEndUtc = m.ActualEndUtc, recordingPolicy = m.RecordingPolicy, waitingRoomEnabled = m.WaitingRoomEnabled,
             scheduleVersion = m.ScheduleVersion, cancelReason = m.CancelReason, overrideConflictReason = canEdit ? m.OverrideConflictReason : null,
             purpose = m.Purpose, policyNumber = isCustomer && !me.Customers ? null : m.PolicyNumber, department = m.Department,
+            prarambhMainId = isCustomer && !me.Customers ? null : m.PrarambhMainId, integration = m.IntegrationName,
+            plvcIdentification = Plvc.Identification(m.Category, m.PrarambhMainId),
             host = new { id = m.HostId, name = m.HostName }, createdBy = new { id = m.CreatedById, name = m.CreatedByName },
             customer = m.CustomerId is null ? null : new { id = m.CustomerId, name = m.CustomerName, customerRef = me.Customers ? m.CustomerRef : null },
             createdUtc = m.CreatedUtc, modifiedUtc = m.ModifiedUtc, kind = m.MeetingKind, audioOnly = m.IsAudioOnly,

@@ -44,7 +44,7 @@ export function MobileTabBar() {
                   type="button"
                   onClick={() => setStarting(true)}
                   className="-mt-4 flex size-14 items-center justify-center rounded-full bg-brand-500 text-white shadow-[0_8px_20px_rgb(40_120_229/0.45)] active:scale-95"
-                  aria-label="Start a new meeting"
+                  aria-label="Start an instant meeting"
                   data-testid="tab-new-meeting"
                 >
                   <Plus className="size-7" />

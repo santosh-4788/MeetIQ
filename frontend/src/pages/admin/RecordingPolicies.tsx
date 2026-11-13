@@ -18,7 +18,9 @@ import { dbCategoryLabel, isCustomerCategory } from '../meetings/meta'
 import type { DbMeetingCategory } from '../../api/meetings'
 
 const requirementLabel: Record<Requirement, string> = { DISABLED: 'Disabled', OPTIONAL: 'Optional (host starts it)', MANDATORY: 'Mandatory (starts automatically)' }
-const expiryLabel: Record<ExpiryAction, string> = { REVIEW_ONLY: 'Review only (flag for review)', ARCHIVE: 'Archive (move to archive location)', DELETE: 'Delete (file deleted, record kept)' }
+const expiryLabel: Record<ExpiryAction, string> = { REVIEW_ONLY: 'Review only (flag for review)', ARCHIVE: 'Archive (move to archive location)', DELETE: 'Review only (automatic delete disabled)' }
+// 12 Nov 2026: automatic deletion is disabled - recordings are only deleted manually. DELETE is kept above only to label legacy rows.
+const selectableExpiry: ExpiryAction[] = ['REVIEW_ONLY', 'ARCHIVE']
 
 /**
  * Administration → Recording policies. Four separate policies; every legal/compliance value is entered here (nothing is invented by the
@@ -143,7 +145,7 @@ function CategoryMapping({ canEdit, categories, policies, onSaved }: {
             disabled={!canEdit || isCustomerCategory(c.category)}
             onChange={(e) => setMap((m) => ({ ...m, [c.category]: e.target.value }))}
           >
-            {policies.filter((p) => isCustomerCategory(c.category) === (p.code === 'CUSTOMER_MEETING')).map((p) => (
+            {policies.filter((p) => isCustomerCategory(c.category) === (p.code === 'CUSTOMER_MEETING' || p.code === 'CUSTOMER_PLVC')).map((p) => (
               <option key={p.code} value={p.code}>{p.title}</option>
             ))}
           </SelectField>
@@ -273,16 +275,16 @@ function PolicyDialog({ policy, roles, onClose }: { policy: RecordingPolicy; rol
         <section className="grid gap-4 sm:grid-cols-2">
           <h3 className="text-[13px] font-bold tracking-wide text-ink-secondary uppercase sm:col-span-2">Retention</h3>
           <TextField label="Retention (days)" type="number" min={1} value={f.retentionDays ?? ''} error={errors.retentionDays}
-            onChange={(e) => set('retentionDays', e.target.value === '' ? null : Number(e.target.value))} hint="Empty = not set: recordings are never deleted or archived automatically." />
+            onChange={(e) => set('retentionDays', e.target.value === '' ? null : Number(e.target.value))} hint="Empty = not set. Recordings are never deleted automatically; at expiry they are only flagged for review or archived. Deletion is manual." />
           <SelectField label="Action at expiry" value={f.expiryAction} onChange={(e) => set('expiryAction', e.target.value as ExpiryAction)}>
-            {(Object.keys(expiryLabel) as ExpiryAction[]).map((a) => <option key={a} value={a}>{expiryLabel[a]}</option>)}
+            {selectableExpiry.map((a) => <option key={a} value={a}>{expiryLabel[a]}</option>)}
           </SelectField>
           <TextField label="Archive location" {...text('archiveLocation')} hint="Absolute folder, e.g. D:\RecordingArchive" />
           <div className="flex flex-col gap-2 pt-6">
             <Switch label="Legal hold allowed" checked={f.legalHoldEnabled} onChange={(v) => set('legalHoldEnabled', v)} />
             <Switch label="Deletion needs two approvers" checked={f.dualApprovalForDeletion} onChange={(v) => set('dualApprovalForDeletion', v)} />
           </div>
-          <div className="sm:col-span-2">{roleBoxes('deletionApproverRoles', 'Deletion approver roles', 'Who may approve a deletion at retention expiry.')}</div>
+          <div className="sm:col-span-2">{roleBoxes('deletionApproverRoles', 'Deletion approver roles', 'Who may approve a manual deletion request.')}</div>
         </section>
 
         <section className="grid gap-4 sm:grid-cols-2">

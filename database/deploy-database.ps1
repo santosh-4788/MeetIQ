@@ -30,7 +30,10 @@ param(
     # Omit to use Windows authentication (preferred).
     [string] $SqlLogin,
     # Read-only: report what would be created/applied, change nothing.
-    [switch] $Plan
+    [switch] $Plan,
+    # With -CreateDatabase: folder for the new database's data and log files (default: the server's default folder).
+    # Needed on SQL Server 2017 LocalDB instances whose default folder is reported without a trailing backslash.
+    [string] $DataPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -83,7 +86,14 @@ if ($Plan) {
 if ($exists -eq '0') {
     if (-not $CreateDatabase) { throw "Database $Database does not exist on $Server. Re-run with -CreateDatabase." }
     Write-Host "Creating database $Database on $Server"
-    Invoke-Sql -Query "CREATE DATABASE [$Database]; ALTER DATABASE [$Database] SET READ_COMMITTED_SNAPSHOT ON WITH ROLLBACK IMMEDIATE;" | Out-Null
+    $on = ''
+    if ($DataPath) {
+        if ($DataPath -match "'") { throw "Invalid -DataPath." }
+        New-Item -ItemType Directory -Force $DataPath | Out-Null
+        $mdf = Join-Path $DataPath "$Database.mdf"; $ldf = Join-Path $DataPath "${Database}_log.ldf"
+        $on = " ON (NAME = N'$Database', FILENAME = N'$mdf') LOG ON (NAME = N'${Database}_log', FILENAME = N'$ldf')"
+    }
+    Invoke-Sql -Query "CREATE DATABASE [$Database]$on; ALTER DATABASE [$Database] SET READ_COMMITTED_SNAPSHOT ON WITH ROLLBACK IMMEDIATE;" | Out-Null
 }
 
 # 2. Migration history

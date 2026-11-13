@@ -27,7 +27,7 @@ internal sealed record Viewer(long UserId, long? EmployeeId, string[] Roles, boo
 
     public object Sql => new
     {
-        emp = EmployeeId, roles = Roles, viewOwn = ViewOwn, viewTeam = ViewTeam, viewDept = ViewDepartment, viewAll = ViewAll,
+        uid = UserId, emp = EmployeeId, roles = Roles, viewOwn = ViewOwn, viewTeam = ViewTeam, viewDept = ViewDepartment, viewAll = ViewAll,
     };
 }
 
@@ -35,6 +35,8 @@ internal sealed record Viewer(long UserId, long? EmployeeId, string[] Roles, boo
 internal interface IAccessFlags
 {
     bool IsOwner { get; }
+    /// <summary>The viewer started this recording, or is (or was made) a host/co-host of its meeting - not necessarily the meeting creator.</summary>
+    bool IsHostOrStarter { get; }
     bool PlaybackRole { get; }
     bool DownloadRole { get; }
     bool LeadsOwner { get; }
@@ -49,6 +51,9 @@ internal sealed record Access(bool Visible, bool CanPlay, bool CanDownload, stri
 
 /// <summary>
 /// Who may see, play and download a recording. A recording is visible to: its owner (meeting creator, recordings.view.own);
+/// with the same recordings.view.own permission, the employee who started it and the meeting's hosts/co-hosts (a meeting scheduled
+/// for someone else, a host transfer or a co-host) - they play it under the policy's owner-play flag, but download and deletion
+/// stay with the owner and the explicit permissions;
 /// the team leader of the owner's team (recordings.view.team, or the policy's team-leader flag); the head of the owner's department
 /// (recordings.view.department, or the policy's department-head flag); anyone with recordings.view.all or a role listed in the
 /// policy's playback roles. The owner plays only when the policy allows it. Download needs recordings.download, a role listed in the
@@ -60,6 +65,10 @@ internal static class RecordingAccess
     /// <summary>Columns (alias r = rec.MeetingRecordings, p = rec.RecordingPolicies) with the facts behind every decision.</summary>
     public const string FlagsSql = """
         CAST(CASE WHEN @emp IS NOT NULL AND r.OwnerEmployeeId = @emp THEN 1 ELSE 0 END AS BIT) AS IsOwner,
+        CAST(CASE WHEN r.StartedByUserId = @uid
+                    OR (@emp IS NOT NULL AND EXISTS (SELECT 1 FROM mtg.MeetingParticipants hp WHERE hp.MeetingId = r.MeetingId AND hp.EmployeeId = @emp AND hp.[Role] IN ('HOST', 'COHOST')))
+                    OR (@emp IS NOT NULL AND EXISTS (SELECT 1 FROM mtg.Meetings hm WHERE hm.MeetingId = r.MeetingId AND hm.HostEmployeeId = @emp))
+                  THEN 1 ELSE 0 END AS BIT) AS IsHostOrStarter,
         CAST(CASE WHEN EXISTS (SELECT 1 FROM OPENJSON(ISNULL(p.PlaybackRoles, N'[]')) j WHERE j.[value] IN @roles) THEN 1 ELSE 0 END AS BIT) AS PlaybackRole,
         CAST(CASE WHEN EXISTS (SELECT 1 FROM OPENJSON(ISNULL(p.DownloadRoles, N'[]')) j WHERE j.[value] IN @roles) THEN 1 ELSE 0 END AS BIT) AS DownloadRole,
         CAST(CASE WHEN @emp IS NOT NULL AND EXISTS (SELECT 1 FROM org.Teams t JOIN org.TeamMembers tm ON tm.TeamId = t.TeamId AND tm.ToUtc IS NULL
@@ -73,6 +82,9 @@ internal static class RecordingAccess
     /// <summary>SQL predicate (r, p) with the parameters of <see cref="Viewer.Sql"/>: may the viewer see recording r?</summary>
     public const string VisibleSql = """
         ((@emp IS NOT NULL AND @viewOwn = 1 AND r.OwnerEmployeeId = @emp)
+         OR (@viewOwn = 1 AND r.StartedByUserId = @uid)
+         OR (@emp IS NOT NULL AND @viewOwn = 1 AND EXISTS (SELECT 1 FROM mtg.MeetingParticipants hp WHERE hp.MeetingId = r.MeetingId AND hp.EmployeeId = @emp AND hp.[Role] IN ('HOST', 'COHOST')))
+         OR (@emp IS NOT NULL AND @viewOwn = 1 AND EXISTS (SELECT 1 FROM mtg.Meetings hm WHERE hm.MeetingId = r.MeetingId AND hm.HostEmployeeId = @emp))
          OR @viewAll = 1
          OR EXISTS (SELECT 1 FROM OPENJSON(ISNULL(p.PlaybackRoles, N'[]')) j WHERE j.[value] IN @roles)
          OR (@emp IS NOT NULL AND (@viewTeam = 1 OR p.TeamLeaderCanPlay = 1) AND EXISTS (SELECT 1 FROM org.Teams t JOIN org.TeamMembers tm ON tm.TeamId = t.TeamId AND tm.ToUtc IS NULL
@@ -84,13 +96,14 @@ internal static class RecordingAccess
     public static Access Decide(Viewer v, IAccessFlags f)
     {
         var owner = f.IsOwner && v.ViewOwn;
+        var host = f.IsHostOrStarter && v.ViewOwn;
         var team = f.LeadsOwner && (v.ViewTeam || f.TeamLeaderCanPlay);
         var dept = f.HeadsOwnerDepartment && (v.ViewDepartment || f.DepartmentHeadCanPlay);
         var all = v.ViewAll || f.PlaybackRole;
-        var visible = owner || team || dept || all;
-        var play = (owner && f.OwnerCanPlay) || team || dept || all;
+        var visible = owner || host || team || dept || all;
+        var play = ((owner || host) && f.OwnerCanPlay) || team || dept || all;
         var download = visible && (v.Download || f.DownloadRole || (f.IsOwner && f.OwnerCanDownload));
-        var via = all ? (v.ViewAll ? "permission:recordings.view.all" : "policy:playback-role") : team ? "team-leader" : dept ? "department-head" : owner ? "owner" : "none";
+        var via = all ? (v.ViewAll ? "permission:recordings.view.all" : "policy:playback-role") : team ? "team-leader" : dept ? "department-head" : owner ? "owner" : host ? "host" : "none";
         return new Access(visible, play, download, via);
     }
 

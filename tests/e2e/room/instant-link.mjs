@@ -14,7 +14,7 @@ const host = await newPage()
 let meetingId, mid, linkUrl, guest, colleague, late
 const ok = {}
 
-ok.start = await tc('IL-01', 'Host starts an instant meeting from the dashboard', '"New meeting" → dialog → Start → pre-join (no schedule) → room; Invite dialog shows the link; meeting INSTANT and LIVE', async () => {
+ok.start = await tc('IL-01', 'Host starts an instant meeting from the dashboard', '"Instant meeting" → dialog → Start → pre-join (no schedule) → room; Invite dialog shows the link; meeting INSTANT and LIVE', async () => {
   await loginUI(host, HOST.email)
   await host.getByTestId('new-meeting').click()
   await host.getByLabel('Title (optional)').fill('Instant E2E')

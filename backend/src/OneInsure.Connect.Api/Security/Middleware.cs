@@ -28,7 +28,8 @@ public static class SecurityMiddleware
         var o = ctx.RequestServices.GetRequiredService<IOptions<SecurityOptions>>().Value;
         var req = ctx.Request;
         // Server-to-server webhooks carry no cookies; they are authenticated by their signature instead.
-        if (!req.Path.StartsWithSegments("/api") || req.Path.StartsWithSegments("/api/v1/webhooks")) { await next(); return; }
+        // The external integration API (/api/ext) authenticates by API key only - cookies grant nothing there, so CSRF cannot apply.
+        if (!req.Path.StartsWithSegments("/api") || req.Path.StartsWithSegments("/api/v1/webhooks") || req.Path.StartsWithSegments("/api/ext")) { await next(); return; }
 
         if (!HttpMethods.IsGet(req.Method) && !HttpMethods.IsHead(req.Method) && !HttpMethods.IsOptions(req.Method))
         {

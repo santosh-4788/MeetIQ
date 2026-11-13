@@ -10,7 +10,11 @@ import { Badge } from '../components/ui/Feedback'
 /** One centered card over an ambient animated backdrop, shared by every authentication screen. */
 export function AuthLayout() {
   return (
-    <div className="relative flex min-h-dvh flex-col overflow-hidden bg-gradient-brand bg-[length:220%_220%] text-white animate-gradient">
+    // body has padding-top: env(safe-area-inset-top) globally (theme.css) so page content clears the notch/status
+    // bar - fine for every other (light) page, but it leaves a sliver of body's own light background above this
+    // dark gradient. Pull up by that same inset and pad it back on the inside, so this layout paints its own
+    // background all the way to the top of the screen instead of leaving that strip to body's canvas colour.
+    <div className="relative flex min-h-dvh flex-col overflow-hidden bg-gradient-brand bg-[length:220%_220%] text-white animate-gradient -mt-[env(safe-area-inset-top)] pt-[env(safe-area-inset-top)]">
       <AuthAmbience />
       <div className="relative z-10 flex items-center justify-end px-5 pt-5 sm:px-8">
         {DEMO_MODE && (
@@ -19,10 +23,13 @@ export function AuthLayout() {
           </Badge>
         )}
       </div>
-      <div className="relative z-10 flex flex-1 items-center justify-center px-4 py-8 sm:px-6">
+      {/* z-20, above the footer: guests join from /join and /m pages under this layout, and the full-screen meeting room
+          (fixed, z-40) is painted inside this stacking context - at z-10 the footer was drawn over the room's control bar
+          and swallowed taps on phones. */}
+      <div className="relative z-20 flex flex-1 items-center justify-center px-4 py-8 sm:px-6">
         <Outlet />
       </div>
-      <footer className="relative z-10 flex flex-col items-center gap-1 px-6 pb-6 text-center text-[12px] text-white/55 sm:flex-row sm:justify-between">
+      <footer className="oic-auth-footer relative z-10 flex flex-col items-center gap-1 px-6 pb-6 text-center text-[12px] text-white/55 sm:flex-row sm:justify-between">
         <span className="inline-flex items-center gap-1.5">
           <Headset className="size-3.5" /> Need help?{' '}
           <a href={`mailto:${SUPPORT.email}`} className="font-medium text-white/80 hover:text-white hover:underline">

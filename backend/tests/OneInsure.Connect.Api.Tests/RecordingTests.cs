@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -96,12 +96,14 @@ public sealed class RecordingTests(ApiFixture fx)
     static int day = 700;
 
     /// <summary>A TEAM meeting of X-HOST with X-PEER, moved to "now", started by the host (LIVE); both are "in the room".</summary>
-    async Task<Booked> LiveMeeting(TestClient host, string recordingPolicy = "OPTIONAL")
+    async Task<Booked> LiveMeeting(TestClient host, string recordingPolicy = "OPTIONAL", params string[] alsoInvited)
     {
         var start = DateTime.SpecifyKind(DateTime.UtcNow.Date.AddDays(Interlocked.Increment(ref day)).AddHours(5), DateTimeKind.Utc);
+        var invited = new List<Guid> { await Emp("X-PEER") };
+        foreach (var code in alsoInvited) invited.Add(await Emp(code));
         var r = await host.PostAsync("/api/v1/meetings", new
         {
-            title = "Recording test", category = "TEAM", startUtc = start, endUtc = start.AddHours(1), employeeIds = new[] { await Emp("X-PEER") }, status = "SCHEDULED",
+            title = "Recording test", category = "TEAM", startUtc = start, endUtc = start.AddHours(1), employeeIds = invited, status = "SCHEDULED",
             recordingPolicy, waitingRoomEnabled = false,
         });
         Assert.True(r.StatusCode == HttpStatusCode.Created, await r.Content.ReadAsStringAsync());
@@ -166,6 +168,82 @@ public sealed class RecordingTests(ApiFixture fx)
         return (rec, m, host);
     }
 
+    // ---- Start / stop state machine (Nov 2026 fix) --------------------------------------------------------------------
+
+    [Fact]
+    public async Task Stop_reports_stopping_at_once_is_idempotent_and_releases_rec_when_capture_ends()
+    {
+        await SeedAsync();
+        await ResetPolicy();
+        var host = await SignedIn("xhost@test.invalid");
+        var peer = await SignedIn("xpeer@test.invalid");
+        var m = await LiveMeeting(host);
+        var rec = await Start(host, peer, m);
+        var run = await Launched(rec);
+        Assert.Equal("RECORDING", await Status(rec));
+        // The measured start-up time is recorded as evidence once the recorder confirms capture.
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE [Action] = 'RECORDING_CAPTURE_STARTED' AND EntityId = @rec", new { rec = rec.ToString() }));
+
+        // Stop: the very response already says STOPPING (not RECORDING) and offers no second stop.
+        var stop = await host.PostAsync($"/api/v1/meetings/{m.Id}/recording/stop");
+        Assert.Equal(HttpStatusCode.OK, stop.StatusCode);
+        var s1 = await Json(stop);
+        Assert.Equal("STOPPING", s1.GetProperty("recording").GetProperty("status").GetString());
+        Assert.False(s1.GetProperty("canStop").GetBoolean());
+        // A repeated stop (double click / retry) is harmless: 200, and no second stop request is recorded.
+        Assert.Equal(HttpStatusCode.OK, (await host.PostAsync($"/api/v1/meetings/{m.Id}/recording/stop")).StatusCode);
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE [Action] = 'RECORDING_STOP_REQUESTED' AND EntityId = @rec", new { rec = rec.ToString() }));
+
+        await Worker.RunOnceAsync(CancellationToken.None);
+        Assert.True(run.StopRequested);
+        Assert.Equal("RECORDING", await Status(rec)); // capture not yet over: still holds the one-active-recording slot
+
+        // The recorder reports that capture ended: REC is released at once, while the MP4 is still being built.
+        run.CaptureEnded = true;
+        await Worker.RunOnceAsync(CancellationToken.None);
+        Assert.Equal("PROCESSING", await Status(rec));
+        var s2 = await Json(await host.Http.GetAsync($"/api/v1/meetings/{m.Id}/recording"));
+        Assert.Equal(JsonValueKind.Null, s2.GetProperty("recording").ValueKind);
+        Assert.True(s2.GetProperty("canStart").GetBoolean()); // the meeting continues and may be recorded again
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE [Action] = 'RECORDING_CAPTURE_ENDED' AND EntityId = @rec", new { rec = rec.ToString() }));
+        // Stopping again after it has stopped is not an error either.
+        Assert.Equal(HttpStatusCode.OK, (await host.PostAsync($"/api/v1/meetings/{m.Id}/recording/stop")).StatusCode);
+
+        // COMPLETED only after the MP4 is built and verified.
+        await run.CompleteAsync();
+        await Finish();
+        Assert.Equal("COMPLETED", await Status(rec));
+    }
+
+    [Fact]
+    public async Task A_cohost_who_did_not_create_the_meeting_sees_and_plays_the_recording_but_cannot_delete_it()
+    {
+        var (rec, m, _) = await Completed();
+        var peer = await SignedIn("xpeer@test.invalid");
+        // As a plain attendee: not visible (unchanged rule).
+        var before = await Json(await peer.Http.GetAsync("/api/v1/recordings?pageSize=100"));
+        Assert.DoesNotContain(before.GetProperty("items").EnumerateArray(), i => i.GetProperty("id").GetGuid() == rec);
+        Assert.Equal(HttpStatusCode.NotFound, (await peer.Http.GetAsync($"/api/v1/recordings/{rec}")).StatusCode);
+
+        // Made co-host of that meeting: listed, opens, plays - but delete stays with the owner (meeting creator).
+        await Exec("""
+            UPDATE p SET [Role] = 'COHOST' FROM mtg.MeetingParticipants p JOIN org.Employees e ON e.EmployeeId = p.EmployeeId
+            WHERE p.MeetingId = @mid AND e.EmployeeCode = 'X-PEER'
+            """, new { mid = m.Mid });
+        var after = await Json(await peer.Http.GetAsync("/api/v1/recordings?pageSize=100"));
+        var item = after.GetProperty("items").EnumerateArray().Single(i => i.GetProperty("id").GetGuid() == rec);
+        Assert.Equal("host", item.GetProperty("access").GetString());
+        Assert.True(item.GetProperty("canPlay").GetBoolean());
+        Assert.False(item.GetProperty("canDelete").GetBoolean());
+        Assert.False(item.GetProperty("canDownload").GetBoolean());
+        Assert.Equal(HttpStatusCode.OK, (await peer.Http.GetAsync($"/api/v1/recordings/{rec}")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await peer.PostAsync($"/api/v1/recordings/{rec}/play")).StatusCode);
+
+        // An unrelated employee still cannot see it.
+        var outsider = await SignedIn("xout@test.invalid");
+        Assert.Equal(HttpStatusCode.NotFound, (await outsider.Http.GetAsync($"/api/v1/recordings/{rec}")).StatusCode);
+    }
+
     // ---- Policies ---------------------------------------------------------------------------------------------------
 
     [Fact]
@@ -179,10 +257,11 @@ public sealed class RecordingTests(ApiFixture fx)
 
         var list = await Json(await super.Http.GetAsync("/api/v1/admin/recording-policies"));
         var items = list.GetProperty("items").EnumerateArray().ToList();
-        Assert.Equal(["CUSTOMER_MEETING", "CUSTOMER_AUDIO_CALL", "INTERNAL_MEETING", "TRAINING_TEAM_MEETING"], items.Select(i => i.GetProperty("code").GetString()));
+        Assert.Equal(["CUSTOMER_MEETING", "CUSTOMER_PLVC", "CUSTOMER_AUDIO_CALL", "INTERNAL_MEETING", "TRAINING_TEAM_MEETING"], items.Select(i => i.GetProperty("code").GetString()));
         Assert.All(items, i => Assert.False(i.GetProperty("confirmed").GetBoolean()));
         Assert.All(items.Where(i => i.GetProperty("code").GetString() != Policy), i => Assert.True(i.GetProperty("hasPlaceholders").GetBoolean()));
-        Assert.True(items[1].GetProperty("configurationOnly").GetBoolean());
+        Assert.True(items.Single(i => i.GetProperty("code").GetString() == "CUSTOMER_AUDIO_CALL").GetProperty("configurationOnly").GetBoolean());
+        Assert.False(items.Single(i => i.GetProperty("code").GetString() == "CUSTOMER_PLVC").GetProperty("configurationOnly").GetBoolean());
         Assert.Equal(9, list.GetProperty("categories").GetArrayLength());
         Assert.Equal(HttpStatusCode.OK, (await admin.Http.GetAsync("/api/v1/admin/recording-policies")).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await employee.Http.GetAsync("/api/v1/admin/recording-policies")).StatusCode);
@@ -310,17 +389,56 @@ public sealed class RecordingTests(ApiFixture fx)
         Assert.Equal(HttpStatusCode.NotFound, (await outsider.Http.GetAsync($"/api/v1/meetings/{m.Id}/recording")).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await peer.PostAsync($"/api/v1/meetings/{m.Id}/recording/start", new { acceptNotice = true, noticeVersion = await NoticeVersion() })).StatusCode);
 
-        // The peer has not answered: refused, naming who is missing.
-        var missing = await host.PostAsync($"/api/v1/meetings/{m.Id}/recording/start", new { acceptNotice = true, noticeVersion = await NoticeVersion() });
-        Assert.Equal(HttpStatusCode.Conflict, missing.StatusCode);
-        var missingBody = await Json(missing);
-        Assert.Equal("CONSENT_MISSING", missingBody.GetProperty("code").GetString());
-        Assert.Contains("Xavi Peer", missingBody.GetProperty("detail").GetString());
+        // The peer has not answered: nothing is recorded; a consent request is opened (host = accepted, peer = pending)...
+        var requested = await host.PostAsync($"/api/v1/meetings/{m.Id}/recording/start", new { acceptNotice = true, noticeVersion = await NoticeVersion() });
+        Assert.True(requested.StatusCode == HttpStatusCode.OK, await requested.Content.ReadAsStringAsync());
+        var requestedBody = await Json(requested);
+        Assert.Equal(JsonValueKind.Null, requestedBody.GetProperty("recording").ValueKind);
+        Assert.False(requestedBody.GetProperty("canStart").GetBoolean());
+        Assert.True(requestedBody.GetProperty("canCancelRequest").GetBoolean());
+        var request = requestedBody.GetProperty("request");
+        Assert.Equal("OPEN", request.GetProperty("status").GetString());
+        Assert.True(request.GetProperty("isRequester").GetBoolean());
+        Assert.Equal(1, request.GetProperty("accepted").GetInt32());
+        var statuses = request.GetProperty("participants").EnumerateArray().ToDictionary(x => x.GetProperty("identity").GetString()!, x => x.GetProperty("status").GetString());
+        Assert.Equal("GRANTED", statuses[m.HostIdentity]);
+        Assert.Equal("PENDING", statuses[m.PeerIdentity]);
+        Assert.Equal(0, await Count("SELECT COUNT(*) FROM rec.MeetingRecordings WHERE MeetingId = @mid", new { mid = m.Mid }));
+        // ...and EVERYONE in the room is told (no destination filter - each client reads the request from the server; the old
+        // targeted one-off message is what left participants without a popup).
+        var asked = fx.LiveKit.For(m.Room).Where(c => c.Method == "SendData").Select(c =>
+            (Payload: JsonDocument.Parse(Convert.FromBase64String(c.Body.GetProperty("data").GetString()!)).RootElement.Clone(),
+             To: c.Body.GetProperty("destination_identities").EnumerateArray().Select(x => x.GetString()).ToList()))
+            .Where(x => x.Payload.TryGetProperty("type", out var t) && t.GetString() == "consent-requested").ToList();
+        Assert.Single(asked);
+        Assert.Empty(asked[0].To);
+        Assert.Contains(fx.LiveKit.For(m.Room), c => c.Method == "UpdateRoomMetadata" && c.Body.GetProperty("metadata").GetString()!.Contains(request.GetProperty("id").GetString()!));
+        // Pressing Start again returns the same request (no second request, nothing recorded).
+        var again = await Json(await host.PostAsync($"/api/v1/meetings/{m.Id}/recording/start", new { acceptNotice = true, noticeVersion = await NoticeVersion() }));
+        Assert.Equal(request.GetProperty("id").GetString(), again.GetProperty("request").GetProperty("id").GetString());
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM rec.RecordingRequests WHERE MeetingId = @mid", new { mid = m.Mid }));
+        // The peer's own state carries the request (this is what opens the popup, also after a reconnect).
+        var peerState = await Json(await peer.Http.GetAsync($"/api/v1/meetings/{m.Id}/recording"));
+        Assert.Equal("OPEN", peerState.GetProperty("request").GetProperty("status").GetString());
+        Assert.Equal(JsonValueKind.Null, peerState.GetProperty("request").GetProperty("myDecision").ValueKind);
+        Assert.False(peerState.GetProperty("request").GetProperty("isRequester").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, peerState.GetProperty("request").GetProperty("participants").ValueKind); // statuses are for hosts only
         Assert.Equal("NOTICE_CHANGED", await Code(await peer.PostAsync($"/api/v1/meetings/{m.Id}/recording/consent", new { decision = "GRANTED", noticeVersion = "old" })));
         Assert.Equal(HttpStatusCode.BadRequest, (await peer.PostAsync($"/api/v1/meetings/{m.Id}/recording/consent", new { decision = "MAYBE", noticeVersion = await NoticeVersion() })).StatusCode);
 
-        var rec = await Start(host, peer, m);
+        // The peer accepts: everyone in the request has accepted, so the recorder is started (PENDING until it confirms capture).
+        var accepted = await peer.PostAsync($"/api/v1/meetings/{m.Id}/recording/consent", new { decision = "GRANTED", noticeVersion = await NoticeVersion() });
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        var acceptedBody = await Json(accepted);
+        Assert.Equal("PENDING", acceptedBody.GetProperty("recording").GetProperty("status").GetString());
+        Assert.Equal("STARTED", acceptedBody.GetProperty("lastRequest").GetProperty("status").GetString());
+        var rec = acceptedBody.GetProperty("recording").GetProperty("id").GetGuid();
         Assert.Equal("PENDING", await Status(rec));
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM rec.RecordingRequests r JOIN rec.MeetingRecordings x ON x.RecordingId = r.RecordingId WHERE r.MeetingId = @mid AND r.[Status] = 'STARTED' AND x.PublicId = @rec", new { mid = m.Mid, rec }));
+        Assert.Equal(2, await Count("SELECT COUNT(*) FROM rec.RecordingRequestParticipants x JOIN rec.RecordingRequests r ON r.RequestId = x.RequestId WHERE r.MeetingId = @mid AND x.Decision = 'GRANTED' AND x.ConsentId IS NOT NULL", new { mid = m.Mid }));
+        // A duplicate Accept (double click / retry) is not a new decision: no extra evidence row, no second recording.
+        Assert.Equal(HttpStatusCode.OK, (await peer.PostAsync($"/api/v1/meetings/{m.Id}/recording/consent", new { decision = "GRANTED", noticeVersion = await NoticeVersion() })).StatusCode);
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM rec.MeetingRecordings WHERE MeetingId = @mid", new { mid = m.Mid }));
         var rows = await Count("SELECT COUNT(*) FROM mtg.MeetingConsent WHERE MeetingId = @mid AND Decision = 'GRANTED' AND EvidenceHash IS NOT NULL AND NoticeVersion = 'PLACEHOLDER-0'", new { mid = m.Mid });
         Assert.Equal(2, rows); // host (accepted the notice when starting) + peer
         var ex = await Assert.ThrowsAsync<SqlException>(() => Exec("UPDATE mtg.MeetingConsent SET Decision = 'DENIED' WHERE MeetingId = @mid", new { mid = m.Mid }));
@@ -339,6 +457,289 @@ public sealed class RecordingTests(ApiFixture fx)
         await run.CompleteAsync();
         await Finish();
         Assert.Equal("COMPLETED", await Status(rec));
+    }
+
+    async Task<JsonElement> RecState(TestClient who, Booked m) => await Json(await who.Http.GetAsync($"/api/v1/meetings/{m.Id}/recording"));
+
+    static Dictionary<string, string?> RequestStatuses(JsonElement state) =>
+        state.GetProperty("request").GetProperty("participants").EnumerateArray().ToDictionary(x => x.GetProperty("identity").GetString()!, x => x.GetProperty("status").GetString());
+
+    Task<string> IdentityOf(Booked m, string code) => fx.QueryAsync<string>(
+        "SELECT p.LiveKitIdentity FROM mtg.MeetingParticipants p JOIN org.Employees e ON e.EmployeeId = p.EmployeeId WHERE p.MeetingId = @mid AND e.EmployeeCode = @code", new { mid = m.Mid, code });
+
+    [Fact]
+    public async Task A_consent_request_waits_for_everyone_a_decline_closes_it_and_a_disconnected_participant_never_counts_as_accepted()
+    {
+        await SeedAsync();
+        await ResetPolicy();
+        var host = await SignedIn("xhost@test.invalid");
+        var peer = await SignedIn("xpeer@test.invalid");
+        var lead = await SignedIn("xlead@test.invalid");
+        var m = await LiveMeeting(host, "OPTIONAL", "X-LEAD");
+        var leadIdentity = await IdentityOf(m, "X-LEAD");
+        var v = await NoticeVersion();
+        async Task<HttpResponseMessage> Answer(TestClient who, string decision) =>
+            await who.PostAsync($"/api/v1/meetings/{m.Id}/recording/consent", new { decision, noticeVersion = v });
+        Task<int> Recordings() => Count("SELECT COUNT(*) FROM rec.MeetingRecordings WHERE MeetingId = @mid", new { mid = m.Mid });
+
+        // Host + peer in the room. One Decline closes the request: nothing is recorded and the host is told who declined.
+        Assert.Equal(HttpStatusCode.OK, (await host.PostAsync($"/api/v1/meetings/{m.Id}/recording/start", new { acceptNotice = true, noticeVersion = v })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await Answer(peer, "DENIED")).StatusCode);
+        var afterDecline = await RecState(host, m);
+        Assert.Equal(JsonValueKind.Null, afterDecline.GetProperty("request").ValueKind);
+        Assert.Equal("DECLINED", afterDecline.GetProperty("lastRequest").GetProperty("status").GetString());
+        Assert.Contains("Xavi Peer", afterDecline.GetProperty("lastRequest").GetProperty("reason").GetString());
+        Assert.True(afterDecline.GetProperty("canStart").GetBoolean());
+        Assert.Equal(0, await Recordings());
+        Assert.Contains(fx.LiveKit.For(m.Room), c => c.Method == "SendData"
+            && System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(c.Body.GetProperty("data").GetString()!)).Contains("consent-request-closed"));
+
+        // A new request asks the person who declined again (their answer is theirs to give each time).
+        Assert.Equal(HttpStatusCode.OK, (await host.PostAsync($"/api/v1/meetings/{m.Id}/recording/start", new { acceptNotice = true, noticeVersion = v })).StatusCode);
+        Assert.Equal("PENDING", RequestStatuses(await RecState(host, m))[m.PeerIdentity]);
+
+        // The peer drops out before answering and a newcomer joins: the peer is DISCONNECTED (never accepted), the newcomer is asked.
+        fx.LiveKit.Participants[m.Room] = [m.HostIdentity, leadIdentity];
+        var s1 = RequestStatuses(await RecState(host, m));
+        Assert.Equal("DISCONNECTED", s1[m.PeerIdentity]);
+        Assert.Equal("PENDING", s1[leadIdentity]);
+        var leadState = await RecState(lead, m);
+        Assert.Equal("OPEN", leadState.GetProperty("request").GetProperty("status").GetString());
+        Assert.Equal(JsonValueKind.Null, leadState.GetProperty("request").GetProperty("myDecision").ValueKind);
+        Assert.Equal(HttpStatusCode.OK, (await Answer(lead, "GRANTED")).StatusCode);
+        Assert.Equal(0, await Recordings()); // the disconnected peer has not accepted: recording must not start
+        Assert.Equal("GRANTED", RequestStatuses(await RecState(host, m))[leadIdentity]);
+
+        // The peer reconnects: the pending request is still theirs to answer; once they accept, recording starts.
+        fx.LiveKit.Participants[m.Room] = [m.HostIdentity, m.PeerIdentity, leadIdentity];
+        var peerState = await RecState(peer, m);
+        Assert.Equal("OPEN", peerState.GetProperty("request").GetProperty("status").GetString());
+        Assert.Equal(JsonValueKind.Null, peerState.GetProperty("request").GetProperty("myDecision").ValueKind);
+        var accepted = await Json(await Answer(peer, "GRANTED"));
+        Assert.Equal("PENDING", accepted.GetProperty("recording").GetProperty("status").GetString());
+        Assert.Equal(1, await Recordings());
+        Assert.Equal(3, await Count("""
+            SELECT COUNT(*) FROM rec.RecordingRequestParticipants x JOIN rec.RecordingRequests r ON r.RequestId = x.RequestId
+            WHERE r.MeetingId = @mid AND r.[Status] = 'STARTED' AND x.Decision = 'GRANTED'
+            """, new { mid = m.Mid }));
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE [Action] = 'RECORDING_REQUEST_DECLINED' AND EntityId = @id", new { id = m.Id.ToString() }));
+
+        // Not left running for other tests: the host stops it before the recorder picked it up.
+        Assert.Equal(HttpStatusCode.OK, (await host.PostAsync($"/api/v1/meetings/{m.Id}/recording/stop")).StatusCode);
+    }
+
+    [Fact]
+    public async Task The_host_can_remove_only_someone_who_left_without_accepting_and_they_are_never_counted_as_accepted()
+    {
+        await SeedAsync();
+        await ResetPolicy();
+        var host = await SignedIn("xhost@test.invalid");
+        var peer = await SignedIn("xpeer@test.invalid");
+        var m = await LiveMeeting(host);
+        var v = await NoticeVersion();
+        async Task<HttpResponseMessage> Remove(TestClient who, string identity) =>
+            await who.PostAsync($"/api/v1/meetings/{m.Id}/recording/request/remove", new { identity });
+
+        Assert.Equal(HttpStatusCode.OK, (await host.PostAsync($"/api/v1/meetings/{m.Id}/recording/start", new { acceptNotice = true, noticeVersion = v })).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Remove(peer, m.HostIdentity)).StatusCode); // hosts only
+        Assert.Equal(HttpStatusCode.Conflict, (await Remove(host, m.PeerIdentity)).StatusCode); // still in the room: cannot be removed
+
+        // The peer leaves without answering: Disconnected, recording does not start; the host removes them.
+        fx.LiveKit.Participants[m.Room] = [m.HostIdentity];
+        Assert.Equal("DISCONNECTED", RequestStatuses(await RecState(host, m))[m.PeerIdentity]);
+        Assert.Equal(0, await Count("SELECT COUNT(*) FROM rec.MeetingRecordings WHERE MeetingId = @mid", new { mid = m.Mid }));
+        var removed = await Remove(host, m.PeerIdentity);
+        Assert.True(removed.StatusCode == HttpStatusCode.OK, await removed.Content.ReadAsStringAsync());
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE [Action] = 'RECORDING_REQUEST_MEMBER_REMOVED' AND EntityId = @id", new { id = m.Id.ToString() }));
+        // Nobody in the meeting now lacks consent (only the host is left, and they accepted): recording starts. The peer is NOT
+        // counted as accepted - no GRANTED decision exists for them.
+        var rec = await Json(await host.Http.GetAsync($"/api/v1/meetings/{m.Id}/recording"));
+        Assert.Equal("PENDING", rec.GetProperty("recording").GetProperty("status").GetString());
+        Assert.Equal(0, await Count("""
+            SELECT COUNT(*) FROM mtg.MeetingConsent c JOIN mtg.MeetingParticipants p ON p.ParticipantId = c.ParticipantId
+            WHERE c.MeetingId = @mid AND p.LiveKitIdentity = @peer AND c.Decision = 'GRANTED'
+            """, new { mid = m.Mid, peer = m.PeerIdentity }));
+        Assert.Equal(HttpStatusCode.OK, (await host.PostAsync($"/api/v1/meetings/{m.Id}/recording/stop")).StatusCode);
+    }
+
+    [Fact]
+    public async Task An_instant_PLVC_call_with_a_customer_records_automatically_and_nobody_has_to_accept()
+    {
+        await SeedAsync();
+        var host = await SignedIn("xhost@test.invalid");
+        // V021: PLVC calls have their own policy (mandatory, notification only); general customer meetings keep CUSTOMER_MEETING.
+        Assert.Equal("CUSTOMER_PLVC", await fx.QueryAsync<string>("SELECT PolicyCode FROM rec.RecordingPolicyCategories WHERE Category = 'CUSTOMER_PLVC'"));
+        Assert.Equal("CUSTOMER_MEETING", await fx.QueryAsync<string>("SELECT PolicyCode FROM rec.RecordingPolicyCategories WHERE Category = 'CUSTOMER_GENERAL'"));
+        var options = await Json(await host.Http.GetAsync("/api/v1/meetings/recording-options"));
+        var plvc = options.EnumerateArray().Single(o => o.GetProperty("category").GetString() == "CUSTOMER_PLVC");
+        Assert.Equal("MANDATORY", plvc.GetProperty("requirement").GetString());
+        Assert.Equal("NOTIFICATION_ONLY", plvc.GetProperty("consentMode").GetString());
+
+        var customerId = await fx.QueryAsync<Guid>("""
+            INSERT crm.Customers (CustomerRef, FullName, Email, PolicyNumber) OUTPUT inserted.PublicId
+            VALUES (CONCAT('XC-', LEFT(CONVERT(VARCHAR(36), NEWID()), 8)), N'Xavier Customer', 'xcust@test.invalid', 'POL-123')
+            """);
+        Assert.Equal(HttpStatusCode.BadRequest, (await host.PostAsync("/api/v1/meetings/instant", new { category = "CUSTOMER_PLVC" })).StatusCode); // customer required
+
+        var created = await host.PostAsync("/api/v1/meetings/instant", new { category = "CUSTOMER_PLVC", customerId, recordingPolicy = "REQUIRED", waitingRoomEnabled = false, prarambhMainId = "900800700" });
+        Assert.True(created.StatusCode == HttpStatusCode.Created, await created.Content.ReadAsStringAsync());
+        var body = await Json(created);
+        var id = body.GetProperty("id").GetGuid();
+        Assert.Equal("Xavier Customer", body.GetProperty("customer").GetProperty("name").GetString());
+        var joinUrl = body.GetProperty("customer").GetProperty("joinUrl").GetString()!;
+        Assert.Contains("/join/", joinUrl);
+        var token = joinUrl[(joinUrl.LastIndexOf('/') + 1)..];
+        var mid = await fx.QueryAsync<long>("SELECT MeetingId FROM mtg.Meetings WHERE PublicId = @id AND MeetingKind = 'INSTANT' AND CustomerId IS NOT NULL AND PolicyNumber = 'POL-123'", new { id });
+
+        Assert.Equal(HttpStatusCode.OK, (await host.PostAsync($"/api/v1/meetings/{id}/join")).StatusCode);
+        var room = await fx.QueryAsync<string>("SELECT LiveKitRoomName FROM mtg.Meetings WHERE MeetingId = @mid", new { mid });
+        var identities = (await fx.QueryAsync<string>("SELECT STRING_AGG(LiveKitIdentity, ',') FROM mtg.MeetingParticipants WHERE MeetingId = @mid", new { mid })).Split(',');
+        Assert.Equal(2, identities.Length); // host + the CUSTOMER participant
+        fx.LiveKit.Participants[room] = identities;
+
+        // The host's room state starts the mandatory recording at once - no consent request, nobody asked to accept.
+        var state = await Json(await host.Http.GetAsync($"/api/v1/meetings/{id}/recording"));
+        Assert.Equal("NOTIFICATION_ONLY", state.GetProperty("policy").GetProperty("consentMode").GetString());
+        Assert.Equal("MANDATORY", state.GetProperty("policy").GetProperty("requirement").GetString());
+        Assert.Equal("PENDING", state.GetProperty("recording").GetProperty("status").GetString());
+        Assert.Equal(JsonValueKind.Null, state.GetProperty("request").ValueKind);
+        Assert.Equal(0, await Count("SELECT COUNT(*) FROM mtg.MeetingConsent WHERE MeetingId = @mid", new { mid }));
+        Assert.Equal(0, await Count("SELECT COUNT(*) FROM rec.RecordingRequests WHERE MeetingId = @mid", new { mid }));
+        // The customer, through their personal link, sees the recording (notice + REC) without any acceptance step.
+        var customerState = await Json(await (await fx.NewClientAsync()).Http.GetAsync($"/api/v1/join/{token}/recording"));
+        Assert.Equal("PENDING", customerState.GetProperty("recording").GetProperty("status").GetString());
+        Assert.Equal("NOTIFICATION_ONLY", customerState.GetProperty("policy").GetProperty("consentMode").GetString());
+
+        // GoodDay #14195: the host can get a fresh personal link to send straight to the customer (WhatsApp / e-mail); it
+        // works like the first one, and the first keeps working. Only hosts/organisers may ask.
+        Assert.Equal("xcust@test.invalid", body.GetProperty("customer").GetProperty("email").GetString());
+        var direct = await host.PostAsync($"/api/v1/meetings/{id}/link/customer");
+        Assert.True(direct.StatusCode == HttpStatusCode.OK, await direct.Content.ReadAsStringAsync());
+        var dj = await Json(direct);
+        Assert.Equal("Xavier Customer", dj.GetProperty("name").GetString());
+        Assert.Equal("xcust@test.invalid", dj.GetProperty("email").GetString());
+        var url2 = dj.GetProperty("joinUrl").GetString()!;
+        Assert.NotEqual(joinUrl, url2);
+        var token2 = url2[(url2.LastIndexOf('/') + 1)..];
+        var anon = await fx.NewClientAsync();
+        Assert.Equal(HttpStatusCode.OK, (await anon.Http.GetAsync($"/api/v1/join/{token2}/recording")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await anon.Http.GetAsync($"/api/v1/join/{token}/recording")).StatusCode);
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE EntityId = @e AND [Action] = 'MEETING_CUSTOMER_LINK_ISSUED'", new { e = id.ToString() }));
+        var internalMeeting = await Json(await host.PostAsync("/api/v1/meetings/instant", new { category = "GROUP" }));
+        Assert.Equal(HttpStatusCode.NotFound, (await host.PostAsync($"/api/v1/meetings/{internalMeeting.GetProperty("id").GetGuid()}/link/customer")).StatusCode);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await host.PostAsync($"/api/v1/meetings/{id}/room/end")).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_live_meeting_can_be_extended_and_otherwise_ends_automatically_after_its_scheduled_time()
+    {
+        await SeedAsync();
+        var host = await SignedIn("xhost@test.invalid");
+        var created = await Json(await host.PostAsync("/api/v1/meetings/instant", new { category = "GROUP", durationMinutes = 15 }));
+        var id = created.GetProperty("id").GetGuid();
+        var join = await Json(await host.PostAsync($"/api/v1/meetings/{id}/join"));
+        var end = join.GetProperty("meeting").GetProperty("endUtc").GetDateTime();
+        var autoEnd = join.GetProperty("meeting").GetProperty("autoEndUtc").GetDateTime();
+        Assert.Equal(TimeSpan.FromMinutes(5), autoEnd - end); // GoodDay #14208: grace after the scheduled end
+
+        // Extend: scheduled end and automatic end move; audited; silly values refused.
+        Assert.Equal(HttpStatusCode.BadRequest, (await host.PostAsync($"/api/v1/meetings/{id}/room/extend", new { minutes = 2 })).StatusCode);
+        var ext = await Json(await host.PostAsync($"/api/v1/meetings/{id}/room/extend", new { minutes = 15 }));
+        Assert.Equal(TimeSpan.FromMinutes(15), ext.GetProperty("endUtc").GetDateTime() - end);
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE EntityId = @e AND [Action] = 'MEETING_EXTENDED'", new { e = id.ToString() }));
+
+        var worker = fx.Factory.Services.GetRequiredService<OneInsure.Connect.Api.Meetings.MeetingAutoEndWorker>();
+        // Past the scheduled end but within the grace: still running.
+        await Exec("UPDATE mtg.Meetings SET ScheduledStartUtc = DATEADD(MINUTE, -30, SYSUTCDATETIME()), ScheduledEndUtc = DATEADD(MINUTE, -3, SYSUTCDATETIME()) WHERE PublicId = @id", new { id });
+        await worker.RunOnceAsync(CancellationToken.None);
+        Assert.Equal("LIVE", await fx.QueryAsync<string>("SELECT [Status] FROM mtg.Meetings WHERE PublicId = @id", new { id }));
+        // Past end + grace: ended like "End for all" (room closed, COMPLETED, audited as SYSTEM); cannot be extended any more.
+        await Exec("UPDATE mtg.Meetings SET ScheduledStartUtc = DATEADD(MINUTE, -30, SYSUTCDATETIME()), ScheduledEndUtc = DATEADD(MINUTE, -6, SYSUTCDATETIME()) WHERE PublicId = @id", new { id });
+        Assert.True(await worker.RunOnceAsync(CancellationToken.None) >= 1);
+        Assert.Equal("COMPLETED", await fx.QueryAsync<string>("SELECT [Status] FROM mtg.Meetings WHERE PublicId = @id", new { id }));
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE EntityId = @e AND [Action] = 'MEETING_AUTO_ENDED' AND ActorType = 'SYSTEM'", new { e = id.ToString() }));
+        Assert.Equal(HttpStatusCode.Conflict, (await host.PostAsync($"/api/v1/meetings/{id}/room/extend", new { minutes = 15 })).StatusCode);
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE EntityId = @e AND [Action] = 'MEETING_AUTO_ENDED'", new { e = id.ToString() }));
+        await worker.RunOnceAsync(CancellationToken.None); // a second sweep does nothing more to it
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE EntityId = @e AND [Action] = 'MEETING_AUTO_ENDED'", new { e = id.ToString() }));
+    }
+
+    [Fact]
+    public async Task A_scheduled_meeting_started_early_runs_its_booked_duration_from_the_actual_start()
+    {
+        // GoodDay CVPJMP (reopened 13 Nov): a 15-minute meeting booked 09:15-09:30 was started at 09:02; nothing happened "after 15 minutes".
+        await SeedAsync();
+        var host = await SignedIn("xhost@test.invalid");
+        async Task<(Guid Id, long Mid)> Book(int startsInMinutes, int minutes)
+        {
+            var start = DateTime.SpecifyKind(DateTime.UtcNow.Date.AddDays(Interlocked.Increment(ref day)).AddHours(5), DateTimeKind.Utc);
+            var r = await host.PostAsync("/api/v1/meetings", new
+            {
+                title = "Early start", category = "TEAM", startUtc = start, endUtc = start.AddMinutes(minutes), employeeIds = new[] { await Emp("X-PEER") },
+                status = "SCHEDULED", waitingRoomEnabled = false,
+            });
+            Assert.True(r.StatusCode == HttpStatusCode.Created, await r.Content.ReadAsStringAsync());
+            var id = (await Json(r)).GetProperty("id").GetGuid();
+            var mid = await fx.QueryAsync<long>("SELECT MeetingId FROM mtg.Meetings WHERE PublicId = @id", new { id });
+            await Exec("UPDATE mtg.Meetings SET ScheduledStartUtc = DATEADD(MINUTE, @s, SYSUTCDATETIME()), ScheduledEndUtc = DATEADD(MINUTE, @s + @minutes, SYSUTCDATETIME()) WHERE MeetingId = @mid",
+                new { s = startsInMinutes, minutes, mid });
+            return (id, mid);
+        }
+
+        // Started 12 minutes early: the 15-minute slot now runs from the actual start (countdown, Extend/End prompt and auto-end follow it).
+        var early = await Book(12, 15);
+        var before = DateTime.UtcNow;
+        var join = await Json(await host.PostAsync($"/api/v1/meetings/{early.Id}/join"));
+        var m = join.GetProperty("meeting");
+        var start = m.GetProperty("startUtc").GetDateTime();
+        var end = m.GetProperty("endUtc").GetDateTime();
+        Assert.InRange((start - before).TotalSeconds, -5, 5);
+        Assert.Equal(TimeSpan.FromMinutes(15), end - start);
+        Assert.Equal(TimeSpan.FromMinutes(5), m.GetProperty("autoEndUtc").GetDateTime() - end);
+        var row = await fx.QueryAsync<(DateTime S, DateTime E, DateTime A)>("SELECT ScheduledStartUtc, ScheduledEndUtc, ActualStartUtc FROM mtg.Meetings WHERE MeetingId = @mid", new { mid = early.Mid });
+        Assert.Equal(TimeSpan.FromMinutes(15), row.E - row.S);
+        Assert.InRange((row.S - row.A).TotalSeconds, -1, 1);
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE EntityId = @e AND [Action] = 'MEETING_STARTED' AND NewValuesJson LIKE '%bookedStartUtc%'", new { e = early.Id.ToString() }));
+        // 20 minutes after the actual start (15 + 5 grace) it ends by itself - long before the originally booked end + grace (32 min).
+        var worker = fx.Factory.Services.GetRequiredService<OneInsure.Connect.Api.Meetings.MeetingAutoEndWorker>();
+        await Exec("UPDATE mtg.Meetings SET ActualStartUtc = DATEADD(MINUTE, -21, SYSUTCDATETIME()), ScheduledStartUtc = DATEADD(MINUTE, -21, SYSUTCDATETIME()), ScheduledEndUtc = DATEADD(MINUTE, -6, SYSUTCDATETIME()) WHERE MeetingId = @mid", new { mid = early.Mid });
+        Assert.True(await worker.RunOnceAsync(CancellationToken.None) >= 1);
+        Assert.Equal("COMPLETED", await fx.QueryAsync<string>("SELECT [Status] FROM mtg.Meetings WHERE MeetingId = @mid", new { mid = early.Mid }));
+
+        // Started on time / late: the booked slot is kept (a late start is prompted to extend at the booked end).
+        var late = await Book(-3, 15);
+        var booked = await fx.QueryAsync<(DateTime S, DateTime E)>("SELECT ScheduledStartUtc, ScheduledEndUtc FROM mtg.Meetings WHERE MeetingId = @mid", new { mid = late.Mid });
+        var lj = (await Json(await host.PostAsync($"/api/v1/meetings/{late.Id}/join"))).GetProperty("meeting");
+        Assert.InRange((lj.GetProperty("endUtc").GetDateTime() - booked.E).TotalSeconds, -1, 1);
+        Assert.Equal(booked, await fx.QueryAsync<(DateTime S, DateTime E)>("SELECT ScheduledStartUtc, ScheduledEndUtc FROM mtg.Meetings WHERE MeetingId = @mid", new { mid = late.Mid }));
+        Assert.Equal(HttpStatusCode.NoContent, (await host.PostAsync($"/api/v1/meetings/{late.Id}/room/end")).StatusCode);
+    }
+
+    [Fact]
+    public async Task The_host_can_cancel_a_consent_request_and_an_unanswered_request_expires()
+    {
+        await SeedAsync();
+        await ResetPolicy();
+        var host = await SignedIn("xhost@test.invalid");
+        var peer = await SignedIn("xpeer@test.invalid");
+        var m = await LiveMeeting(host);
+        var v = await NoticeVersion();
+
+        Assert.Equal(HttpStatusCode.OK, (await host.PostAsync($"/api/v1/meetings/{m.Id}/recording/start", new { acceptNotice = true, noticeVersion = v })).StatusCode);
+        var cancelled = await Json(await host.PostAsync($"/api/v1/meetings/{m.Id}/recording/stop"));
+        Assert.Equal(JsonValueKind.Null, cancelled.GetProperty("request").ValueKind);
+        Assert.Equal("CANCELLED", cancelled.GetProperty("lastRequest").GetProperty("status").GetString());
+        Assert.Equal(JsonValueKind.Null, (await RecState(peer, m)).GetProperty("request").ValueKind); // the peer's popup closes
+
+        Assert.Equal(HttpStatusCode.OK, (await host.PostAsync($"/api/v1/meetings/{m.Id}/recording/start", new { acceptNotice = true, noticeVersion = v })).StatusCode);
+        await Exec("UPDATE rec.RecordingRequests SET ExpiresUtc = '2000-01-01' WHERE MeetingId = @mid AND [Status] = 'OPEN'", new { mid = m.Mid });
+        var expired = await RecState(host, m);
+        Assert.Equal(JsonValueKind.Null, expired.GetProperty("request").ValueKind);
+        Assert.Equal("EXPIRED", expired.GetProperty("lastRequest").GetProperty("status").GetString());
+        // A late Accept is still recorded as consent evidence, but it starts nothing: the request is gone.
+        Assert.Equal(HttpStatusCode.OK, (await peer.PostAsync($"/api/v1/meetings/{m.Id}/recording/consent", new { decision = "GRANTED", noticeVersion = v })).StatusCode);
+        Assert.Equal(0, await Count("SELECT COUNT(*) FROM rec.MeetingRecordings WHERE MeetingId = @mid", new { mid = m.Mid }));
     }
 
     [Fact]
@@ -375,7 +776,9 @@ public sealed class RecordingTests(ApiFixture fx)
         var r = await fx.QueryAsync<(string Status, string Key, byte[] Sha, long Size, int Duration, string Vc, string Ac, int W, string Details, DateTime? Verified)>(
             "SELECT [Status], StorageKey, Sha256, FileSizeBytes, DurationSeconds, VideoCodec, AudioCodec, Width, VerificationDetails, VerifiedUtc FROM rec.MeetingRecordings WHERE PublicId = @rec", new { rec });
         Assert.Equal("COMPLETED", r.Status);
-        Assert.Matches(@"^\d{4}/\d{2}/[0-9a-f]{32}\.mp4$", r.Key); // opaque, no meeting or customer data
+        // 12 Nov 2026: date-wise IST folder + meeting code + recording id (PLVC adds the Prarambh ID prefix); no names or e-mails.
+        var code = await fx.QueryAsync<string>("SELECT MeetingCode FROM mtg.Meetings WHERE MeetingId = @mid", new { mid = m.Mid });
+        Assert.Matches($@"^\d{{8}}/{code}-REC\d+\.mp4$", r.Key);
         var file = Path.Combine(fx.RecordingRoot, "library", r.Key);
         Assert.True(File.Exists(file));
         Assert.Equal(Convert.ToHexStringLower(r.Sha), await MediaVerifier.Sha256HexAsync(file, CancellationToken.None));
@@ -420,7 +823,10 @@ public sealed class RecordingTests(ApiFixture fx)
         Assert.Null(failed.Key);
         Assert.Null(failed.Verified);
         Assert.Empty(Directory.GetFiles(Path.Combine(fx.RecordingRoot, "library"), "*.partial", SearchOption.AllDirectories));
-        Assert.Equal(1, await Count("SELECT COUNT(*) FROM mtg.MeetingNotifications n JOIN rec.MeetingRecordings r ON r.MeetingId = n.MeetingId WHERE r.PublicId = @rec AND n.[Type] = 'RECORDING_FAILED'", new { rec }));
+        // The owner gets exactly one; every active Admin/SuperAdmin is told too (operational failure).
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM mtg.MeetingNotifications n JOIN rec.MeetingRecordings r ON r.MeetingId = n.MeetingId JOIN auth.Users u ON u.UserId = n.RecipientUserId WHERE r.PublicId = @rec AND n.[Type] = 'RECORDING_FAILED' AND u.Email = 'xhost@test.invalid'", new { rec }));
+        Assert.Equal(await Count("SELECT COUNT(DISTINCT u.UserId) FROM auth.Users u JOIN auth.UserRoles ur ON ur.UserId = u.UserId JOIN auth.Roles ro ON ro.RoleId = ur.RoleId WHERE u.IsActive = 1 AND ro.Code IN ('SuperAdmin', 'Admin')"),
+            await Count("SELECT COUNT(*) FROM mtg.MeetingNotifications n JOIN rec.MeetingRecordings r ON r.MeetingId = n.MeetingId JOIN auth.Users u ON u.UserId = n.RecipientUserId WHERE r.PublicId = @rec AND n.[Type] = 'RECORDING_FAILED' AND u.Email <> 'xhost@test.invalid'", new { rec }));
         // COMPLETED without verification is impossible in the database itself.
         await Assert.ThrowsAsync<SqlException>(() => Exec("UPDATE rec.MeetingRecordings SET [Status] = 'COMPLETED', FailureReason = NULL WHERE PublicId = @rec", new { rec }));
 
@@ -569,7 +975,9 @@ public sealed class RecordingTests(ApiFixture fx)
         var (rec, _, host) = await Completed();
         await ResetPolicy(", OwnerCanDownload = 1, PlaybackRoles = N'[\"ComplianceAuditor\"]'");
         var play = await Json(await host.PostAsync($"/api/v1/recordings/{rec}/play"));
-        var url = play.GetProperty("url").GetString()!;
+        var absolute = play.GetProperty("url").GetString()!;
+        Assert.StartsWith("https://", absolute); // absolute (WebBaseUrl) so it works under a sub-path such as /meet
+        var url = new Uri(absolute).PathAndQuery; // the test server has no such host; same path, same session cookie
         var expires = play.GetProperty("expiresUtc").GetDateTime();
         Assert.InRange((expires - DateTime.UtcNow).TotalSeconds, 250, 310); // policy link lifetime (300 s)
 
@@ -601,7 +1009,7 @@ public sealed class RecordingTests(ApiFixture fx)
 
         // Download link: attachment with a neutral file name.
         var dl = await Json(await host.PostAsync($"/api/v1/recordings/{rec}/download"));
-        var file = await host.Http.GetAsync(dl.GetProperty("url").GetString());
+        var file = await host.Http.GetAsync(new Uri(dl.GetProperty("url").GetString()!).PathAndQuery);
         Assert.Equal(HttpStatusCode.OK, file.StatusCode);
         Assert.Matches(@"^recording-OIC-\d{6}-[A-Z0-9]{4}-\d{8}-\d{4}\.mp4$", file.Content.Headers.ContentDisposition?.FileName?.Trim('"') ?? "");
         await ResetPolicy();
@@ -643,15 +1051,20 @@ public sealed class RecordingTests(ApiFixture fx)
             Assert.Equal(HttpStatusCode.NoContent, (await super.PutAsync($"/api/v1/recordings/{rec}/legal-hold", new { hold = true, reason = "Customer dispute 42" })).StatusCode);
             Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE [Action] = 'RECORDING_LEGAL_HOLD_PLACED' AND EntityId = @id AND IsPrivileged = 1", new { id = rec.ToString() }));
 
-            // Delete without dual approval: rec2 is purged at once, rec (legal hold) is untouched.
+            // 12 Nov 2026: NO automatic deletion. A policy still set to DELETE (legacy) only flags for review: rec2 stays COMPLETED,
+            // its file stays, no deletion request is queued; rec (legal hold) is untouched too.
             await ResetPolicy(", RetentionDays = 5, ExpiryAction = 'DELETE', DualApprovalForDeletion = 0");
             var key2 = Key(rec2);
             await retention.RunOnceAsync(CancellationToken.None);
-            Assert.Equal("PURGED", await Status(rec2));
-            Assert.False(File.Exists(Path.Combine(fx.RecordingRoot, "library", key2)));
-            Assert.Equal(1, await Count("SELECT COUNT(*) FROM rec.MeetingRecordings WHERE PublicId = @rec2 AND PurgedUtc IS NOT NULL", new { rec2 })); // row kept
+            Assert.Equal("COMPLETED", await Status(rec2));
+            Assert.True(File.Exists(Path.Combine(fx.RecordingRoot, "library", key2)));
+            Assert.NotNull(await fx.QueryAsync<DateTime?>("SELECT RetentionReviewUtc FROM rec.MeetingRecordings WHERE PublicId = @rec2", new { rec2 }));
+            Assert.Equal(0, await Count("SELECT COUNT(*) FROM rec.RecordingDeletions WHERE Source = 'RETENTION'"));
             Assert.Equal("COMPLETED", await Status(rec));
             Assert.True(File.Exists(Path.Combine(fx.RecordingRoot, "library", Key(rec))));
+            // The policy screen can no longer choose DELETE.
+            var reject = await super.PutAsync("/api/v1/admin/recording-policies/CUSTOMER_MEETING", new { expiryAction = "DELETE" });
+            Assert.NotEqual(HttpStatusCode.OK, reject.StatusCode);
 
             // Release the hold; archive.
             Assert.Equal(HttpStatusCode.NoContent, (await super.PutAsync($"/api/v1/recordings/{rec}/legal-hold", new { hold = false, reason = "Dispute closed" })).StatusCode);
@@ -664,12 +1077,14 @@ public sealed class RecordingTests(ApiFixture fx)
             Assert.False(File.Exists(Path.Combine(fx.RecordingRoot, "library", key)));
             // Still playable from the archive.
             var play = await Json(await host.PostAsync($"/api/v1/recordings/{rec}/play"));
-            Assert.Equal(HttpStatusCode.OK, (await host.Http.GetAsync(play.GetProperty("url").GetString())).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await host.Http.GetAsync(new Uri(play.GetProperty("url").GetString()!).PathAndQuery)).StatusCode);
 
-            // Delete with dual approval: two different approvers holding a deletion-approver role.
+            // Manual deletion with dual approval (the only way a recording is deleted now): two different approvers.
             await ResetPolicy($", RetentionDays = 5, ExpiryAction = 'DELETE', DualApprovalForDeletion = 1, DeletionApproverRoles = N'[\"SuperAdmin\"]'");
             await retention.RunOnceAsync(CancellationToken.None);
             Assert.Equal("COMPLETED", await Status(rec));
+            Assert.Equal(0, await Count("SELECT COUNT(*) FROM rec.RecordingDeletions WHERE Source = 'RETENTION'"));
+            Assert.Equal("PENDING", (await Json(await host.PostAsync($"/api/v1/recordings/{rec}/delete", new { reason = "Customer asked for erasure" }))).GetProperty("status").GetString());
             var deletion = await fx.QueryAsync<Guid>("SELECT x.PublicId FROM rec.RecordingDeletions x JOIN rec.MeetingRecordings r ON r.RecordingId = x.RecordingId WHERE r.PublicId = @rec AND x.[Status] = 'PENDING'", new { rec });
             var list = await Json(await super.Http.GetAsync("/api/v1/recordings/retention"));
             Assert.Contains(list.GetProperty("deletions").EnumerateArray(), d => d.GetProperty("id").GetGuid() == deletion && d.GetProperty("canDecide").GetBoolean());
@@ -683,7 +1098,9 @@ public sealed class RecordingTests(ApiFixture fx)
             Assert.Equal("EXECUTED", done.GetProperty("status").GetString());
             Assert.Equal("PURGED", await Status(rec));
             Assert.False(File.Exists(Path.Combine(archive, key)));
-            Assert.Equal(2, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE [Action] = 'RECORDING_PURGED'"));
+            // Only the manual, dual-approved deletion purged anything; rec2 (expired under a legacy DELETE policy) was not touched.
+            Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE [Action] = 'RECORDING_PURGED'"));
+            Assert.Equal("COMPLETED", await Status(rec2));
             Assert.Equal(HttpStatusCode.Conflict, (await host.PostAsync($"/api/v1/recordings/{rec}/play")).StatusCode);
         }
         finally

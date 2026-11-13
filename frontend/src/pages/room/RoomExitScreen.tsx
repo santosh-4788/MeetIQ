@@ -2,9 +2,18 @@ import type { ReactNode } from 'react'
 import { CircleCheck, DoorClosed, Laptop, UserX, WifiOff } from 'lucide-react'
 import type { RoomExit } from './MeetingRoom'
 import { RoomMessage } from './RoomScreens'
+import { DEFAULT_TIME_ZONE } from '../../config'
+import { formatTime, zoneLabel } from '../../lib/format'
 
 /** What happened when the participant is out of the room again, with the right next step. */
-export function RoomExitScreen({ exit, title, rejoin, back }: { exit: RoomExit; title: string; rejoin?: ReactNode; back?: ReactNode }) {
+export function RoomExitScreen({ exit, title, meetingCode, timeZoneId, rejoin, back }: {
+  exit: RoomExit
+  title: string
+  meetingCode?: string
+  timeZoneId?: string
+  rejoin?: ReactNode
+  back?: ReactNode
+}) {
   switch (exit.kind) {
     case 'left':
       return (
@@ -14,12 +23,25 @@ export function RoomExitScreen({ exit, title, rejoin, back }: { exit: RoomExit; 
           </p>
         </RoomMessage>
       )
-    case 'ended':
+    case 'ended': {
+      const tz = timeZoneId || DEFAULT_TIME_ZONE
       return (
-        <RoomMessage icon={<DoorClosed className="size-7" />} title="The meeting has ended" actions={back}>
-          <p>The host ended <strong className="text-white">{title}</strong> for everyone. Thank you for joining.</p>
+        <RoomMessage icon={<DoorClosed className="size-7" />} title="Meeting Ended" actions={back}>
+          {/* The host ended it for everyone, or it reached its scheduled end + grace without an extension (MeetingAutoEndWorker). */}
+          <div data-testid="meeting-ended" data-ended-by={exit.endedBy ?? ''}>
+            <p>
+              {exit.endedBy === 'auto' ? 'This meeting reached its scheduled end time.' : 'The host has ended this meeting.'} Thank you for joining.
+            </p>
+            <dl className="mx-auto mt-5 grid max-w-[360px] grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-left text-[13px]">
+              <dt className="text-white/50">Meeting</dt>
+              <dd className="truncate font-semibold text-white" title={title}>{title}</dd>
+              {meetingCode && (<><dt className="text-white/50">Meeting ID</dt><dd className="font-mono tracking-wide text-white/85">{meetingCode}</dd></>)}
+              {exit.endedUtc && (<><dt className="text-white/50">Ended at</dt><dd className="text-white/85">{formatTime(exit.endedUtc, tz)} {zoneLabel(tz)}</dd></>)}
+            </dl>
+          </div>
         </RoomMessage>
       )
+    }
     case 'removed':
       return (
         <RoomMessage icon={<UserX className="size-7" />} tone="warning" title="You were removed from the meeting" actions={back}>

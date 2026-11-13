@@ -37,6 +37,8 @@ public sealed class RecordingOptions
     /// <summary>After a stop request the recorder gets this long to finalise before it is terminated.</summary>
     public int StopTimeoutSeconds { get; set; } = 300;
     public int MaxDurationMinutes { get; set; } = 240;
+    /// <summary>How long a host's recording consent request waits for every participant's answer before it lapses.</summary>
+    public int ConsentRequestMinutes { get; set; } = 10;
     /// <summary>Recorder process launches per recording (the first plus restarts after the recorder process died).</summary>
     public int MaxLaunches { get; set; } = 3;
     public bool KeepSpoolAfterSuccess { get; set; }

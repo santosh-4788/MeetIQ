@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LocalVideoTrack } from 'livekit-client'
 import { ArrowLeft, CircleAlert, DoorOpen, RotateCw, ShieldX } from 'lucide-react'
-import type { JoinInfo } from '../../api/meetings'
+import { joinApi, type JoinInfo } from '../../api/meetings'
 import { guestRecordingApi } from '../../api/recordings'
 import { guestRoomApi, type RoomConnection, type RoomMeetingInfo } from '../../api/room'
 import { ApiError, errorMessage } from '../../api/types'
@@ -60,6 +60,7 @@ export default function GuestRoom({
     () => ({
       loadChat: () => guestRoomApi.chat(token),
       postChat: (body) => guestRoomApi.postChat(token, body, isGuest ? name.trim() : undefined),
+      hasEnded: () => joinApi.get(token).then((j) => j.status === 'ENDED' || j.status === 'CANCELLED'),
       recording: {
         state: () => guestRecordingApi.state(token),
         consent: (decision, version) => guestRecordingApi.consent(token, decision, version),
@@ -152,6 +153,8 @@ export default function GuestRoom({
         <RoomExitScreen
           exit={phase.exit}
           title={info.title}
+          meetingCode={info.meetingCode}
+          timeZoneId={tz}
           back={back}
           rejoin={<CanvasButton leftIcon={<RotateCw className="size-4" />} onClick={() => setPhase({ name: 'prejoin' })}>Rejoin</CanvasButton>}
         />

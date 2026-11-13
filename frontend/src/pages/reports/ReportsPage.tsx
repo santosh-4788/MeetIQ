@@ -71,6 +71,8 @@ export function ReportsPage() {
             <option value="">All categories</option>
             <option value="INTERNAL">Internal</option>
             <option value="CUSTOMER">Customer</option>
+            <option value="CUSTOMER_PLVC_IDENTIFIED">Customer PLVC — identified</option>
+            <option value="CUSTOMER_PLVC_UNIDENTIFIED">Customer PLVC — unidentified</option>
           </FilterSelect>
           <FilterSelect aria-label="Department" value={department} onChange={(e) => resetPage(setDepartment)(e.target.value)} className="self-end" disabled={departments.loading}>
             <option value="">All departments</option>
@@ -88,7 +90,7 @@ export function ReportsPage() {
               </option>
             ))}
           </FilterSelect>
-          <SearchField value={search} onChange={resetPage(setSearch)} placeholder="Title or meeting code" aria-label="Search" className="self-end" />
+          <SearchField value={search} onChange={resetPage(setSearch)} placeholder="Title, meeting code or Prarambh ID" aria-label="Search" className="self-end" />
         </div>
       </Card>
 
@@ -122,11 +124,12 @@ export function ReportsPage() {
             ) : (
               <>
                 <div className="scrollbar-thin overflow-x-auto">
-                  <table className="w-full min-w-[920px] border-collapse text-left text-[13px]">
+                  <table className="w-full min-w-[1040px] border-collapse text-left text-[13px]">
                     <thead>
                       <tr className="border-b border-line text-[11.5px] font-semibold tracking-wide text-ink-muted uppercase">
                         <th className="px-5 py-2.5">Meeting</th>
                         <th className="px-3 py-2.5">Category</th>
+                        <th className="px-3 py-2.5">Prarambh Main ID</th>
                         <th className="px-3 py-2.5">Host</th>
                         <th className="px-3 py-2.5">Department</th>
                         <th className="px-3 py-2.5">Scheduled</th>
@@ -145,6 +148,9 @@ export function ReportsPage() {
                           </td>
                           <td className="px-3 py-3">
                             <CategoryBadge group={m.categoryGroup} category={m.category} />
+                          </td>
+                          <td className="px-3 py-3 font-mono text-[12px] text-ink-secondary" data-testid="report-prarambh">
+                            {m.prarambhMainId ?? (m.category === 'CUSTOMER_PLVC' ? <span className="font-sans text-warning-ink">Unidentified</span> : '—')}
                           </td>
                           <td className="px-3 py-3 text-ink-secondary">{m.hostName}</td>
                           <td className="px-3 py-3 text-ink-secondary">{m.department ?? '—'}</td>

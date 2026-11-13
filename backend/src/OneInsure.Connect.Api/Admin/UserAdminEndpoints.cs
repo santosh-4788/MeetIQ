@@ -76,6 +76,14 @@ public static class UserAdminEndpoints
             var roles = (input.Roles ?? []).Distinct().ToArray();
             if (roles.Length == 0) v.Add("roles", "Choose at least one role.");
             if (!v.IsValid) return v.Problem();
+            // "E-mail only" for someone who IS in the employee master: link to that employee instead of creating an account that
+            // can never schedule meetings or have a calendar (exactly one active employee with this official e-mail, no account yet).
+            if (employeeId is null && email is not null)
+                employeeId = await c.QuerySingleOrDefaultAsync<long?>("""
+                    SELECT e.EmployeeId FROM org.Employees e
+                    WHERE e.OfficialEmail = @email AND e.IsActive = 1 AND NOT EXISTS (SELECT 1 FROM auth.Users u WHERE u.EmployeeId = e.EmployeeId)
+                      AND (SELECT COUNT(*) FROM org.Employees x WHERE x.OfficialEmail = @email AND x.IsActive = 1) = 1
+                    """, new { email });
             if (roles.Contains(SuperAdmin) && !CanManageRoles(ctx)) return Forbidden("Only a Super Administrator can grant the Super Administrator role.");
             var unknown = await UnknownRoles(c, roles);
             if (unknown.Length > 0) return Problems.Create(400, "VALIDATION", "Unknown role(s): " + string.Join(", ", unknown));
@@ -101,7 +109,7 @@ public static class UserAdminEndpoints
                     new { userId, roles, actor = ctx.User.UserId() }, tx);
                 await Audit.WriteUserAsync(c, "USER", ctx.User.UserId(), "USER_CREATED", userId, $"User account created with roles {string.Join(", ", roles)}", ClientInfo.From(ctx).Ip, tx, privileged: true);
                 tx.Commit();
-                return Results.Json(new { id = publicId, email, oneTimePassword = oneTime }, statusCode: 201);
+                return Results.Json(new { id = publicId, email, oneTimePassword = oneTime, linkedToEmployee = employeeId is not null }, statusCode: 201);
             }
             catch (SqlException e) when (e.IsUniqueViolation())
             {

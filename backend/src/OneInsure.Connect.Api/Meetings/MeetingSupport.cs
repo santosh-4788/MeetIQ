@@ -30,6 +30,13 @@ public sealed class MeetingOptions
     public int InstantDefaultMinutes { get; set; } = 60;
     /// <summary>How many people (guests and non-invited colleagues) may ask to join one meeting through its shared link.</summary>
     public int MaxLinkJoiners { get; set; } = 50;
+    /// <summary>A LIVE meeting is ended automatically (like "End for all") this many minutes after its scheduled end unless
+    /// a host extends it; everyone sees a countdown from the scheduled end. 0 = never end automatically.</summary>
+    public int AutoEndGraceMinutes { get; set; } = 5;
+    /// <summary>How often the automatic-end sweep runs.</summary>
+    public int AutoEndPollSeconds { get; set; } = 30;
+    /// <summary>The longest single extension a host can add from the room.</summary>
+    public int MaxExtendMinutes { get; set; } = 60;
 }
 
 public sealed class ReminderOptions

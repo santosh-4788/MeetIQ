@@ -9,10 +9,8 @@ export const API_BASE = `${import.meta.env.BASE_URL}api/v1`
 
 export const DEFAULT_TIME_ZONE = 'Asia/Kolkata'
 
-// Client-side idle limit; the server enforces its own session expiry independently.
-export const SESSION_IDLE_MINUTES = 30
 
 export const SUPPORT = {
-  email: 'it.support@oneinsure.com',
+  email: 'support@oneinsure.com',
   hours: 'Mon–Sat, 9:30 AM – 6:30 PM IST',
 } as const

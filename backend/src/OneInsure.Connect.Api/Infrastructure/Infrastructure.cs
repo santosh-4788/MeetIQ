@@ -5,7 +5,8 @@ namespace OneInsure.Connect.Api.Infrastructure;
 
 public sealed class SecurityOptions
 {
-    public int SessionIdleMinutes { get; set; } = 30;
+    /// <summary>0 = no idle timeout (default since 12 Nov 2026): sessions end only at the daily logout or on sign-out/revocation.</summary>
+    public int SessionIdleMinutes { get; set; } = 0;
     public int SessionAbsoluteHours { get; set; } = 12;
     public int RememberMeDays { get; set; } = 7;
     public int LockoutThreshold { get; set; } = 5;

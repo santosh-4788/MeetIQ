@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { CalendarPlus, ChevronRight, Clock, SearchX, Users, Video } from 'lucide-react'
 import { meetingsApi, type DbMeetingCategory, type MeetingListItem, type MeetingQuery, type MeetingScope } from '../../api/meetings'
 import { useAuth } from '../../auth/AuthContext'
@@ -20,11 +20,24 @@ const tabs: { id: Tab; label: string }[] = [
   { id: 'upcoming', label: 'Upcoming' },
   { id: 'today', label: 'Today' },
   { id: 'hosting', label: 'Hosting' },
-  { id: 'attending', label: 'Attending' },
+  { id: 'attending', label: 'Invited' },
   { id: 'drafts', label: 'Drafts' },
   { id: 'past', label: 'Past' },
   { id: 'cancelled', label: 'Cancelled' },
 ]
+
+/** One line under the tabs saying what the selected list contains (users asked how Upcoming and Attending differ). */
+const tabHint: Record<Tab, string> = {
+  upcoming: 'Every scheduled meeting still to come - ones you host and ones you are invited to.',
+  today: "Today's meetings, including ones that have already ended.",
+  hosting: 'Meetings still to come that you host.',
+  attending: 'Meetings still to come that someone else hosts and has invited you to.',
+  drafts: 'Meetings you saved as drafts and have not sent yet.',
+  past: 'Meetings that have already ended.',
+  cancelled: 'Meetings that were called off.',
+}
+
+const isTab = (v: string | null): v is Tab => !!v && tabs.some((t) => t.id === v)
 
 const emptyText: Record<Tab, string> = {
   upcoming: 'No upcoming meetings',
@@ -69,7 +82,10 @@ function tabQuery(tab: Tab, tz: string, all: boolean): MeetingQuery {
 export function MeetingsList({ group, idPrefix }: { group?: 'INTERNAL' | 'CUSTOMER'; idPrefix: string }) {
   const { can } = useAuth()
   const tz = useTimeZone()
-  const [tab, setTab] = useState<Tab>('upcoming')
+  // `?tab=today` etc. opens a specific list (the dashboard's Today's / Upcoming Meetings cards link here).
+  const [params, setParams] = useSearchParams()
+  const tab: Tab = isTab(params.get('tab')) ? (params.get('tab') as Tab) : 'upcoming'
+  const setTab = (t: Tab) => setParams((p) => { const n = new URLSearchParams(p); n.set('tab', t); return n }, { replace: true })
   const [category, setCategory] = useState<DbMeetingCategory | ''>('')
   const [search, setSearch] = useState('')
   const [all, setAll] = useState(false)
@@ -98,6 +114,7 @@ export function MeetingsList({ group, idPrefix }: { group?: 'INTERNAL' | 'CUSTOM
       <Tabs tabs={tabs} value={tab} onChange={setTab} label="Meeting lists" idPrefix={idPrefix} />
       <Card>
         <div {...tabPanelProps(idPrefix, tab)} className="outline-none">
+          <p className="border-b border-line px-4 pt-3 pb-2.5 text-[12.5px] text-ink-secondary sm:px-5" data-testid="tab-hint">{tabHint[tab]}</p>
           <div className="grid grid-cols-1 gap-2.5 border-b border-line p-4 sm:grid-cols-2 sm:px-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]">
             <SearchField value={search} onChange={setSearch} placeholder="Search title or meeting code" aria-label="Search meetings" className="sm:col-span-2 lg:col-span-1" />
             <FilterSelect aria-label="Category" value={category} onChange={(e) => setCategory(e.target.value as DbMeetingCategory | '')}>
@@ -107,7 +124,7 @@ export function MeetingsList({ group, idPrefix }: { group?: 'INTERNAL' | 'CUSTOM
               ))}
             </FilterSelect>
             {viewAll && (
-              <FilterSelect aria-label="Whose meetings" value={all && !fixedScope ? 'all' : 'mine'} onChange={(e) => setAll(e.target.value === 'all')} disabled={fixedScope} title={fixedScope ? 'Hosting and Attending always show your own meetings' : undefined}>
+              <FilterSelect aria-label="Whose meetings" value={all && !fixedScope ? 'all' : 'mine'} onChange={(e) => setAll(e.target.value === 'all')} disabled={fixedScope} title={fixedScope ? 'Hosting and Invited always show your own meetings' : undefined}>
                 <option value="mine">My meetings</option>
                 <option value="all">All employees' meetings</option>
               </FilterSelect>

@@ -70,12 +70,14 @@ public static class RecordingLibraryEndpoints
         public string? OwnerCode { get; set; }
         public string? Department { get; set; }
         public string? CustomerName { get; set; }
+        public string? PrarambhMainId { get; set; }
         public string? CustomerRef { get; set; }
         public string? PolicyCode { get; set; }
         public string? PolicyTitle { get; set; }
         public bool LegalHoldEnabled { get; set; }
         public int SignedUrlTtlSeconds { get; set; }
         public bool IsOwner { get; set; }
+        public bool IsHostOrStarter { get; set; }
         public bool PlaybackRole { get; set; }
         public bool DownloadRole { get; set; }
         public bool LeadsOwner { get; set; }
@@ -98,7 +100,7 @@ public static class RecordingLibraryEndpoints
     const string Select = $"""
         SELECT r.RecordingId, r.PublicId AS Id, r.[Status], r.CreatedUtc, r.StartedUtc, r.EndedUtc, r.DurationSeconds, r.FileSizeBytes, r.LegalHold, r.RetainUntilUtc,
                r.StorageTier, r.StorageKey, r.ArchiveRoot, m.PublicId AS MeetingId, m.Title AS MeetingTitle, m.MeetingCode, m.Category,
-               o.PublicId AS OwnerId, o.DisplayName AS OwnerName, o.EmployeeCode AS OwnerCode, d.Name AS Department, cu.FullName AS CustomerName, cu.CustomerRef,
+               o.PublicId AS OwnerId, o.DisplayName AS OwnerName, o.EmployeeCode AS OwnerCode, d.Name AS Department, cu.FullName AS CustomerName, cu.CustomerRef, r.PrarambhMainId,
                r.PolicyCode, p.Title AS PolicyTitle, ISNULL(p.LegalHoldEnabled, 0) AS LegalHoldEnabled, ISNULL(p.SignedUrlTtlSeconds, 300) AS SignedUrlTtlSeconds,
                {RecordingAccess.FlagsSql}
         """;
@@ -111,6 +113,9 @@ public static class RecordingLibraryEndpoints
         fileSizeBytes = r.FileSizeBytes, legalHold = r.LegalHold, retainUntilUtc = r.RetainUntilUtc, storageTier = r.StorageTier,
         canDelete = (r.IsOwner || v.Delete) && !r.LegalHold && r.Status is "COMPLETED" or "FAILED",
         meeting = new { id = r.MeetingId, title = r.MeetingTitle, meetingCode = r.MeetingCode, category = r.Category, categoryGroup = MeetingEndpoints.CategoryGroup(r.Category) },
+        prarambhMainId = r.PrarambhMainId,
+        // V024: from the recording's own snapshot of the ID - a recording made while the meeting was unidentified stays recognisable.
+        plvcIdentification = Plvc.Identification(r.Category, r.PrarambhMainId),
         owner = new { id = r.OwnerId, name = r.OwnerName, employeeCode = r.OwnerCode, department = r.Department },
         customer = r.CustomerName is null ? null : new { name = r.CustomerName, reference = r.CustomerRef },
         policy = r.PolicyCode is null ? null : new { code = r.PolicyCode, title = r.PolicyTitle },
@@ -134,9 +139,15 @@ public static class RecordingLibraryEndpoints
         {
             // A database category (e.g. TEAM) or a dashboard group (CUSTOMER, INTERNAL, TRAINING, REVIEW, MANAGEMENT).
             var x = cat.ToUpperInvariant();
-            var cats = MeetingEndpoints.Categories.Contains(x) ? [x] : MeetingEndpoints.Categories.Where(c => MeetingEndpoints.CategoryGroup(c) == x).ToArray();
-            where.Add("m.Category IN @cats");
-            args.Add("cats", cats.Length == 0 ? ["-"] : cats);
+            // V024: identified PLVC (verified Prarambh mapping) vs unidentified PLVC.
+            if (x is "CUSTOMER_PLVC_IDENTIFIED" or "CUSTOMER_PLVC_UNIDENTIFIED")
+                where.Add(x == "CUSTOMER_PLVC_IDENTIFIED" ? "m.Category = 'CUSTOMER_PLVC' AND r.PrarambhMainId IS NOT NULL" : "m.Category = 'CUSTOMER_PLVC' AND r.PrarambhMainId IS NULL");
+            else
+            {
+                var cats = MeetingEndpoints.Categories.Contains(x) ? [x] : MeetingEndpoints.Categories.Where(c => MeetingEndpoints.CategoryGroup(c) == x).ToArray();
+                where.Add("m.Category IN @cats");
+                args.Add("cats", cats.Length == 0 ? ["-"] : cats);
+            }
         }
         if (S("status") is { } st) { where.Add("r.[Status] = @status"); args.Add("status", st.ToUpperInvariant()); }
         else where.Add("r.[Status] <> 'PURGED'");
@@ -144,7 +155,7 @@ public static class RecordingLibraryEndpoints
         { where.Add("(cu.CustomerRef LIKE @cref OR cu.ReferenceNumber LIKE @cref OR cu.PolicyNumber LIKE @cref OR m.PolicyNumber LIKE @cref OR cu.FullName LIKE @cref)"); args.Add("cref", $"%{Like(cref)}%"); }
         if (Guid.TryParse(S("meeting"), out var mid)) { where.Add("m.PublicId = @meeting"); args.Add("meeting", mid); }
         if (S("search") is { Length: <= 100 } search)
-        { where.Add("(m.Title LIKE @search OR m.MeetingCode LIKE @search OR o.DisplayName LIKE @search OR o.EmployeeCode LIKE @search)"); args.Add("search", $"%{Like(search)}%"); }
+        { where.Add("(m.Title LIKE @search OR m.MeetingCode LIKE @search OR o.DisplayName LIKE @search OR o.EmployeeCode LIKE @search OR r.PrarambhMainId LIKE @search)"); args.Add("search", $"%{Like(search)}%"); }
         if (S("legalHold") == "true") where.Add("r.LegalHold = 1");
         return new Filters(string.Join(" AND ", where), args);
     }

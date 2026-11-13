@@ -53,10 +53,10 @@ public static class Cookies
 /// </summary>
 public sealed class SessionAuthenticationHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder,
-    Db db, IClock clock, IOptions<SecurityOptions> security)
+    Db db, IClock clock, IOptions<SecurityOptions> security, DailyLogoutService daily)
     : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
-    sealed record Row(Guid SessionId, long UserId, DateTime ExpiresUtc, DateTime AbsoluteExpiryUtc, DateTime LastSeenUtc, bool MustChangePassword, string? Permissions);
+    sealed record Row(Guid SessionId, long UserId, DateTime CreatedUtc, DateTime ExpiresUtc, DateTime AbsoluteExpiryUtc, DateTime LastSeenUtc, bool MustChangePassword, string? Permissions);
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
@@ -66,7 +66,7 @@ public sealed class SessionAuthenticationHandler(
         var now = clock.UtcNow;
         using var c = await db.OpenAsync(Context.RequestAborted);
         var row = await c.QuerySingleOrDefaultAsync<Row>("""
-            SELECT s.SessionId, s.UserId, s.ExpiresUtc, s.AbsoluteExpiryUtc, s.LastSeenUtc, u.MustChangePassword,
+            SELECT s.SessionId, s.UserId, s.CreatedUtc, s.ExpiresUtc, s.AbsoluteExpiryUtc, s.LastSeenUtc, u.MustChangePassword,
                    (SELECT STRING_AGG(p.Code, ',') FROM (SELECT DISTINCT p.Code FROM auth.UserRoles ur
                         JOIN auth.RolePermissions rp ON rp.RoleId = ur.RoleId
                         JOIN auth.Permissions p ON p.PermissionId = rp.PermissionId WHERE ur.UserId = u.UserId) p) AS Permissions
@@ -76,11 +76,16 @@ public sealed class SessionAuthenticationHandler(
             """, new { hash = Tokens.Hash(token), now });
         if (row is null)
             return AuthenticateResult.Fail("Session invalid or expired.");
+        // Daily security reset (e.g. 23:30 IST): a session from before the latest cutoff ends at the cutoff itself, not only when
+        // the background sweep marks it revoked a few seconds later.
+        if (daily.EffectiveCutoffUtc(row.UserId, now) is { } cutoff && row.CreatedUtc < cutoff)
+            return AuthenticateResult.Fail("Session ended by the daily logout.");
 
         // Slide the idle window at most once a minute to keep writes low.
         if (now - row.LastSeenUtc > TimeSpan.FromMinutes(1))
         {
-            var idle = now.AddMinutes(security.Value.SessionIdleMinutes);
+            // SessionIdleMinutes = 0: no idle timeout - the session simply lasts until its absolute expiry (the daily logout).
+            var idle = security.Value.SessionIdleMinutes > 0 ? now.AddMinutes(security.Value.SessionIdleMinutes) : row.AbsoluteExpiryUtc;
             await c.ExecuteAsync("UPDATE auth.UserSessions SET LastSeenUtc = @now, ExpiresUtc = @exp WHERE SessionId = @id",
                 new { now, exp = idle < row.AbsoluteExpiryUtc ? idle : row.AbsoluteExpiryUtc, id = row.SessionId });
         }

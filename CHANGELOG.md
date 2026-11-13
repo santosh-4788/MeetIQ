@@ -1,5 +1,582 @@
 # Changelog
 
+## 13 Nov 2026 — "Skip details" / unidentified PLVC (V024), approved wording on every recording policy, PLVC recording fix
+
+**Deployed 13 Nov 2026 16:20 IST** with approval ("approved all the pending things related to recording … go live"). No live meeting or recording at the time.
+- **Database:** backup `Oneinsure_v_preV024_20261113_1618.bak` (copy-only, with checksum, verified; SQL Server default backup folder). Then **V024** in one transaction, with its `dbo.SchemaMigrations` row.
+- **Files:** backup `deploy\_backup-20261113-161956` (api, frontend-dist, git-diff.patch, `policies-before.json`).
+- **API:** published self-contained; 7 s of downtime; Healthy.
+- **Website:** rebuilt; the new code is confirmed live.
+
+- **Fix: live PLVC recording (14:37 → about 15:25 IST).**
+  - The 14:37 deploy marked the CUSTOMER_PLVC policy `APPROVED`.
+  - The recording gate refuses an Approved policy that has no retention period, and PLVC's retention period is intentionally empty (no automatic deletion). A new PLVC meeting in that window would not have recorded; none was started.
+  - The status was set back to `PENDING_CONFIRMATION`, with an audit row. The approved wording and version stay.
+  - Hosts no longer see the "not confirmed" note, because the wording carries an approval reference (`RecordingPolicies.NoticeConfirmed`). The gate is unchanged.
+  - The tests now require that mandatory PLVC recording really starts.
+- **Same approved wording on the other four policies** (owner's decision): Customer meeting, Customer audio call, Internal, Training.
+  - Each has its own version (e.g. `CUSTMEET-NOTICE-1.0`) and the owner's reference.
+  - Approval status, consent mode and on/off settings are unchanged. Audited.
+- **"Skip details & start meeting"** (instant Customer – PLVC):
+  - creates an **Unidentified PLVC** meeting with no Prarambh ID (none is ever invented), no customer, no participants and no e-mails;
+  - the host shares the meeting link;
+  - it is recorded as normal, with no ID prefix in the file name.
+- **V024 (database):**
+  - computed `PlvcIdentification` column;
+  - a missing customer is now allowed for **instant** PLVC meetings only;
+  - new external API scope `meeting.plvc.unidentified`.
+  - 67 older PLVC meetings, created before the Prarambh ID existed, now correctly show as Unidentified.
+- **Add Prarambh Main ID later** (meeting page; host, co-host, organiser or admin):
+  - also works after the meeting has ended, and only while the meeting has no ID;
+  - the ID is added to the recordings' metadata, and files are never renamed;
+  - audited as `MEETING_PRARAMBH_ADDED`.
+- **Reports and recording library:**
+  - "Customer PLVC — identified / unidentified" filters;
+  - an "Unidentified" label;
+  - a "PLVC identification" column in the CSV.
+- **External API:**
+  - `plvcIdentification: "UNIDENTIFIED"` must be sent explicitly, and the integration must hold the new scope;
+  - every response and the `meeting.created` webhook return `plvcIdentification`.
+  - Documented in `API_INTEGRATION_GUIDE.md`. Rules are in `documentation/PLVC_BUSINESS_RULES.md`.
+- **Tests:**
+  - API **93/93**, including the new `Skipped_PLVC_details_…` test.
+  - `doc3-instant-schedule` **10/10**, including SK-01 (skip → unidentified, recorded, file name without ID) and SK-02 (ID added after the end → identified, file unchanged, audited).
+  - `end-and-late-share` **10/10**; RN-02 now also requires the PLVC recording to start.
+  - `goodday-fixes-3` **5/5**, `consent-request` **15/15**. CR-02 now checks the configured wording instead of the placeholder.
+
+## 13 Nov 2026 — Oneinsure_connect_bugs.docx: recording notice redesign, "Meeting Ended" for everyone, late-joiner screen share, instant-meeting e-mails, compact Schedule page
+
+**Deployed 13 Nov 2026 14:37 IST** with approval ("complete it and deploy on live"); no live meeting or recording. Backup `deploy\_backup-20261113-143610` (api, frontend-dist, git-diff.patch, `policy-CUSTOMER_PLVC-before.json`). API published self-contained (production appsettings untouched), Healthy (`/meet/api/v1/health` 200). Live policy row CUSTOMER_PLVC updated in one transaction plus an audit row (`RECORDING_POLICY_UPDATED`, old and new values). Website rebuilt. Checked on the live site: the new notice, Meeting Ended, the in-band end message, the screen-share recovery, invitation e-mail status, the Schedule layout and the Reports column are all in the served code.
+
+- **Recording notice** (`RecordingControls.tsx`, `RecordingConsentUi.tsx`, `room.css`). A compact floating card over the video:
+  - Contents: the title "Meeting Recording Notice", the policy wording, "For assistance: support@oneinsure.com", and ONE "OK, got it". There is also a 44 px ×.
+  - Layout: aware of the iPhone safe area, height capped at 46% of the screen, with a fade-and-scale entrance.
+  - Participants no longer see: the placeholder warning, the notice version, the policy name, or "Wording pending policy confirmation" (also removed from the Accept/Decline popup).
+  - Hosts see a small "not confirmed" note only while the wording is unconfirmed.
+  - The acknowledgement, the consent flow, recording start/stop and the R2 recorder are unchanged.
+  - **Live data** (owner-approved, "Your wording is approved"; reference "Approved by product owner (Santosh Yadav), 13 Nov 2026"; version `PLVC-NOTICE-1.0`): the CUSTOMER_PLVC policy got the wording from the document and is now APPROVED. The other four policies are unchanged.
+- **Host ends the meeting → "Meeting Ended" for everyone** (`MeetingAutoEnd.cs`, `RoomEndpoints.End`, `MeetingRoom.tsx`, `RoomExitScreen.tsx`).
+  - Cause, from the live LiveKit log of 13 Nov 12:26: the server deleted the room and sent "leave", the iPhone missed it, and it kept trying to reconnect ("could not restart participant").
+  - Fix, part 1: the server first sends an in-band `oic.meeting` "meeting-ended" message, then closes the room. Clients leave at once and release camera, microphone and screen.
+  - Fix, part 2: while reconnecting, or when the connection drops, the client asks the API whether the meeting has ended, and shows "Meeting Ended" instead of "Reconnecting…" or "Connection lost".
+  - Ending again returns 204 (idempotent). The ended screen shows the title, meeting ID, end time and "Back to Home".
+  - A participant's own network loss and a host's temporary loss still use the normal reconnect.
+- **Late joiners and screen share:**
+  - Not reproducible on desktop or phone-sized Chromium: late joiners saw the share every time (multi-participant test).
+  - The live log shows the failing late joiner was an **iPhone (Safari)**, which the server had subscribed to the share.
+  - Added (`useScreenShareRecovery`): when a remote screen share shows no picture, the room re-plays the video and, after about 6 s, re-subscribes (at most 3 times). It never restarts the presenter's share and never creates a second track.
+  - A real iPhone check is still pending.
+- **Instant meeting e-mails** (`MeetingLinkEndpoints`, `MeetingLinkShare.tsx`, `QuickMeetingDialogs.tsx`).
+  - Each participant is e-mailed their **own** personal link (`MEETING_INSTANT_INVITED`), queued in the existing outbox in the same transaction as the meeting.
+  - Invite people shows the delivery status and offers "Send again", which issues a new personal link for that person only and is audited as `MEETING_INVITATION_RESENT`.
+  - A double click can no longer create two meetings (synchronous guard).
+  - The external API is unchanged.
+- **Schedule Meeting** (`MeetingForm.tsx`, `schedule.css`):
+  - a compact two-column layout from 1024 px;
+  - Title and Category side by side, a shorter details box, tighter cards and 40 px inputs (44 px on touch screens);
+  - all fields and all logic unchanged.
+- **Reports:**
+  - new Prarambh Main ID column, and search by the ID;
+  - fixed a summary error (`TotalHours` read as decimal instead of double) that made the Reports API fail.
+- **Not built, awaiting approval:** "Skip details & start meeting" and the identified/unidentified PLVC states. They need database migration V024; see `documentation/PLVC_BUSINESS_RULES.md`.
+- **Tests:**
+  - API **92/92** (the room test now expects the idempotent end and the in-band message).
+  - New `tests/e2e/room/end-and-late-share.mjs` **10/10**: host plus 3 participants, one on a phone, one offline during the end.
+  - New `tests/e2e/recording/doc3-instant-schedule.mjs` **8/8**.
+  - Regressions: `goodday-fixes-3` **5/5**, `consent-request` **15/15**.
+
+## 13 Nov 2026 — GoodDay reopened: MaXW9q (More sheet cannot be closed on iPhone) and CVPJMP (no end prompt "after 15 minutes")
+
+**Deployed 13 Nov 2026 10:28 IST** with approval ("deploy on live"). No live meeting or recording. Backup `deploy_backup-20261113-102838` (api, frontend-dist, git-diff.patch). API published self-contained (production appsettings untouched), about 7 s down, Healthy; website rebuilt. Checked on the live site: health 200, OpenAPI 200, the room code served contains the new More-sheet close button and backdrop, and the deployed API contains the early-start change.
+
+- **MaXW9q, reopened ("when user click on more button no option to close popup"):**
+  - Cause: the toolbar has `backdrop-filter`, which makes it the containing block of the sheet's full-screen (`position: fixed`) backdrop. The backdrop therefore covered only the toolbar, so tapping the video did nothing, and the sheet had no Close button.
+  - Fix (`MeetingRoom.tsx`): the sheet is rendered through a portal into the room element, so its backdrop covers the whole screen, and it has a 44 px Close (×) button.
+- **CVPJMP, reopened ("did not receive any popup after 15 minutes"):**
+  - Cause: meeting OIC-261113-KK6W was booked 09:15–09:30 and started at 09:02. The countdown, the Extend/End prompt and the automatic end follow the booked end, so nothing could appear before 09:25.
+  - Fix (`RoomEndpoints.Join`): when a host starts a scheduled meeting **early**, its slot moves to the actual start, keeping the booked length (start = now, end = now + duration). The change is audited in `MEETING_STARTED` with the booked times. A late start keeps its booked end, and the host is prompted to extend.
+- **Tests:**
+  - API **92/92**, including the new `A_scheduled_meeting_started_early_runs_its_booked_duration_from_the_actual_start`.
+  - `goodday-fixes-3` **5/5** (GD3-04 More sheet on a touch phone; GD3-05 early start).
+  - Regression: `goodday-fixes` **8/8**.
+- **qe9ILR** was moved to Review by the reporter with no comment, so there was nothing to fix.
+
+## 13 Nov 2026 — GoodDay #14216: PLVC recording notice "not closing"
+
+**Deployed 13 Nov 2026 09:57 IST** with approval ("go live"): website rebuild only (API untouched, no downtime); no live meeting or recording at the time; backup `deploy_backup-20261113-095721`. Checked on the live site: the room code served contains the new close button and "OK, got it"; health 200.
+
+- **Bug:** in a Customer PLVC call (mandatory recording, notification only), the recording notice banner seemed impossible to close for both host and customer. Its only close control was a 16 px ×, so most taps missed, and on a phone the banner covered about half the video.
+- **Fix:** `frontend/src/pages/room/RecordingControls.tsx`.
+  - The × is now a 44×44 px target, and there is an "OK, got it" button (44 px tall on a phone).
+  - The banner's height is capped at 40% of the screen on a phone (50% on desktop) and scrolls inside.
+  - The internal "Wording not confirmed" note is shown to the host only, never to a customer or guest.
+  - The notice text itself is still shown to everyone, and the acknowledgement is still recorded automatically. Consent behaviour is unchanged.
+- **Tests:** `tests/e2e/recording/goodday-fixes-3.mjs` **3/3** (host desktop, customer phone with touch, acknowledgement rows). Regression `consent-request` **15/15**.
+- **Not part of this fix:** the notice still shows the placeholder wording, because the PLVC recording policy has no approved text yet. Compliance must enter it in Administration → Recording policies; it is not invented here.
+- **Ignored as instructed:** GoodDay "Email is received to the customer in spam".
+
+## 13 Nov 2026 — Master enhancement batch: PLVC participants + Prarambh Main ID, screen share everywhere, date-wise recordings, no auto-deletion, no idle logout, external API platform
+
+**Deployed 13 Nov 2026 00:01 IST** with approval ("deploy all on live"). No live meeting or recording at the time.
+
+- **Database:** backup `Oneinsure_v_preV022_20261113.bak` (copy-only, with checksum, 35.1 MB; SQL Server default backup folder). Then **V022** and **V023**, each in one transaction with its `dbo.SchemaMigrations` row.
+- **API:** published self-contained; about 8 s of downtime; Healthy.
+- **Production settings:** `deploy\api\appsettings.json` changed `Security:SessionIdleMinutes` from 30 to **0**. This is the only settings change.
+- **Website:** rebuilt.
+- **File backup:** `deploy\_backup-20261113-000118` (api, frontend-dist, git-diff.patch).
+
+Business decisions (12 Nov 2026):
+- Prarambh Main ID is digits only.
+- PLVC creates the customer record from the first participant.
+- Screen sharing is for everyone.
+- Automatic deletion is off (Compliance agreed).
+- External access uses API keys.
+
+### Module 1 — PLVC participants and Prarambh Main ID
+- In the instant dialog and the schedule form, **Customer – PLVC** shows a **Prarambh Main ID** box and **Participants** rows (name, e-mail, + add, × remove) instead of "Add customer". Shared component: PlvcFields.tsx.
+- Client checks mirror the server: Prarambh required and digits only (non-digits are stripped as you type); at least one participant; valid e-mails; no duplicates.
+- **Server** (Meetings/Plvc.cs, used by instant, one-off and recurring creation):
+  - Prarambh Main ID is required for PLVC, **digits only (1–30)**, stored exactly as given (leading zeros kept), and refused for other categories.
+  - The first participant becomes the meeting's customer: an active customer with that e-mail is reused, otherwise one is created (CustomerRef PLVC-<id>, ReferenceNumber = the ID). Dashboards, reports and recording access keep working.
+  - The other participants are guests. Instant meetings return a personal join link for each; scheduled meetings e-mail them.
+  - A PLVC meeting cannot change category.
+- **Where the Prarambh ID appears:**
+  - meeting detail;
+  - Recording Library (list, detail, search);
+  - reports (list, CSV column, search);
+  - MP4 metadata (title and comment);
+  - the recording file name;
+  - the external API and webhooks (ids only).
+- The "Invite people" dialog in the room lists every PLVC participant's personal link.
+- **V022:** mtg.Meetings.PrarambhMainId and rec.MeetingRecordings.PrarambhMainId (VARCHAR(30)), CHECK digits-only and "PLVC only", filtered indexes. The API enforces "required" for new meetings only, so existing PLVC meetings are not affected.
+
+### Module 2 — Screen sharing in every meeting
+- The room connection grants screen share to everyone who may speak (canScreenShare = CanPublish). That includes customers and guests, every category, and audio-only meetings.
+- Audio-only still removes only the camera, and presenting never turns the camera on. Browsers that cannot capture a screen keep the existing "not supported" message.
+
+### Module 3 — Recording storage
+- New recordings are saved under YYYYMMDD/, by the **IST start date**:
+  - PLVC: <PrarambhMainId>-<MeetingCode>-REC<id>.mp4;
+  - others: <MeetingCode>-REC<id>.mp4.
+- Collisions get a -n suffix. No customer names or e-mails are ever used in names.
+- Code: Recording/RecordingStorageKeys.cs.
+- Old recordings keep their keys and still play and download. See documentation/RECORDING_STORAGE_STRUCTURE.md.
+
+### Module 4 — No automatic recording deletion
+- RetentionWorker: an expiry with action DELETE now only flags the recording for review. It never purges and never queues a deletion. ARCHIVE and REVIEW are unchanged.
+- The policy API and screen no longer accept DELETE.
+- Manual deletion is unchanged: permission, confirmation and reason, legal-hold block, dual approval, audit, and "PURGED only after the file is really gone".
+- No production policy had a retention period set, so nothing was ever deleted automatically before this change either.
+
+### Module 5 — Instant meeting blank screen
+- **Cause:** there was no React error boundary anywhere. A failed download of the room's page chunk (typical right after a redeploy, or on a dropped mobile request), or any render error, unmounted the whole app, leaving a white page until a refresh.
+- **Fix** (components/ErrorBoundary.tsx, main.tsx, App.tsx):
+  - an app-wide boundary plus a room boundary with a "Reload" card;
+  - a chunk error or vite:preloadError triggers **one** automatic reload (at most once per minute, so no loop);
+  - pressing Enter twice no longer starts a second meeting.
+
+### Module 6 — Sessions
+- **Cause** of the unexpected logouts: a 30-minute idle timeout in both the browser and the server.
+- **Now:**
+  - Security:SessionIdleMinutes = 0 means no idle timeout;
+  - a session's absolute expiry is the **next 23:30 IST** daily logout;
+  - the 23:25 warning, server-side revocation and the per-admin test mode are unchanged.
+- See documentation/SESSION_MANAGEMENT.md.
+
+### Module 7 — Toolbar
+Deployed earlier (22:59 IST): 80 → 68 px, and the support line moved into the room.
+
+### Modules 8–13 — External API platform (backend/.../Integrations/)
+- **/api/ext/v1:**
+  - API-key authentication (SHA-256-hashed keys, shown once);
+  - scopes;
+  - per-integration rate limit;
+  - request log;
+  - Idempotency-Key;
+  - **isolation** (every query filters on the caller's IntegrationId; anything else is 404).
+- **Endpoints:**
+  - /me;
+  - create (instant or scheduled, PLVC validation, host by e-mail, employee code or default);
+  - list and get;
+  - cancel;
+  - **completion report** (meeting and recording status independent; attendance; IST times);
+  - recordings;
+  - **signed short-lived downloads** (Range support, audited, 410 when deleted);
+  - webhook management and test.
+- **Webhooks** (WebhookWorker):
+  - each state change is enqueued once;
+  - deliveries are signed (HMAC-SHA256) and retried 30 s → 6 h, 8 attempts;
+  - SSRF guard (public HTTPS only, no redirects);
+  - payloads carry no personal data.
+- **OpenAPI 3.1:** generated from the endpoints (Microsoft.AspNetCore.OpenApi 10.0.14) at /api/ext/openapi/ext-v1.json. Only the external API is published.
+- **Portal:** Organisation → System → **API Documentation** (integrations.manage: Admin and SuperAdmin):
+  - the guide;
+  - the endpoint table, built from the live OpenAPI;
+  - Swagger UI (swagger-ui-dist 5.17.14, MIT, bundled locally);
+  - an OpenAPI download;
+  - integration management: keys, scopes, rate limit, webhook, delivery and request logs.
+- **V023:** app.ApiIntegrations, ApiIntegrationScopes, ApiKeys, ApiRequestLog, ApiIdempotency, WebhookSubscriptions, WebhookDeliveries; IntegrationId/ExternalReference on meetings; IntegrationId on recordings; audit actor type INTEGRATION; permission integrations.manage.
+- **Docs:** documentation/API_INTEGRATION_GUIDE.md, API_ENDPOINT_REFERENCE.md, OPENAPI_SPECIFICATION/.
+- The development Vite proxy key is now ^/api/ (a plain /api prefix also captured the app's /api-docs page).
+
+### Tests
+- **API:** 91/91 (13 Nov). The 4 older failures were outdated tests, not API defects, and were updated: signed media links are absolute (`WebBaseUrl`) so the tests now request their path; storage keys are now date-wise (`YYYYMMDD/…-REC<id>.mp4`); a failed recording notifies the owner **and** every Admin/SuperAdmin; with automatic deletion off only the manual, dual-approved deletion purges. The manual-deletion/dual-approval flow now runs to the end and passes.
+- **New API tests:** IntegrationTests.cs (7).
+- **Browser:** tests/e2e/recording/enhancements-1112.mjs 6/6, including a real PLVC recording saved as 20261112/706082601-OIC-261112-QWD3-REC10030.mp4. Regression: goodday-fixes 8/8, goodday-fixes-2 4/4, repeat-alignment 6/6, consent-request 15/15.
+- **OpenAPI:** validated with @apidevtools/swagger-parser 10.1.1.
+
+### Rollback
+1. **Website:** copy _backup-20261113-000118\frontend-dist\* over frontend\dist.
+2. **API:**
+   - Stop-Service MeetIQApi;
+   - copy _backup-20261113-000118\api\* over deploy\api. This includes the old appsettings.json, which brings back the 30-minute idle timeout;
+   - Start-Service MeetIQApi.
+3. **Database:** V022/V023 are additive, and the old API ignores them, so they can stay. Full reversal: the rollback SQL in the migration headers, or restore Oneinsure_v_preV022_20261113.bak (this loses data written since).
+
+## Unreleased — 12 Nov 2026 — Mobile meeting toolbar, support e-mail, screen-share recording orientation
+
+**Deployed 12 Nov 2026 22:59 IST** with approval. Frontend and recorder layout only; no service restart. Backup: `deploy\_backup-20261112-225829` (frontend-dist, recorder-layout).
+
+- **Toolbar overlap (iOS/Android).**
+  - **Cause:** guests join under the sign-in layout (`layouts/AuthLayout.tsx`). Its footer ("Need help? it.support@…", ©) was painted over the room's bottom control bar. The 16:05 deploy fixed this with stacking order (wrapper `z-20`), so it still relied on z-index.
+  - **Now:**
+    - The footer gets class `oic-auth-footer` and is not rendered at all while a meeting room, pre-join or room status screen is open (`styles/theme.css`, `body:has(.oic-room, .oic-room-canvas)`).
+    - The support contact now lives inside the room: the Settings panel on desktop and the More sheet on phones (`SupportLine` in `pages/room/RoomPanels.tsx`).
+- **Support e-mail.** `SUPPORT.email` (`frontend/src/config.ts`) changed from `it.support@oneinsure.com` to `support@oneinsure.com`. This one constant feeds the in-room support line, the sign-in/join footer, the join pages and the status pages.
+  - Not changed: SMTP `From`/`ReplyTo` (already `support@`) and the backend `Email:SupportEmail` shown in e-mail footers (`appsettings.json`, still `it.support@`; out of scope, change separately if wanted).
+- **Thinner toolbar (Module 7).**
+  - Desktop/tablet bar height: 80 → 68 px.
+  - Short landscape screens: 64 → 56 px.
+  - Phone bar vertical padding: 10 → 7 px.
+  - Button sizes are unchanged: 48 px (desktop), 46 px (phones).
+  - New `max-width: 359px` rule (iPhone SE/mini): tighter margins and gaps, 44 px buttons. The six phone controls (mic, camera, chat, people, more, leave) used to overflow a 320 px screen.
+  - Safe-area insets are unchanged (`env(safe-area-inset-bottom)` margin).
+- **Recording looked like a phone when a desktop user presented.**
+  - **Cause:** `recording/layout/src/main.ts` `decideCanvasSize()` locked a 1:1 call to a portrait canvas if *either* camera was portrait. MediaRecorder cannot resize later, so a desktop's screen share was squeezed into 720×1280.
+  - **Now:** a 1:1 call is portrait only when *every* participant's camera is portrait (in practice, both people on phones, which cannot present). It also stays landscape if someone is already presenting when the canvas is locked. Group calls are unchanged (always landscape).
+  - This changes the 7 Nov device-adaptive rule ("either camera").
+- **Tests:** `tests/e2e/recording/goodday-fixes.mjs` 8/8 (12 Nov 17:18 UTC). Frontend and recorder-layout type checks are clean. See the UAT report, section "Mobile toolbar…".
+- **Deploy when approved:**
+  1. Build the recorder layout and copy it to `deploy\recorder-layout`.
+  2. Run `npm run build` (frontend).
+  3. No service restart is needed.
+- **Rollback:** restore `frontend\dist` and `deploy\recorder-layout` from the pre-deploy backup.
+
+## Unreleased — 12 Nov 2026 — GoodDay #14213: Repeat section alignment (Schedule meeting)
+
+**Deployed 12 Nov 2026 18:07 IST** with approval. Frontend only (`pages/meetings/MeetingForm.tsx` → `RecurrenceEditor`); no API restart. Backup: `deploy\_backup-20261112-180657\frontend-dist` (rollback: copy it over `frontend\dist`). GoodDay #14213 is marked RESOLVED.
+- **Cause:** the Frequency / Repeat every row was bottom-aligned, and "Repeat every" had a "day(s)" hint underneath. That pushed Frequency's label and box lower than its neighbour. The Ends rows had radio labels of different widths ("After" vs "On date"), so "Occurrences" and "End date" started at different positions.
+- **Now:**
+  - fields align by their tops, and the unit sits beside the box;
+  - the radio buttons sit in a fixed-width column under an invisible label-height spacer, centred on their boxes;
+  - the Ends rows never wrap on phones.
+- **Test:** `tests/e2e/recording/repeat-alignment.mjs` measures the element boxes. 6/6 pass (desktop and 390 px, for Daily / Weekly / Monthly): labels and boxes within 1 px, radios centred on their boxes, the Ends boxes left-aligned, no horizontal scroll.
+
+## Unreleased — 12 Nov 2026 — GoodDay "Meet" batch, part 2 (the remaining open reports)
+
+**Deployed 12 Nov 2026 17:10 IST** with approval, with no live meeting or recording. Auto-end grace is 5 min (the default).
+- Backup: `deploy\_backup-20261112-170921` (`api`, `frontend-dist`, `git-diff.patch`).
+- About 7 s of API downtime; health is Healthy; the live bundle and the new endpoints are present.
+- GoodDay: #14208, #14195, #14206 and #14196 are marked RESOLVED with notes. #14197 has a note and stays open until the employee-code script is approved.
+
+**Rollback:**
+1. `Stop-Service MeetIQApi`.
+2. Copy `_backup-20261112-170921\api\*` over `deploy\api`, then `Start-Service MeetIQApi`.
+3. Copy `_backup-20261112-170921\frontend-dist\*` over `frontend\dist`.
+
+To keep the code but switch automatic ending off, set `Meetings:AutoEndGraceMinutes` to 0 and restart the service.
+
+No schema change. Tests:
+- API 80/84 (the 4 failures are the pre-existing ones), including 1 new test and new checks in the instant-PLVC test;
+- browser `tests/e2e/recording/goodday-fixes-2.mjs` 4/4;
+- regression suites re-run.
+
+### #14208 — the meeting did not end at its scheduled time
+- **Countdown banner:** from 5 minutes before the scheduled end, everyone sees "scheduled to end at … (in m:ss)". After the end it reads "Scheduled time is up. The meeting ends automatically in m:ss". Hosts get **Extend 15 min / 30 min** and **End now**.
+- **Extend:** `POST /meetings/{id}/room/extend` (host or co-host; 5–`MaxExtendMinutes` minutes; total length capped by `MaxDurationHours`). It moves `ScheduledEndUtc`, writes the audit entry `MEETING_EXTENDED`, and tells everyone in the room (the "end-changed" message updates the banner and header live).
+- **Automatic end:** the new `MeetingAutoEndWorker` (every 30 s) ends a LIVE meeting `Meetings:AutoEndGraceMinutes` (default **5**; 0 = off) after its scheduled end, exactly like "End for all":
+  - it claims the meeting atomically first, so an extension can't lose a race;
+  - then it stops the recording cleanly and closes the room;
+  - audit `MEETING_AUTO_ENDED` (SYSTEM).
+
+  "End for all" and the worker share `MeetingAutoEnd`. The join response includes `autoEndUtc`.
+- **Exit screen:** now reads "<title> has ended for everyone" (it was "The host ended…").
+
+### #14195 — send the link directly to the customer
+- **Endpoint:** `POST /meetings/{id}/link/customer` (host, co-host or organiser of a customer meeting). It issues a fresh personal `/join/{token}` link for the customer; the e-mailed link keeps working. Audit `MEETING_CUSTOMER_LINK_ISSUED`.
+- **Where:** the meeting page (customer meetings) and the room's Invite dialog have **Send link to customer**, which shows the link with:
+  - **WhatsApp** — `wa.me/91…` with the message ready, from the host's own WhatsApp; no SMS gateway, no paid service;
+  - **E-mail** — to the customer's e-mail;
+  - **Copy**.
+- The instant-meeting response includes the customer's e-mail and mobile.
+
+### #14206 — the customer was asked for consent
+- **Cause:** the call ("12:26 testing call") was an internal one-to-one meeting with the customer joining through the guest link. Internal recording policy asks everyone, so the customer was asked when the host pressed Record.
+- **Change:** the Instant meeting dialog now says "Calling a customer? Choose Customer PLVC". PLVC records with a notice only.
+- **Policy unchanged:** I did not change any recording policy. Making internal meetings notice-only is the policy administrator's decision.
+
+### #14196 — answered (no code change)
+- The company mail log (`[Beeinsured_v3_2].dbo.trn_logemail`) shows every Gmail invitation **DELIVERED**, and most were opened or clicked.
+- The 11 Nov ones arrived 10–22 minutes late at the provider: queued at 14:45 IST, delivered at 15:06; the report was raised at 14:59.
+
+### #14197 — employee codes (data fix prepared, not applied)
+- Our codes were placeholders. The HR master (`MST_Employees`, matched by official e-mail) gives:
+  - Santosh: **6433** (the failed login was this code);
+  - Hasib: **5509**;
+  - Harsh (`harsh@oneinsure.com`, the unlinked account): **109812 Harsh Raj**, Cluster Manager, HO - Mumbai, joined 5 Jan 2026.
+- 107249 belongs to charugundla.prasanth, who has no account in Meet. Naved and Mohit (galentic addresses) are not in HR: their IDs stay 0003 and 0002.
+- **Applied 12 Nov 2026 ~17:30 IST** with approval, in one transaction:
+  - codes updated (TMP-SANTOSH → 6433, 0111 → 5509);
+  - department "HO - Mumbai" (002) and designation "Cluster Manager" (002) created;
+  - employee 109812 Harsh Raj created and account 7 linked;
+  - audit: `EMPLOYEE_UPDATED` ×2, `EMPLOYEE_CREATED`, `USER_EMPLOYEE_LINKED` (privileged).
+- **Verified:** the sign-in lookup resolves 6433, 5509, 109812, 0003 and 0002 to the right accounts.
+- **Backup:** `Oneinsure_v_preEmpCodes_20261112.bak` (34.1 MB). GoodDay #14197 is RESOLVED.
+
+## Unreleased — 12 Nov 2026 — GoodDay "Meet" bug batch (17 reports from Naved)
+
+**Deployed 12 Nov 2026 16:05 IST** with approval, with no live meeting or recording. Backup: `deploy\_backup-20261112-160430` (frontend `dist`, `recorder-layout`, `git-diff.patch`). The API was not restarted (no downtime); health is Healthy, and the live bundle and the recorder layout contain the changes. GoodDay #14212, #14192, #14209, #14210, #14211, #14207, #14205, #14203 and #14204 are marked RESOLVED with notes. Tested before in the isolated local environment: `tests/e2e/recording/goodday-fixes.mjs` 8/8, `consent-request.mjs` 15/15. No database or API change; frontend and the recorder layout only.
+
+**Rollback:**
+1. Copy `deploy\_backup-20261112-160430\frontend-dist\*` over `frontend\dist`.
+2. Copy `deploy\_backup-20261112-160430\recorder-layout\*` over `deploy\recorder-layout` (robocopy /MIR).
+
+### Fixed
+- **#14212 / #14192 Dashboard buttons:**
+  - header "New Meeting" → **Schedule meeting**;
+  - the dashboard's duplicate "Schedule" button is removed;
+  - the dashboard keeps **Instant meeting**, Join meeting and Calendar (`layouts/Header.tsx`, `pages/DashboardPage.tsx`).
+- **#14209 / #14210 KPI cards:** Today's Meetings → `/meetings?tab=today`; Upcoming Meetings → `/meetings?tab=upcoming` (was the calendar). My Meetings now reads and keeps the tab in the URL (`pages/meetings/MeetingsList.tsx`).
+- **#14211 Upcoming vs Attending:** "Attending" is renamed **Invited**, and a line under the tabs says what each list holds.
+- **#14207 E-mail in Invite people ended the call:**
+  - LiveKit's `disconnectOnPageLeave` disconnects on `beforeunload`, which Chrome and Edge also fire when a `mailto:` link opens the mail app;
+  - the room now leaves only on `pagehide`, and the E-mail link opens in a separate context (`pages/room/MeetingRoom.tsx`, `pages/meetings/MeetingLinkShare.tsx`).
+- **#14205 Customer on iPhone could not use mic, camera and other buttons:**
+  - guests join from `/join` and `/m` pages under the sign-in layout, whose "Need help? / © OneInsure" footer was stacked above the full-screen room and covered the control bar;
+  - the content layer is now above the footer (`layouts/AuthLayout.tsx`).
+- **#14203 Tile expand button did nothing:** the stage now honours LiveKit's pinned track; pressing expand again returns to the grid.
+- **#14204 Shared screen small in recordings:**
+  - a one-to-one call with a portrait phone camera records a portrait canvas, and a later desktop share was squeezed beside a camera strip;
+  - on a portrait canvas the share now takes the full width at the top, with the cameras side by side underneath (`recording/layout/src/main.ts`);
+  - deploy by rebuilding the layout and copying `dist` to `deploy\recorder-layout`.
+
+### Already fixed (live), marked RESOLVED in GoodDay
+- #14193 instant PLVC (12 Nov 11:45 IST);
+- #14190 users without an employee (12 Nov 12:41 IST);
+- #14191 recording play/download (11 Nov 15:08 IST; recording #1 has no file).
+
+### Not code defects / need a decision (not changed)
+- **#14197 Login with employee ID:**
+  - the login code accepts employee codes;
+  - production employee codes are placeholders (e.g. Naved = `0003`), and the failed attempts were `6433` and `107249`;
+  - the real codes must be entered under Employees.
+- **#14196 Invitation to a personal Gmail not received:** all 14 external e-mails were handed to `[Beeinsured_v3_2].dbo.Util_SendEmail2` without error. Delivery beyond that is the company mail server; the mail administrator must confirm it relays to external domains (there is a separate `Util_SendEmailPersonal`).
+- **#14208 Meeting not ended at its scheduled time:** by design, overrunning calls continue (toast at the end time). Auto-ending is a product decision.
+- **#14206 Customer asked for consent when the host turns on video:** needs clarification. PLVC already records without asking; Customer general asks by policy.
+- **#14195 Send the link to the customer's mobile:** SMS needs a paid gateway (not allowed). Customer meetings already e-mail the customer a personal link.
+
+## Unreleased — 12 Nov 2026 — new users without an employee record (no calendar, cannot schedule)
+
+**Deployed 12 Nov 2026 12:41 IST** with approval (after waiting for a live recorded meeting to end; its recording completed normally). Backups: `deploy_backup-20261112-123226` and copy-only `Oneinsure_v_preUserLink_20261112.bak` (34.1 MB). API downtime about 7 s. Tested before in the isolated local environment.
+
+### Fixed — "Your user account is not linked to an employee record"
+- **Root cause:** Administration → Users & roles → *Create user* offered "E-mail only" with no way to add the person to the employee master. Meetings, the calendar and availability are per employee, so such accounts could sign in but saw "Unable to load the calendar" and could not schedule. Nothing ever linked them later, even after the employee record was added.
+  - Production on 12 Nov: 1 of 10 accounts is unlinked (created 11 Nov 09:49), and **no employee record exists for its e-mail**. Someone has to enter the person's real employee code, department and designation; I did not invent them.
+- **Now:**
+  - **"Add new employee"** inside *Create user* (Employee mode) and *Link to employee*. It opens the normal employee form (same validation and audit as Employee Management; needs `employees.manage`, which Admin and HR have). The account's e-mail is prefilled when linking, and the new employee is picked straight away. One flow gives an account with an employee.
+  - **E-mail only:** a clear warning that such accounts cannot schedule, use the calendar or appear in availability. If an active employee with that official e-mail exists (and has no account), the account is **linked automatically** at creation. The response returns `linkedToEmployee`.
+  - **At sign-in:** an unlinked account whose e-mail matches exactly one active employee without an account is linked automatically (privileged audit `USER_EMPLOYEE_LINKED`). Ambiguous cases are left for an administrator.
+- **Files:**
+  - `Admin/UserAdminEndpoints.cs`, `Auth/AuthService.cs`;
+  - `pages/admin/UserDialogs.tsx`, `pages/employees/EmployeeForm.tsx` (`defaults` prop);
+  - tests: `Phase2Tests.cs` (new automatic-linking test, link test reordered), `tests/e2e/recording/user-employee-link.mjs` (3 browser scenarios).
+- **No database change.**
+
+## Unreleased — 12 Nov 2026 — "Instant meeting" with PLVC / customer general; PLVC recording mandatory without acceptance
+
+**Deployed 12 Nov 2026 11:40–11:45 IST** to `https://www.oneinsure.com/meet` + `Oneinsure_v` with the user's approval. Backups first: `deploy_backup-20261112-114010` (API, frontend `dist`, source diff) and copy-only `Oneinsure_v_preConsentPlvc_20261112.bak` (33.1 MB, checksum) on the SQL server. V020 + V021 applied (V001–V013 are recorded with LF line endings from the laptop; the runner was given an LF copy of those so history stays untouched). API downtime about 8 s; no meeting or recording was active. Tested before deployment in the isolated local environment.
+
+### Changed — "New meeting" is now "Instant meeting", and offers customer types
+- **Dashboard:** the button that starts a meeting now (with a shareable link) is labelled **Instant meeting** (the test id is unchanged). The phone tab bar's centre button is "Start an instant meeting". The header's "New Meeting" button still opens the Schedule page and is unchanged.
+- **Dialog "Start an instant meeting":** *Type* now has two groups:
+  - **Internal:** as before.
+  - **Customer:** **Customer — PLVC** and **Customer — General**. Shown to users with `customer.meetings.view`, as on the Schedule page.
+- **Customer meetings:**
+  - A customer picker appears (with "Add new customer"). The database requires a customer for customer meetings.
+  - The customer is added as a `CUSTOMER` participant. Their **personal join link** (`/join/{token}`, expiring with the meeting) is shown at the top of the Invite dialog after starting, for the host to copy.
+  - No e-mail is sent, as for every instant meeting.
+  - The meeting's policy number defaults to the customer's.
+- **Recording section:** when the type's policy is mandatory, the NONE/OPTIONAL/REQUIRED choice is replaced by "**Recording starts automatically** when the meeting starts — mandatory for this meeting type", followed by either "…no acceptance is needed" (notification-only) or "…each participant is asked to accept" (consent required).
+- **API:** `POST /meetings/instant` accepts `customerId` and returns `customer { name, joinUrl }`. It used to reject customer categories ("use Schedule meeting"). `GET /meetings/recording-options` now also returns `consentMode`.
+
+### Changed — PLVC calls: recording mandatory, no permission step (migration **V021**)
+- **Why a migration:** PLVC and customer-general meetings shared one policy (`CUSTOMER_MEETING`: mandatory, consent required from everyone), so PLVC could not change alone.
+- **New policy `CUSTOMER_PLVC` ("Customer PLVC calls"):**
+  - copied from `CUSTOMER_MEETING`: notice text and version, retention, access roles, approval status;
+  - **Requirement = MANDATORY, ConsentMode = NOTIFICATION_ONLY.**
+  - The `CUSTOMER_PLVC` category now maps to it. Customer general still uses `CUSTOMER_MEETING`, unchanged.
+- **What happens in a PLVC call:**
+  - recording starts automatically once the meeting is live (the existing auto-start, the existing R2 recorder);
+  - nobody gets an Accept/Decline popup;
+  - everyone sees the recording **notice banner and the REC indicator** (no covert recording), and the acknowledgement is stored as evidence automatically.
+- **Not changed:**
+  - the notice wording is still the placeholder, shown verbatim and flagged "Wording not confirmed";
+  - the approval status is still pending. In Pilot/Production deployment environments the shared gate refuses customer recording under an unconfirmed policy, exactly as before. The current server runs with `Recording:Environment = Test`;
+  - the policy stays editable (audited) in Administration → Recording policies. Customer categories may now use either customer policy.
+- **Audit:** `RECORDING_POLICY_CREATED` (SYSTEM, from the migration).
+- **Rollback:**
+  - `UPDATE rec.RecordingPolicyCategories SET PolicyCode = 'CUSTOMER_MEETING' WHERE Category = 'CUSTOMER_PLVC'`;
+  - `DELETE rec.RecordingPolicies WHERE PolicyCode = 'CUSTOMER_PLVC'`;
+  - restore the 4-code `CK_RecordingPolicies_Code`.
+
+### Files
+- `database/migrations/V021__plvc_recording_policy.sql` (new).
+- Backend:
+  - `Meetings/MeetingLinkEndpoints.cs` (instant meeting with customer);
+  - `Recording/RecordingPolicies.cs` (policy codes, stable order);
+  - `Recording/RecordingPolicyEndpoints.cs` (mapping validation, `consentMode` in options).
+- Frontend:
+  - `pages/meetings/QuickMeetingDialogs.tsx`, `pages/meetings/MeetingLinkShare.tsx` (customer link);
+  - `pages/DashboardPage.tsx`, `layouts/MobileTabBar.tsx`;
+  - `pages/room/EmployeeRoomPage.tsx`, `pages/room/MeetingRoom.tsx`, `pages/room/roomUi.ts`;
+  - `pages/admin/RecordingPolicies.tsx`;
+  - `api/meetings.ts`.
+- Tests:
+  - `RecordingTests.cs` (new `An_instant_PLVC_call_with_a_customer_records_automatically_and_nobody_has_to_accept`; policy-list test updated for the 5th policy);
+  - `tests/e2e/recording/instant-plvc.mjs` (new, 6 browser scenarios).
+
+## Unreleased — 12 Nov 2026 — recording consent requests: popup for every participant, live host status, premium UI
+
+**Deployed 12 Nov 2026** together with the instant-meeting / PLVC change above (same backups). Built and tested before that in an isolated local environment on the server (LocalDB `OneInsureVideoMeetingDB_Rec`, API on `https://localhost:7192`, Vite on 5176, a separate LiveKit instance on loopback ports 7890–7892). Production (`MeetIQApi`, `/meet`, `Oneinsure_v`, LiveKit 7880–7882) was not touched.
+
+### Fixed — participants did not get the consent popup when the host started recording
+- **Traced flow:** host Record → `POST /meetings/{id}/recording/start` → `RecordingService.StartAsync` → consent check → LiveKit data message → `useRoomRecording` (`RecordingControls.tsx`) → notice dialog → `POST …/recording/consent` → start. (There is no SignalR: room events go through LiveKit data messages on topic `oic.recording` plus room metadata.)
+- **Delivery itself works.** LiveKit `SendData` returned 200 in production (`deploy/logs/livekit-server-20261111.log`), and the 11 Nov live test L-02 showed an employee's popup. The root causes were in what was sent and when:
+  1. **One-off message, nothing stored.** The request existed only as a single data message sent at the moment the host confirmed. Anyone who joined, reconnected or reloaded afterwards, or whose data channel was briefly down, was never asked, and nothing on the server said a request was pending.
+  2. **Wrong target set.** It went only to identities whose latest decision was *empty*. People who had **declined** earlier (or withdrawn) were never asked again, yet still blocked the start ("Waiting for: …").
+  3. **Popup state from a stale snapshot.** The client opened the notice from an event flag compared against its last fetched state, which could already be out of date.
+  4. **Host got an error, not a request.** The start answered `409 CONSENT_MISSING`, so the host saw a refusal rather than a pending request with live answers. Nothing started automatically once everyone had agreed; the host had to press Start again.
+- **Fix:** a stored **consent request** (`rec.RecordingRequests` + `rec.RecordingRequestParticipants`, migration **V020**, additive only):
+  - Host presses Record → Request recording. If consent is missing from anyone in the room, a request is opened (one per meeting). The host's own acceptance is recorded, and **everyone** in the room is told (data message with no destination filter, plus the request id in room metadata).
+  - Each client shows the popup **from the server's state** (`state.request`: open, not the requester, not yet answered), not from the message. Every message on the topic, the room-metadata event, `Reconnected` and the 10 s poll all just re-read the state. A late joiner, a reconnecting participant, a guest or a page reload is therefore always asked.
+  - **Required set:** everyone in the room when the request opened, plus anyone who joins while it is pending. Someone who already has a current *Accepted* consent for this notice version counts as accepted; they are not asked twice, and can withdraw at any time as before.
+  - **Disconnected never counts as accepted:** a member not in the room who has not accepted is shown as *Disconnected* and blocks the start. The host can remove such a person (`POST …/recording/request/remove`, host only, refused for anyone still in the room, audited `RECORDING_REQUEST_MEMBER_REMOVED`). This is needed because a link guest who rejoins is a new participant. A removed person is asked again if they return.
+  - **Decline:** one Decline closes the request (`DECLINED`, audited); the host is told who declined; nothing is recorded.
+  - **All accepted:** the existing `StartAsync` → existing R2 recorder (no new engine), then the request is marked `STARTED` with its recording id. The REC indicator still appears only once the recorder confirms capture (unchanged).
+  - If the start fails, the request is closed `FAILED` with the reason; a recorder failure after that is reported as before ("Recording could not be started: …").
+  - **Cancel:** the host's Cancel request (the existing Stop endpoint), or the meeting ending, closes it `CANCELLED`. Unanswered requests expire after `Recording:ConsentRequestMinutes` (default 10).
+  - **Duplicate or retried answers:** an identical repeated answer reuses the existing evidence row; one request decision at a time (in-process lock), so two acceptances arriving together can never start two recorders.
+  - **Evidence:** unchanged. `mtg.MeetingConsent` stays append-only; request members only link to it (`ConsentId`). New audit actions: `RECORDING_REQUESTED`, `RECORDING_REQUEST_STARTED`/`DECLINED`/`CANCELLED`/`EXPIRED`/`FAILED`, `RECORDING_REQUEST_MEMBER_REMOVED`.
+- **Unchanged (scope):**
+  - mandatory/automatic recording and the popup when joining a mandatory meeting;
+  - notification-only policies;
+  - policies requiring consent only from the starter;
+  - category-to-policy mapping;
+  - scheduled-meeting behaviour;
+  - the policy wording (still the placeholder, shown verbatim and flagged "Wording pending policy confirmation").
+- **API compatibility:** the start endpoint now answers `200` with the state (including `request`) when consent is still needed, where it used to answer `409 CONSENT_MISSING`. Only the bundled frontend calls it. New state fields: `request`, `lastRequest`, `canCancelRequest`.
+
+### Added — premium consent popup and host consent panel
+- **`RecordingConsentUi.tsx` → `ConsentPopup`.**
+  - Dark gradient card with backdrop blur, the OneInsure Connect mark, and a red recording dot with a pulse ring. Title "Recording Request" with the requested wording, the policy's notice text verbatim, and a policy/version line.
+  - **Accept & Continue** (primary) / **Decline** (secondary). Both lock while saving; a short confirmation appears only after the server confirms, then the popup closes. On failure, an error shows and both buttons work again.
+  - Entrance animation (respects reduced motion), `alertdialog` with focus on Accept.
+  - The dimmed backdrop does not take clicks, so the control bar stays usable. Responsive (stacked buttons at phone width).
+- **`ConsentRequestPanel`.** Host-only, collapsible, top-left (it must not cover the Participants panel, where hosts admit people).
+  - Progress "N of M accepted" and the message "Waiting for all required participants to accept before recording can start."
+  - Each person with Accepted (green) / Pending (amber) / Declined (red) / Disconnected (grey); remove (×) on Disconnected; Cancel request.
+  - A "Recording requested · N/M" chip in the header for everyone.
+  - The Record button becomes "Cancel request" while a request is pending, and the start dialog says "Request recording" when consent is needed.
+- The Participants panel badge gained "Disconnected".
+
+### Files
+- `database/migrations/V020__recording_consent_requests.sql` (new).
+- Backend:
+  - `Recording/RecordingRequests.cs` (new);
+  - `Recording/RecordingService.cs`, `Recording/RecordingRoomEndpoints.cs`, `Recording/RecordingOptions.cs`.
+- Frontend:
+  - `pages/room/RecordingConsentUi.tsx` (new);
+  - `pages/room/RecordingControls.tsx`, `pages/room/EmployeeRoomPage.tsx`, `pages/room/MeetingRoom.tsx`, `pages/room/RoomPanels.tsx`;
+  - `api/recordings.ts`.
+- Tests:
+  - `backend/tests/.../RecordingTests.cs` (consent test updated, plus 3 new tests);
+  - `tests/e2e/recording/consent-request.mjs` (new, 15 browser scenarios).
+
+### Rollback
+- Not deployed, so nothing to roll back in production.
+- **If deployed later:**
+  - back up `deploy\api`, `frontend\dist` and the database first;
+  - to undo, restore the previous API build and `dist`;
+  - V020 can stay (additive, unused by older builds), or be dropped with `DROP TABLE rec.RecordingRequestParticipants; DROP TABLE rec.RecordingRequests;` plus deleting the V020 row from `dbo.SchemaMigrations`.
+- **Source:** `git diff` against `84894f6` holds all changes (nothing is committed yet).
+
+## Unreleased — 11 Nov 2026 (`https://www.oneinsure.com/meet`, `Oneinsure_v`) — recording, Recording Library and session fixes
+
+Deployed with the user's approval. Backups first: `deploy\_backup-20261111-150834` (API, recorder, recorder layout, frontend `dist`, uncommitted diff) and a copy-only full backup `Oneinsure_v_preBugfix_20261111.bak` on the SQL server. No schema migration was needed.
+
+### Fixed — recording consent dead end
+- **Root cause (data):** all four `rec.RecordingPolicies` rows are still the V012 seed: `ConsentMode = CONSENT_REQUIRED`, `ConsentFromAll = 1`, `ApprovalStatus = PENDING_CONFIRMATION`, placeholder notice. The server applies exactly that, so it waits for every participant's consent, and the "Wording not confirmed" placeholder is correct. **Not changed:** the approved wording, policy reference and whether click-through acceptance is needed must come from the policy administrator. Once entered as `NOTIFICATION_ONLY` + `EXISTING_BUSINESS_POLICY`/`APPROVED` in Administration → Recording policies (audited), recording starts without click-through, with the notice banner and REC indicator. No code change is needed for that.
+- **Root cause (code):** with an *optional* recording policy, participants were only shown the Accept/Decline notice once a recording was already running. A host's start was refused until they consented, so they were never asked and the host was stuck on "Waiting for consent: …". Now, when a host's start is refused for missing consent, the server asks exactly those participants: a LiveKit data message `consent-requested`, sent only to the identities whose consent is missing. Their notice opens, and the host's start dialog follows the answers live (3-second refresh) and turns ready as soon as everyone has agreed. The policy itself is still fully enforced. Files: `RecordingService.cs`, `RecordingControls.tsx`.
+- **Hardening:** a `CONSENT_REQUIRED` policy limited to the starter or hosts (`ConsentFromAll = 0`) was not enforced on the server, because the shared gate only knew "from all". `StartAsync` now refuses with `CONSENT_MISSING` whenever the required consent check fails.
+
+### Fixed — recording stop left REC on (and slow start)
+- **Root cause:** stop only marked the job `STOPPING`. The recording row stayed `RECORDING` (and so did what the room was shown) until the recorder process **exited**, which happens only after the full MP4 transcode and decode check (about 0.2× the recorded length, plus up to 3 s for the next worker tick). Meetings over about 25 minutes also hit the 300 s stop timeout: the recorder was killed mid-transcode and the API re-ran the whole transcode.
+- **Now:**
+  - The stop response already reports `STOPPING`; the Stop button is disabled while stopping.
+  - When the recorder prints `recording_finished` (capture over), the worker moves the recording to `PROCESSING` at once. REC clears for everyone and the meeting continues; another recording can be started.
+  - `COMPLETED` still only after the library copy is verified.
+  - The kill timeout after capture ends is proportional to the recording length (`max(StopTimeoutSeconds, 120 + 0.75 × recorded seconds)`).
+  - A repeated stop is a harmless no-op returning the actual state (was a 409 error).
+  - The worker is woken immediately by recorder events (`attempt_started`, `recording_finished`, process exit) instead of waiting for its 3-second poll.
+- **Frontend:**
+  - Stop confirmation now reads "Are you sure you want to stop recording?".
+  - Indicator states "Starting recording…" → REC → "Stopping recording…" → off, then the toast "Recording stopped successfully…" (or the failure reason).
+  - Failed stops refresh the real state.
+  - Out-of-order responses can no longer bring back a stale REC (request sequence counter).
+- **Start-up:** the recorder layout waited a flat 4 s whenever any participant's camera was off. It now waits only for cameras that are on, with a cap of 1.5 s (`recording/layout/src/main.ts`). Start-up time and stop→capture-end time are written to the audit log (`RECORDING_CAPTURE_STARTED` / `RECORDING_CAPTURE_ENDED`) as evidence.
+- **Post-processing errors:** any exception now ends in `FAILED` with the reason. Previously SQL or launch errors left the row `PROCESSING`/`VERIFYING` and it was re-claimed forever.
+- Files: `RecorderLauncher.cs`, `RecorderWorker.cs`, `RecordingService.cs`, `RecordingRoomEndpoints.cs`, `RecordingControls.tsx`, `api/recordings.ts`, `recording/layout/src/main.ts`.
+
+### Fixed — Recording Library: host / co-host / starter could not see recordings
+- **Root cause:** ownership is the meeting creator, enforced by a trigger, and non-admin visibility was owner-only. A host or co-host who was not the creator (meeting scheduled for them, host transfer, co-host) could not see recordings they made. The meeting page showed "N recording(s) you are not permitted to see".
+- **Not the cause:** logout/login (identity and permissions are reloaded from the database on every request, nothing cached in the browser).
+- **In live data on 11 Nov**, no owner was missing their own recordings; plain attendees (e.g. recordings 1/10/12) cannot see them, as designed.
+- **Now:** with `recordings.view.own`, the employee who started a recording and the meeting's hosts/co-hosts also see and play it (under the policy's owner-play flag). Download and delete stay with the owner and the explicit permissions. Admin view-all is unchanged. List, detail, play and download use the same rule (`RecordingAccess.cs`).
+- **Reconciliation:** new read-only `scripts/recording-reconciliation.ps1` (files vs rows, SHA-256, orphans, partial copies, stale spool, stuck rows; never changes anything). Run on 11 Nov: 10 COMPLETED verified, no orphans/partials/stale/stuck; **recording #1 (2 Nov, `OIC-261102-FHR9`) is COMPLETED but its MP4 is not at its storage path** — flagged, not altered.
+
+### Fixed — unexpected mid-day logouts; added the daily 23:30 IST logout
+- **Root cause:** every browser tab ran its own 30-minute idle timer, and when it fired it POSTed `/auth/logout`, which revoked the **shared** server session. A forgotten background tab logged the user out of the tab they were working in, and dropped them from a meeting. Also, the server's idle window only slid on API calls, not on typing or reading. And the 12-hour absolute limit cut a 09:00 sign-in off at 21:00 without warning.
+- **Now:**
+  - The idle clock is shared across tabs (`localStorage`).
+  - Real activity slides the server window (`GET /auth/session`, at most every 5 min).
+  - An ended session never navigates away from a meeting: media continues, and a banner asks the user to sign in again for host controls; leaving the meeting completes the sign-out.
+  - `SessionAbsoluteHours` is 12 → 18; the daily logout is now the effective daily cap.
+- **Daily logout** (`Security:DailyLogout`, default `23:30` `Asia/Kolkata`, warning 5 min before):
+  - The session handler refuses sessions created before the latest cutoff from the cutoff itself; `DailyLogoutService` marks them revoked (`DAILY_LOGOUT`, audited) every 30 s.
+  - The portal shows "Your OneInsure Connect session will end at 11:30 PM for daily security reset." with a countdown, then "Your daily session has ended. Please log in again to continue."
+  - LiveKit media and server-side recordings do not use the portal session and are unaffected.
+- **Test mode:** `POST /api/v1/admin/ops/daily-logout/test {minutes}` (admin.ops) ends only the caller's own sessions; it is in memory only and never changes the configured time. `GET /admin/ops/daily-logout/status` gives a dry-run count.
+- Files: `Security/DailyLogout.cs` (new), `SessionAuthentication.cs`, `Program.cs`, `appsettings.json` (source + deployed), `auth/AuthContext.tsx`, `api/session.ts` (new), `pages/auth/StatusPages.tsx`, `pages/room/MeetingRoom.tsx`.
+
+### Tests and verification
+- **`dotnet test`:** Domain 18/18; API 74/78. The 4 failures are pre-existing and identical on the last commit (`84894f6`), verified in a separate worktree. They are stale assertions: admin failure notifications, day-wise storage key, two media-stream tests under TestServer. Playback works live: HTTP 206 in L-07.
+- **New tests:**
+  - stop state machine;
+  - co-host visibility;
+  - daily-logout cutoff arithmetic (3);
+  - admin test-mode logout end to end;
+  - consent request sent only to the missing participant.
+- **Local test environment:** `deploy-database.ps1 -DataPath` / `OIC_TEST_DATA_PATH` added because this server's LocalDB 2017 default data folder is broken.
+- **Live, on production with disposable audited QA accounts** (`tests/e2e/live/live-verify.mjs`; 12/12 passed; accounts locked afterwards):
+  - start: click → REC 13.0 s (server: request → capture confirmed 11.5 s);
+  - stop: REC → "Stopping" in 1.0 s and cleared in 2.0 s, meeting continued;
+  - capture end → verified MP4: 10.9 s;
+  - recorder killed mid-recording → relaunched, parts joined, COMPLETED;
+  - peer offline 8 s → REC re-synced;
+  - logout → old cookie 401; re-login → both recordings listed, signed URL 206 `video/mp4`;
+  - attendee 404, admin 200;
+  - daily-logout test mode in and out of a meeting.
+
 ## Unreleased — 7 Nov 2026 (test deployment, `https://www.oneinsure.com/meet`) — part 2
 
 ### Fixed — mobile layout: Recording Library table overflow and the clipped notifications panel
@@ -17,6 +594,7 @@ On request: a "Delete recording" option for users, with the deletion recorded ra
 - **Frontend**: a "Delete recording" button (`RecordingsPage.tsx`, recording detail → Actions card) opens a confirmation dialog requiring a typed, audited reason — the same UX pattern already used for Legal Hold — and shows "Deletion requested, awaiting approval" in place of the button once one is pending, instead of silently repeating.
 - **7 Nov 2026, follow-up — delete made discoverable from the list, not just the detail page**: after this shipped, a delete action in the Recording Library's list itself (a small trash icon next to "Play", both the desktop table and the mobile card) was added — the detail-page button alone meant finding it required clicking into each recording first. `Item()` (the shared row projection used by the list, the by-meeting view and the retention review list) now also returns `canDelete`, computed the same way as the detail page's (owner or `recordings.delete`, not under legal hold, completed/failed) so the icon only appears where the request would actually be accepted; the endpoint itself still re-checks everything (including any already-pending request) before acting. One shared confirmation dialog handles every row.
 - **8 Nov 2026, follow-up — recording detail page was ~350px too wide on mobile, pushing the player off-screen**: from a screenshot, the player on a phone appeared to overflow the right edge of the screen. Root cause: the detail page's two-column layout (`grid xl:grid-cols-[minmax(0,1fr)_380px]`, video on the left, Details/Actions on the right) had no base column count for screens below `xl` — Tailwind's `grid-cols-N` utilities specifically use `minmax(0, 1fr)` tracks to let their content shrink; with no base class at all, the grid falls back to plain CSS `grid-template-columns: none`, whose implicit, content-sized (`auto`) tracks have no such protection, so the video player's native 1280×720 content "blew out" the track width instead of being scaled down to fit. The two columns were effectively rendering side by side off-screen on every viewport below `xl`, not just visually cramped. Fixed by adding the base `grid-cols-1` class so the page genuinely stacks into one column below `xl`, exactly as intended, only switching to the two-column layout at `xl` and above. `frontend/src/pages/recordings/RecordingsPage.tsx`. Verified live: the page's total scroll width now exactly matches the viewport width (390px, no overflow) and the player renders centered and fully on-screen.
+- **8 Nov 2026, follow-up — a sliver of white above the login card on notched phones**: from a screenshot (Chrome/iOS), the top ~6% of the login screen showed the app's normal light background instead of the dark gradient the rest of the page uses. Root cause: `body` has `padding-top: env(safe-area-inset-top)` globally (`theme.css`) so page content clears the iPhone's notch/status bar — correct for every other, light-background page, but that padding area is still part of `body`'s own box, painted in `body`'s own light `bg-canvas` colour, not whatever a child layout renders beneath it. `AuthLayout` (login, forgot/reset password, etc.) is the one layout with its own full-bleed dark background on a child `<div>`, so that reserved notch strip showed through as a light gap above it instead of extending the gradient under the status bar. Fixed by having `AuthLayout`'s root pull up by that same inset (`-mt-[env(safe-area-inset-top)]`) and pad it straight back on the inside (`pt-[env(safe-area-inset-top)]`) — net effect: the gradient now extends all the way to the top of the screen (under the status bar) while the actual card position is unchanged, since the added margin and padding cancel out. `frontend/src/layouts/AuthLayout.tsx`.
 - **Verified live, not just code-reviewed**: a disposable QA account (owner, no special permission) requested deletion of a real test recording on the test deployment — the request correctly returned `PENDING, requiredApprovals=2` (its policy, Internal employee meetings, requires dual approval), the recording stayed playable and unchanged, the UI showed the pending state and a toast explaining admin approval is needed, and the request was written to `rec.RecordingDeletions` with `Source='MANUAL'`. The test request was cancelled afterwards (not approved) so it doesn't sit as a stray pending item for a real administrator to puzzle over.
 - Deployed: `dotnet build` (API, Recorder, Domain, both test projects) 0 warnings/0 errors; `npm run build` clean; migration V019 applied to `Oneinsure_v` and recorded in `dbo.SchemaMigrations`; `MeetIQApi` redeployed, `/api/v1/health` → Healthy; frontend `dist` rebuilt and live.
 

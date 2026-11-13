@@ -30,20 +30,44 @@ export type RoomRecordingState = {
     consentFromAll: boolean
     stopOnWithdrawal: boolean
   } | null
-  recording: { id: string; status: RecordingStatus; startedUtc: string | null; createdUtc: string } | null
+  /** The meeting's active recording. STOPPING: a stop was requested and the recorder is ending capture (no longer "REC"). */
+  recording: { id: string; status: RecordingStatus | 'STOPPING'; startedUtc: string | null; createdUtc: string } | null
   lastRecording?: { id: string; status: RecordingStatus; reason: string | null } | null
   myConsent?: ConsentDecision | null
+  /** The host's open recording consent request (V020): everyone in it must accept before recording starts. */
+  request?: RecordingConsentRequest | null
+  /** The meeting's most recent closed request (why it closed: STARTED / DECLINED / CANCELLED / EXPIRED / FAILED). */
+  lastRequest?: { id: string; status: ConsentRequestStatus; reason: string | null; closedUtc: string | null } | null
   isHost?: boolean
   canStart?: boolean
   canStop?: boolean
+  canCancelRequest?: boolean
   consent?: {
     ok: boolean
     required: number
     granted: number
     pending: string[]
     declined: string[]
-    decisions: { identity: string; name: string; decision: ConsentDecision | 'PENDING' }[]
+    decisions: { identity: string; name: string; decision: ConsentDecision | 'PENDING' | 'DISCONNECTED' }[]
   } | null
+}
+
+export type ConsentRequestStatus = 'OPEN' | 'STARTED' | 'DECLINED' | 'CANCELLED' | 'EXPIRED' | 'FAILED'
+/** One person in a request: GRANTED, DENIED, PENDING (in the room, not answered) or DISCONNECTED (left without answering - never "accepted"). */
+export type ConsentMemberStatus = 'GRANTED' | 'DENIED' | 'PENDING' | 'DISCONNECTED'
+
+export type RecordingConsentRequest = {
+  id: string
+  status: ConsentRequestStatus
+  createdUtc: string
+  expiresUtc: string
+  requestedBy: string | null
+  isRequester: boolean
+  myDecision: 'GRANTED' | 'DENIED' | null
+  total: number
+  accepted: number
+  /** Hosts only. */
+  participants: { identity: string; name: string; type: string; status: ConsentMemberStatus }[] | null
 }
 
 const meeting = (id: string) => `/meetings/${encodeURIComponent(id)}/recording`
@@ -55,6 +79,9 @@ export const roomRecordingApi = {
     http<RoomRecordingState>(`${meeting(id)}/consent`, { method: 'POST', body: { decision, noticeVersion } }),
   start: (id: string, noticeVersion: string) => http<RoomRecordingState>(`${meeting(id)}/start`, { method: 'POST', body: { acceptNotice: true, noticeVersion } }),
   stop: (id: string) => http<RoomRecordingState>(`${meeting(id)}/stop`, { method: 'POST' }),
+  /** Host: take someone who has left (Disconnected, not accepted) out of the pending consent request. */
+  removeFromRequest: (id: string, identity: string) =>
+    http<RoomRecordingState>(`${meeting(id)}/request/remove`, { method: 'POST', body: { identity } }),
 }
 
 export const guestRecordingApi = {
@@ -77,6 +104,10 @@ export type RecordingItem = {
   retainUntilUtc: string | null
   storageTier: 'PRIMARY' | 'ARCHIVE'
   meeting: { id: string; title: string; meetingCode: string; category: string; categoryGroup: MeetingCategory }
+  /** Customer – PLVC recordings: the Prarambh Main ID the recording was made under. */
+  prarambhMainId?: string | null
+  /** V024: from the recording's own snapshot of the ID. */
+  plvcIdentification?: 'IDENTIFIED' | 'UNIDENTIFIED' | null
   owner: { id: string; name: string; employeeCode: string | null; department: string | null }
   customer: { name: string; reference: string | null } | null
   policy: { code: string; title: string } | null

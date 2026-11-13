@@ -4,7 +4,7 @@ import {
   ArrowLeft, BellRing, Building2, CalendarClock, CalendarX2, Check, CircleHelp, Clapperboard, Clock, DoorOpen, FileText, Hash, Link2, Pencil, Repeat,
   ShieldAlert, Trash2, UserPlus, UserRound, Users, Video, X,
 } from 'lucide-react'
-import { bookingConflicts, meetingsApi, type Conflict, type MeetingDetail, type MeetingParticipant, type MeetingSeries, type ResponseStatus } from '../../api/meetings'
+import { bookingConflicts, meetingsApi, prarambhApi, type Conflict, type MeetingDetail, type MeetingParticipant, type MeetingSeries, type ResponseStatus } from '../../api/meetings'
 import { errorMessage, fieldErrors } from '../../api/types'
 import { useAuth } from '../../auth/AuthContext'
 import { EmployeePicker, type PickedEmployee } from '../../components/EmployeePicker'
@@ -22,7 +22,7 @@ import { formatDateTime, formatDuration, formatRange, parseUtc, zoneLabel } from
 import { useLoader } from '../../lib/useLoader'
 import { MeetingRecordingsCard } from '../recordings/MeetingRecordingsCard'
 import { ConflictDialog } from './Conflicts'
-import { MeetingLinkCard } from './MeetingLinkShare'
+import { MeetingLinkCard, SendToCustomer } from './MeetingLinkShare'
 import { CategoryBadge, ResponseBadge, StatusBadge, categoryMeta, combineMeetingDetails, dbCategoryLabel, recordingLabel, useTimeZone } from './meta'
 
 /** /meetings/:id — everything about one meeting, RSVP and host actions. "Join" opens the video room (/meetings/:id/room). */
@@ -123,6 +123,13 @@ function Detail({ m, tz, reload, reloading }: { m: MeetingDetail; tz: string; re
         <div className="flex min-w-0 flex-col gap-5">
           {m.my.canRespond && <RsvpCard m={m} reload={reload} />}
           {m.status !== 'DRAFT' && <JoinCard m={m} tz={tz} reload={reload} />}
+          {m.my.canShareLink && m.categoryGroup === 'CUSTOMER' && (m.status === 'SCHEDULED' || m.status === 'LIVE') && (
+            <Card>
+              <div className="p-5 pb-1">
+                <SendToCustomer meetingId={m.id} title={m.title} />
+              </div>
+            </Card>
+          )}
           {m.my.canShareLink && <MeetingLinkCard meetingId={m.id} title={m.title} isRecurring={!!m.series} />}
           {m.status !== 'DRAFT' && <RemindersCard m={m} tz={tz} />}
           {m.status !== 'DRAFT' && <MeetingRecordingsCard meetingId={m.id} tz={tz} />}
@@ -206,6 +213,54 @@ function SeriesCard({ currentId, tz }: { currentId: string; tz: string }) {
   )
 }
 
+/** V024: an UNIDENTIFIED Customer – PLVC meeting (started with "Skip details"). The host/organiser can add the ID once; it is
+ *  validated and audited by the API, applied to the meeting's recordings' metadata (files are never renamed). */
+function UnidentifiedPlvc({ meetingId, canSet: mine }: { meetingId: string; canSet: boolean }) {
+  const toast = useToast()
+  // Host, co-host, organiser or an administrator who sees all meetings - also after the meeting ended (authorised correction).
+  const { can } = useAuth()
+  const canSet = mine || can('meetings.view.all')
+  const [open, setOpen] = useState(false)
+  const [value, setValue] = useState('')
+  const [saved, setSaved] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  if (saved) return <span className="tabular-nums" data-testid="detail-prarambh">{saved}</span>
+  return (
+    <span className="flex flex-col items-start gap-2">
+      <span className="flex flex-wrap items-center gap-2">
+        <span data-testid="plvc-unidentified"><Badge tone="warning">Unidentified PLVC</Badge></span>
+        <span className="text-[12px] text-ink-secondary">Started without customer details.</span>
+        {canSet && !open && <Button size="sm" variant="secondary" onClick={() => setOpen(true)} data-testid="prarambh-add">Add Prarambh Main ID</Button>}
+      </span>
+      {open && (
+        <form
+          className="flex flex-wrap items-start gap-2"
+          onSubmit={async (e) => {
+            e.preventDefault()
+            setBusy(true)
+            setError(null)
+            try {
+              const r = await prarambhApi.set(meetingId, value.trim())
+              setSaved(r.prarambhMainId)
+              toast.success(r.recordingsUpdated ? `Prarambh Main ID added (also to ${r.recordingsUpdated} recording${r.recordingsUpdated === 1 ? '' : 's'}).` : 'Prarambh Main ID added.')
+            } catch (err) {
+              setError(errorMessage(err, 'The Prarambh Main ID could not be saved.'))
+            } finally {
+              setBusy(false)
+            }
+          }}
+        >
+          <TextField label="Prarambh Main ID" value={value} inputMode="numeric" maxLength={30} placeholder="e.g. 123456789" error={error ?? undefined}
+            onChange={(e) => setValue(e.target.value.replace(/\D/g, ''))} data-testid="prarambh-add-input" />
+          <Button type="submit" size="sm" className="mt-[26px]" loading={busy} disabled={!value} data-testid="prarambh-add-save">Save</Button>
+          <Button type="button" size="sm" variant="ghost" className="mt-[26px]" disabled={busy} onClick={() => setOpen(false)}>Cancel</Button>
+        </form>
+      )}
+    </span>
+  )
+}
+
 function InfoRow({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
   return (
     <div className="flex items-start gap-3">
@@ -243,7 +298,12 @@ function DetailsCard({ m, tz }: { m: MeetingDetail; tz: string }) {
             {m.customer.customerRef && <span className="ml-1.5 text-[12px] font-normal text-ink-secondary">{m.customer.customerRef}</span>}
           </InfoRow>
         )}
+        {m.prarambhMainId && <InfoRow icon={<FileText className="size-4" />} label="Prarambh Main ID"><span className="tabular-nums" data-testid="detail-prarambh">{m.prarambhMainId}</span></InfoRow>}
+        {!m.prarambhMainId && m.plvcIdentification === 'UNIDENTIFIED' && (
+          <InfoRow icon={<FileText className="size-4" />} label="Prarambh Main ID"><UnidentifiedPlvc meetingId={m.id} canSet={m.my.isHost || m.my.isOrganiser || m.my.role === 'COHOST'} /></InfoRow>
+        )}
         {m.policyNumber && <InfoRow icon={<FileText className="size-4" />} label="Policy number"><span className="tabular-nums">{m.policyNumber}</span></InfoRow>}
+        {m.integration && <InfoRow icon={<FileText className="size-4" />} label="Created by integration">{m.integration}</InfoRow>}
         {m.purpose && <InfoRow icon={<FileText className="size-4" />} label="Purpose">{m.purpose}</InfoRow>}
         <InfoRow icon={<Clapperboard className="size-4" />} label="Recording policy">
           {recordingLabel[m.recordingPolicy]}

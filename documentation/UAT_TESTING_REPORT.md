@@ -217,6 +217,289 @@ Not covered by this round (flagged, not silently dropped): a real mobile device'
 
 Files changed: `recording/layout/src/main.ts` (canvas orientation decision, contain rendering, portrait-aware 2-tile grid), `backend/src/OneInsure.Connect.Recorder/{RecordingSession,Finalizer,FinalizeCommand,Program}.cs`, `backend/src/OneInsure.Connect.Domain/Recording/MediaVerifier.cs` (`ProbeVideoDimensionsAsync`), `backend/src/OneInsure.Connect.Api/Recording/RecorderWorker.cs`. No database migration, no new configuration — the orientation decision is made entirely client-side by the browser compositor at record time.
 
+## Recording, Recording Library and session bug fixes (11 Nov 2026)
+
+**Environment:** `https://www.oneinsure.com/meet` and `Oneinsure_v` (deployed with approval).
+**Evidence:**
+- `tests/e2e/live/live-verify.mjs`: results JSON and screenshots in `tests/e2e/live/results/` (not committed);
+- `dotnet test` (78 API + 18 domain tests);
+- audit log entries `RECORDING_CAPTURE_STARTED` / `RECORDING_CAPTURE_ENDED` / `SESSIONS_DAILY_LOGOUT*`.
+
+**Status values:** Passed / Failed / Partially Passed / Not Tested / Blocked — "Passed" only with an executed check.
+
+**Accounts and devices:** the live runs used three disposable QA accounts, locked afterwards, and headless Edge with a fake camera and microphone on the server. No real phone, tablet or Mac was used.
+
+| # | Scenario | Dev status | Evidence | UAT |
+|---|---|---|---|---|
+| R1 | Host starts internal meeting | Passed | L-01: meeting LIVE, host + peer in the room | ⏳ |
+| R2 | Host starts internal recording | Passed | L-02/L-03 | ⏳ |
+| R3 | No unnecessary acceptance gate where policy permits | **Blocked (policy data)** | Policies are still `CONSENT_REQUIRED` + placeholder wording; the code path for `NOTIFICATION_ONLY` exists and is unit-tested. The consent dead end itself is fixed: L-02, peer asked automatically. Needs the approved wording from the policy administrator. | ⏳ |
+| R4 | REC only after actual capture | Passed | L-03: "Starting…" first; REC only when the DB says RECORDING | ⏳ |
+| R5 | Host stops recording (with confirmation) | Passed | L-04 | ⏳ |
+| R6 | REC disappears right after backend confirms stop | Passed | L-04: "Stopping" in 1.0 s, cleared in 2.0 s (host and peer) | ⏳ |
+| R7 | Meeting continues after stop | Passed | L-04: both in room, meeting LIVE | ⏳ |
+| R8 | Host records again in the same meeting | Passed | L-06 | ⏳ |
+| R9 | Customer meeting auto-recording starts | Not Tested (live) | Unchanged code path (auto-start on the host's first state request); customer policy is MANDATORY + `CONSENT_REQUIRED`, so it waits for the customer's Accept until the policy is confirmed | ⏳ |
+| R10 | Customer recording failure reported | Partially Passed | Failure toast and reason path in UI; `FailAsync` notifies owner + admins (unit tests). Not forced live. | ⏳ |
+| R11 | MP4 finalised | Passed | L-05: PROCESSING→VERIFYING→COMPLETED, 10.9 s after capture end | ⏳ |
+| R12 | MP4 playable | Passed | L-05: ffprobe h264/aac 1280×720; L-07: signed URL HTTP 206 `video/mp4` | ⏳ |
+| R13 | Recording appears in Recording Library | Passed | L-07 | ⏳ |
+| R14–R16 | Logout, login again, still visible to organiser | Passed | L-07: old cookie 401 after logout; after re-login both recordings listed | ⏳ |
+| R17 | Admin sees recordings in scope | Passed | L-08: Admin → 200 | ⏳ |
+| R18 | Unauthorised employee cannot access | Passed | L-08: attendee → 404; unit test: outsider 404 | ⏳ |
+| R19 | Recorder crash during recording | Passed | L-06: recorder process killed → relaunched (part 2), parts joined, COMPLETED | ⏳ |
+| R20 | Reconnect after network interruption, state in sync | Passed | L-06: peer offline 8 s → REC re-synced | ⏳ |
+| R21 | Co-host / starter (not creator) sees the recording | Passed (automated) | `A_cohost_who_did_not_create_the_meeting_sees_and_plays_…` | ⏳ |
+| S1 | Login / navigate / create / join meetings | Passed | L-01, L-07 | ⏳ |
+| S2 | Active for an extended period without logout | Not Tested (live) | Shared idle clock and server keep-alive are code-reviewed and type-checked; the 30-minute timer was not run live | ⏳ |
+| S3 | Daily warning (5 min before, countdown) | Passed (test mode) | L-10/L-11 screenshots | ⏳ |
+| S4 | Daily logout at the cutoff | Passed (test mode) | L-10/L-11; the production time was checked separately in L-12 (next cutoff 23:30 IST = 18:00 UTC) | ⏳ |
+| S5 | Invalidated session cannot reach protected APIs | Passed | L-07, L-10 (401); API test | ⏳ |
+| S6 | Active meeting not corrupted by the daily reset | Passed (test mode) | L-10: stayed in the call (video on), banner shown, other participant unaffected | ⏳ |
+| S7 | Sign in again after the reset | Passed | L-10 | ⏳ |
+| S8 | Real 23:30 IST run | Passed | `app.AuditLog` #759: `SESSIONS_DAILY_LOGOUT` at 11 Nov 18:00:16 UTC (23:30:16 IST), 9 portal sessions ended at the cutoff | ⏳ |
+| F | Full application start-to-end (dashboard, calendar, AI/MOM, admin modules, all devices) | **Not Tested** | Not run in this round. The existing click-through suites (`tests/e2e/scenarios`) target an isolated local API, not production. | ⏳ |
+
+## Oneinsure_connect_bugs.docx — notice redesign, meeting end, late-joiner screen share, instant e-mails, Schedule page (13 Nov 2026)
+
+Dev verification 13 Nov 2026 in the isolated environment: Edge with fake camera/mic, separate browser process per participant, LocalDB `OneInsureVideoMeetingDB_Rec`, local LiveKit 1.13.11. API tests **92/92**. UAT: **pending**.
+
+| ID | Check | Result | Evidence |
+|---|---|---|---|
+| RN-01 | Customer on a phone (390×844): one card — "Meeting Recording Notice", the approved wording, "For assistance: support@oneinsure.com", ONE "OK, got it"; no placeholder, version or policy text | ✅ Passed | card 366×298 px (≤ 46% of the screen); one 332×44 px button; closes on tap |
+| RN-02 | Host: same card, no internal note once the wording is confirmed; acknowledgements recorded (consent rows + audit) | ✅ Passed | `EMPLOYEE:GRANTED:PLVC-NOTICE-1.0`, `CUSTOMER:GRANTED:PLVC-NOTICE-1.0`, 2 audit rows |
+| SS-01 | Customer A (desktop) presents; host sees it | ✅ Passed | 1920×1080 "Asha Customer is presenting" |
+| SS-02 | Guest B joins **on a phone-sized browser** while A presents → sees it without refresh or restart | ✅ Passed | 960×540 frames 9.6 s after opening the link; host unaffected |
+| SS-03 | Guest C joins later still → sees it; exactly one screen tile at host/B/C | ✅ Passed | 1,1,1 |
+| SS-04 | A stops → the share disappears for host, B, C | ✅ Passed | |
+| SS-05 | C starts presenting → host, A, B (phone) see C's screen | ✅ Passed | |
+| END-01 | Host ends for everyone while C is **offline**: A, B, host see "Meeting Ended" at once; C sees it when back online; nobody sees "Connection lost" or "Reconnecting…" after the end; local media released; meeting COMPLETED | ✅ Passed | 1.4 s after End for all; C 1.1 s after reconnecting |
+| END-02 | End again → 204 (idempotent, one `MEETING_ENDED` audit row); the link then reports ENDED | ✅ Passed | |
+| END-03 | No browser errors | ✅ Passed | |
+| IM-01 | Instant PLVC: 3 rows, one removed, Start double-clicked → **1** meeting, **2** e-mails, each with only its owner's personal link; removed person not e-mailed | ✅ Passed | outbox rows `MEETING_INSTANT_INVITED`; token hashes map to their own participants |
+| IM-02 | Invite people shows e-mail status; a failed one → "Send again" → new e-mail + new personal link for that person only (old revoked); meeting not re-created; audited | ✅ Passed | failure simulated in the local DB |
+| IM-03 | Invalid e-mail and half-filled row rejected, nothing created | ✅ Passed | browser message + "Enter the e-mail address." |
+| SC-01 | Schedule Meeting (1366 px): two columns, every field present, Schedule button visible without scrolling | ✅ Passed | columns 698 px + 340 px; button at y=399 |
+| SC-02 | PLVC scheduled through the redesigned form | ✅ Passed | `SCHEDULED`, Prarambh 8812345, invitation queued |
+| SC-03 | Save as draft | ✅ Passed | |
+| SC-04 | Phone 390×844: one column, no horizontal scroll | ✅ Passed | scrollWidth 390 |
+| RP-01 | Reports: Prarambh Main ID column + search by ID (found and fixed a summary error: `TotalHours` decimal vs double) | ✅ Passed | |
+| Regression | `goodday-fixes-3` 5/5 (internal-note check updated to the new design), `consent-request` 15/15 | ✅ Passed | |
+| R-iOS | Late joiner on a **real iPhone (Safari)** | ⏳ Not tested | Not available here. The live log (room `oic_20ff6f…`, 12:13 IST) shows the server subscribed the iPhone to the share; the room now retries playback / re-subscribes when a remote share shows no picture. Needs a real iPhone check. |
+| R-email | Real e-mail delivery of instant invitations | ⏳ Not tested | E-mail is switched off in the test environment; live uses the existing outbox worker. |
+| SK-01 | "Skip details & start meeting" (after typing a Prarambh ID and a half-filled row) → UNIDENTIFIED: no ID, no customer, no participants, no e-mails; Invite offers only the meeting link; **recorded**; file `20261113/OIC-261113-R642-REC10054.mp4` (no ID prefix) | ✅ Passed | V024 on the test DB |
+| SK-02 | Meeting page "Unidentified PLVC" → host adds `9988` after the meeting ended → IDENTIFIED; recording metadata 9988, file unchanged; 1 `MEETING_PRARAMBH_ADDED` audit row | ✅ Passed | |
+| API | Skip, reports filters, correction rules (403 / 400 / 409 on second change), external API needs explicit request + scope | ✅ Passed | API test `Skipped_PLVC_details_…` (93/93) |
+| RN-02+ | Mandatory PLVC recording really starts with the live policy state (PENDING_CONFIRMATION + approved wording) | ✅ Passed | status RECORDING |
+
+## GoodDay #14216 — PLVC recording notice not closing (13 Nov 2026)
+
+**Environment:** the isolated copy (LocalDB `OneInsureVideoMeetingDB_Rec`, isolated LiveKit, Edge headless), with Customer PLVC set to MANDATORY + NOTIFICATION_ONLY as in production.
+
+| # | Scenario | Status | Evidence | UAT |
+|---|---|---|---|---|
+| GD3-01 | Host on desktop: banner shows the internal note; × is 44×44 px; an off-centre click closes it; still closed after a state poll | Passed | `goodday-fixes-3` results, `gd3-01-*.png` | ⏳ |
+| GD3-02 | Customer on phone (390×844, touch): no internal note; banner ≤ 40% of the screen; "OK, got it" 44 px tall closes it; stays closed | Passed | `gd3-02-customer-*-390px.png` | ⏳ real phone |
+| GD3-03 | Acknowledgement still recorded for host and customer; recording running | Passed | DB rows EMPLOYEE:GRANTED, CUSTOMER:GRANTED | — |
+| GD3-04 | MaXW9q, reopened: phone with touch: More sheet backdrop covers 390×844; a tap on the video closes it; Close button 44×44 closes it | Passed | `gd3-04-more-sheet-390px.png` | ⏳ real iPhone |
+| GD3-05 | CVPJMP, reopened: 15-min meeting started 12 min early → slot runs 15 min from the actual start; auto-end 5 min after; late start keeps the booked end (API test) | Passed | `goodday-fixes-3` results; API test | ⏳ |
+
+## Master enhancement batch — Modules 1–14 (12–13 Nov 2026)
+
+**Environment:**
+- Isolated local copy: LocalDB `OneInsureVideoMeetingDB_Rec` with V022/V023, isolated LiveKit, the real R2 recorder, Edge headless.
+- API tests run on throw-away LocalDB databases built from all migrations.
+
+**Deployed 13 Nov 2026 00:01 IST** (DB backup; V022/V023; API ~8 s down; website). Checked on the live site:
+- health is Healthy;
+- the bundle contains the new pages;
+- `/meet/api-docs` returns 200;
+- the OpenAPI document is served with server `https://www.oneinsure.com/meet`;
+- `/meet/api/ext/v1/me` returns 401 without a key and with a bad key;
+- the admin integration API returns 401 without a session.
+
+**Evidence files:**
+- `tests/e2e/recording/results/enhancements-1112-2026-11-12T18-19-50-632Z.json` (6/6) and `results/screenshots/enhancements-1112/`;
+- API suite **91/91** (13 Nov 2026: the 4 older recording tests were brought up to date with the intended behaviour; no product code changed);
+- regression: goodday-fixes 8/8, goodday-fixes-2 4/4, repeat-alignment 6/6, consent-request 15/15.
+
+| # | Module | Scenario | Status | Evidence | UAT |
+|---|---|---|---|---|---|
+| M1.1 | 1 | Instant → Customer PLVC: Prarambh box + participant rows; no "Add customer" | Passed | EN-01 | ⏳ |
+| M1.2 | 1 | Validation: Prarambh required; non-digits stripped; participant name/e-mail required; duplicate e-mail refused | Passed | EN-01; API `Portal_PLVC_meetings_take_participant_rows…` | ⏳ |
+| M1.3 | 1 | Add (+) / remove (×) participant rows | Passed | EN-01 (3 rows → 2) | ⏳ |
+| M1.4 | 1 | Instant PLVC created: Prarambh stored exactly (leading zeros kept); customer created or reused from the first participant; others are guests; personal links shown in the invite dialog | Passed | EN-01; API test (`000123` kept, second meeting reused the customer) | ⏳ |
+| M1.5 | 1 | Scheduled PLVC: participant rows + Prarambh; detail page shows it; invitation e-mail queued | Passed | EN-02 | ⏳ |
+| M1.6 | 1 | Prarambh refused for non-PLVC categories (portal and API) | Passed | API tests | — |
+| M2.1 | 2 | Audio-only meeting: Present available, no camera button, sharing works without the camera | Passed | EN-04 | ⏳ |
+| M2.2 | 2 | Guests and customers get screen share (token sources, `CanScreenShare=1`) | Passed | API `RoomTests`, `MeetingLinkTests`, `Portal_PLVC…` | ⏳ |
+| M2.3 | 2 | Phone and tablet browsers that cannot capture a screen show the "not supported" message | Not Tested (this batch) | Unchanged control from 11 Nov; needs a real phone | ⏳ |
+| M3.1 | 3 | Real PLVC recording stored as `YYYYMMDD/<Prarambh>-<code>-REC<id>.mp4`, with the IST date | Passed | EN-06: `20261112/706082601-OIC-261112-QWD3-REC10030.mp4` (recorded 23:48 IST) | ⏳ |
+| M3.2 | 3 | IST date boundary (20:00 UTC → next IST day), non-PLVC name, collision suffix, unsafe input never used | Passed | API `Recording_keys_are_date_wise_in_IST…` | — |
+| M3.3 | 3 | MP4 metadata title `<Prarambh>-<code>` | Passed | EN-06 (ffprobe) | — |
+| M3.4 | 3 | Existing recordings still play and download (old keys) | Passed (code path) | Same StorageKey resolution; GD-08 / CR suites still pass | ⏳ |
+| M4.1 | 4 | Retention expiry with legacy DELETE: flagged for review only, file kept, no deletion queued; DELETE cannot be chosen | Passed | `Retention_review…` (whole test passes, 13 Nov) | — |
+| M4.2 | 4 | Manual deletion: reason, dual approval, legal hold, audit | Passed | `Retention_review…` now runs to the end (13 Nov): legal hold, archive + playback from archive, manual delete → PENDING, same approver twice → 409, second approver → EXECUTED/PURGED, exactly 1 purge audited, the expired legacy-DELETE recording untouched | ⏳ |
+| M5.1 | 5 | Start instant meeting → pre-join without refresh | Passed | EN-01 (shown 0.7–1.4 s after Start) | ⏳ |
+| M5.2 | 5 | Room page chunk fails once → one automatic reload → room opens | Passed | EN-03 (module requested twice) | — |
+| M5.3 | 5 | Chunk fails permanently → "This page did not load properly" card + Reload (never white) | Passed | EN-03, `en03-error-card.png` | — |
+| M5.4 | 5 | Real iOS Safari / Android Chrome | Not Tested | Needs devices | ⏳ |
+| M6.1 | 6 | No idle timeout: `idleMinutes 0`; session valid after 3 h without requests | Passed | API `Sessions_have_no_idle_timeout…`; EN-01 | ⏳ |
+| M6.2 | 6 | Session ends at the next 23:30 IST (absolute = idle = cutoff) | Passed | Same API test | ⏳ |
+| M6.3 | 6 | 23:25 warning / 23:30 logout / admin test mode | Passed (existing) | `DailyLogoutTests` | ⏳ real evening |
+| M7 | 7 | Thinner toolbar, support line in the room | Passed | Section above (T1–T8), deployed 22:59 IST | ⏳ |
+| M8.1 | 8 | System → API Documentation visible to admins only; guide; endpoint table from OpenAPI (13); Swagger UI (13 operations); OpenAPI download | Passed | EN-05 | ⏳ |
+| M8.2 | 8 | Create integration → Integration ID + key shown once → key works; only the hash is stored | Passed | EN-05; API test | ⏳ |
+| M8.3 | 8 | Revoke key → 401 immediately; rotate → new key works; deactivate → 403 | Passed | EN-06 (UI revoke); API test | ⏳ |
+| M9.1 | 9 | API: instant PLVC with participants; Prarambh mandatory and digits only; host mapping | Passed | API test; EN-06 | ⏳ |
+| M9.2 | 9 | API: scheduled meeting (needs `meeting.schedule`), invitation e-mails, cancel | Passed | API test | ⏳ |
+| M9.3 | 9 | Idempotency: same key returns the same meeting; different body → 422 | Passed | API test | — |
+| M10.1 | 10 | Completion report: meeting Completed with recording Processing → Failed → Completed → Deleted (independent statuses) | Passed | API `Completion_report…` | ⏳ |
+| M10.2 | 10 | Report with real attendance (IST, attended seconds) | Passed (synthetic rows) | API test. In the isolated environment the video server sends no webhooks, so EN-06 correctly showed no attendance (null, not invented) | ⏳ live |
+| M11.1 | 11 | Signed download link: streams (Range 206), tampered → 403, deleted → 410, another portal → 404, audited | Passed | API test; EN-06 (417,447 bytes) | ⏳ |
+| M12.1 | 12 | Webhooks: signed (HMAC verified by receiver), each state change once, no personal data, retry on failure, admin history | Passed | API `Webhooks_are_signed…`; EN-06 (6 event types) | ⏳ |
+| M13 | 13 | V022/V023 applied to production in a transaction with history rows; backup taken | Passed | Deployment log (CHANGELOG) | — |
+| S1 | Security | Portal A cannot read, report on or download Portal B's meeting (404); missing scope → 403 INSUFFICIENT_SCOPE | Passed | API test | — |
+| S2 | Security | Per-integration rate limit (429) without affecting other integrations | Passed | API test | — |
+| S3 | Security | OpenAPI lists only /api/ext endpoints (no internal APIs) | Passed | API `OpenApi_document_lists_only…` | — |
+| S5 | All APIs | Endpoint-by-endpoint run, 13 Nov 00:32 IST: every external endpoint and every integration-admin endpoint, with success and error cases (auth, scopes, isolation, rate limit, idempotency, validation, cancel, report, signed download + Range + tampered + deleted, webhook create/test/rotate/retry/delete with signed delivery) | Passed 58/58 | `tests/e2e/api/api-smoke.mjs` → `tests/e2e/api/results/api-smoke-2026-11-12T19-02-51-105Z.json` (isolated environment). Full API suite 91/91. Production, read-only: health, OpenAPI, /api-docs page, and all 13 external routes + admin routes answer with the expected 401/403 without valid credentials (21/21, after correcting 2 curl calls that omitted Content-Length) | ⏳ |
+| S4 | Docs | OpenAPI imports into Postman | Not Tested | Postman not installed here; document validated with `@apidevtools/swagger-parser` (OpenAPI 3.1.1, 10 paths, 22 schemas) | ⏳ |
+
+## Mobile toolbar, support e-mail, screen-share recording orientation (12 Nov 2026)
+
+**Environment:** isolated local copy (LocalDB `OneInsureVideoMeetingDB_Rec`, isolated LiveKit on 7890, real R2 recorder, Edge headless with fake camera and screen). **Deployed 12 Nov 2026 22:59 IST** (live bundle verified). **Evidence:** `tests/e2e/recording/goodday-fixes.mjs` 8/8 (12 Nov 17:18 UTC, `results/goodday-fixes-2026-11-12T17-18-40-674Z.json`); screenshots in `results/screenshots/goodday-fixes/gd06-*.png` and `gd08-recording-frame-during-share.png`.
+
+| # | Scenario | Status | Evidence | UAT |
+|---|---|---|---|---|
+| T1 | Guest on a phone: the sign-in footer is not rendered in the room; no "it.support" text anywhere | Passed | GD-06: footer `display:none` | ⏳ |
+| T2 | Every control is the element under its own centre, with no horizontal overflow, the bar inside the viewport and every button ≥ 44 px, at 320×568, 360×740, 390×844, 430×932, 844×390 (phone landscape), 768×1024, 1024×768 and 1366×768 | Passed | GD-06: bar 60/62/62/62/56/68/68/68 px; smallest button 44 px (320 wide), else 46–48 px | ⏳ |
+| T3 | Phone: More sheet shows "Need help? support@oneinsure.com" | Passed | GD-06, `gd06-more-sheet-support.png` | ⏳ |
+| T4 | Mic tap still toggles on a phone (control handlers unchanged) | Passed | GD-06 | ⏳ |
+| T5 | Desktop host (landscape camera) + phone guest (portrait camera); host presents → recording is landscape, screen share large with both cameras in the side strip | Passed | GD-08: 1280×720 MP4, frame checked visually | ⏳ |
+| T6 | Two phones (both portrait) → recording still portrait | Not Tested | No automated two-phone case yet; the rule is unchanged in code for this case | — |
+| T7 | Real iPhone Safari / Android Chrome (safe area, browser bars, keyboard) | Not Tested | Emulated viewports only; needs a device check after deployment | — |
+| T8 | Desktop layout otherwise unchanged; other in-room flows (invite e-mail, tile expand, recording consent) | Passed | GD-05, GD-07, GD-08 in the same run | ⏳ |
+
+## GoodDay "Meet" batch, part 2 (12 Nov 2026)
+
+**Environment:** isolated local copy. **Deployed 12 Nov 2026 17:10 IST** (health Healthy; live bundle and endpoints verified; GoodDay updated). **Evidence:** `tests/e2e/recording/goodday-fixes-2.mjs` 4/4 (12 Nov 11:24 UTC); API test `A_live_meeting_can_be_extended_and_otherwise_ends_automatically_after_its_scheduled_time` and the customer-link checks in `An_instant_PLVC_call…` pass (suite 80/84, the 4 are pre-existing).
+
+| # | GoodDay | Scenario | Status | Evidence | UAT |
+|---|---|---|---|---|---|
+| H1 | #14206 | Instant dialog: internal type → "Calling a customer? Choose Customer PLVC"; hidden for PLVC | Passed | GE-01 | ⏳ |
+| H2 | #14195 | Customer meeting → Send link to customer → WhatsApp (wa.me/91…) + E-mail + Copy; the link opens the customer's invitation | Passed | GE-02; API customer-link checks | ⏳ |
+| H3 | #14208 | Countdown 5 min before the end on every screen; host-only Extend 15 → +15 min, everyone updated live | Passed | GE-03 | ⏳ |
+| H4 | #14208 | Overdue: "ends automatically in m:ss" + End now; nobody extends → server ends the call for everyone; audited SYSTEM | Passed | GE-04 (COMPLETED 34 s later, both disconnected) | ⏳ |
+| H5 | #14208 | Within the grace the meeting keeps running; after it, COMPLETED and cannot be extended | Passed (API) | auto-end API test | ⏳ |
+| H6 | #14196 | Personal Gmail invitations | Passed (production log) | trn_logemail: DELIVERED / OPEN / CLICK for every Gmail invitation | ⏳ |
+| H7 | #14197 | Login with real employee code | Passed (data) | Applied 12 Nov ~17:30 IST; the sign-in lookup resolves 6433 / 5509 / 109812 / 0003 / 0002 to the right accounts (no live password attempt made) | ⏳ |
+
+## GoodDay "Meet" bug batch (12 Nov 2026)
+
+**Environment:** isolated local copy (LocalDB `OneInsureVideoMeetingDB_Rec`, isolated LiveKit, real R2 recorder). **Deployed 12 Nov 2026 16:05 IST** (live bundle and recorder layout verified; health Healthy; G1–G8 marked RESOLVED in GoodDay). **Evidence:** `tests/e2e/recording/goodday-fixes.mjs` 8/8 (12 Nov 10:16 UTC); regression `consent-request.mjs` 15/15 (10:22 UTC); frontend and recorder-layout type checks clean.
+
+| # | GoodDay | Scenario | Status | Evidence | UAT |
+|---|---|---|---|---|---|
+| G1 | #14212, #14192 | One "Schedule meeting" (header), "Instant meeting" on the dashboard, no second Schedule button | Passed | GD-01 | ⏳ |
+| G2 | #14209 | Today's Meetings card → My Meetings, Today tab | Passed | GD-02 | ⏳ |
+| G3 | #14210 | Upcoming Meetings card → My Meetings, Upcoming tab (was the calendar) | Passed | GD-03 | ⏳ |
+| G4 | #14211 | "Attending" renamed "Invited"; one line under the tabs explains each list | Passed | GD-04 | ⏳ |
+| G5 | #14207 | Invite people → E-mail opens the mail app; the call continues | Passed | GD-05: no unload, room still connected; a `beforeunload` no longer disconnects | ⏳ |
+| G6 | #14205 | Guest on an iPhone-sized screen: every control reachable and tappable | Passed | GD-06: 6/6 controls; control run with the old z-index shows the footer covering Leave | ⏳ |
+| G7 | #14203 | Tile expand button → that person on the main stage; again → grid | Passed | GD-07 | ⏳ |
+| G8 | #14204 | 1:1 portrait recording + desktop screen share: share full width at the top | Passed | GD-08: 720x1280 MP4, frame checked | ⏳ |
+| G9 | #14193, #14190, #14191 | Already live (12 Nov / 11 Nov deployments) | Passed (production smoke) | Marked RESOLVED in GoodDay with notes | ⏳ |
+| G10 | #14197 | Login with employee ID | Not a code defect | Production employee codes are placeholders (0002, 0003, 0111…); failed attempts used 6433 and 107249. Needs the real codes | Blocked |
+| G11 | #14196 | Invitation to a personal (Gmail) address not received | Blocked | 14/14 external e-mails handed to `Util_SendEmail2` with no error; delivery beyond is the company mail server | Blocked |
+| G12 | #14208, #14206, #14195 | Auto-end at scheduled time; customer consent on video; send link by mobile | Not Tested | Need a product decision (see CHANGELOG) | — |
+
+## New users without an employee record (12 Nov 2026)
+
+**Environment:** isolated local copy; deployed 12 Nov 12:41 IST. **Evidence:** `tests/e2e/recording/user-employee-link.mjs` 3/3 (12 Nov 06:56 UTC); API test `An_account_for_someone_in_the_employee_master_is_linked_automatically_never_left_without_a_calendar`.
+
+| # | Scenario | Status | Evidence | UAT |
+|---|---|---|---|---|
+| U1 | Create user → Add new employee → account created linked | Passed | UE-01 | ⏳ |
+| U2 | E-mail only shows the "cannot schedule / no calendar" warning | Passed | UE-02 | ⏳ |
+| U3 | Existing unlinked account → Link to employee → Add new employee (e-mail prefilled) → linked | Passed | UE-03 | ⏳ |
+| U4 | E-mail-only account for an existing employee is linked automatically | Passed (API) | linkedToEmployee = true; /auth/me employeeLinked | ⏳ |
+| U5 | Account created before its employee → linked at next sign-in (audited) | Passed (API) | USER_EMPLOYEE_LINKED, privileged | ⏳ |
+| U6 | Production | Passed (smoke) | Deployed 12 Nov 12:41 IST: health Healthy; live bundle contains "Add new employee" and the e-mail-only warning. Linking Harsh's account needs the real employee details | ⏳ |
+
+## Instant meeting with PLVC / customer general; PLVC recording without acceptance (12 Nov 2026)
+
+**Environment:** the same isolated local environment as the consent requests below, with V021 applied — **not production, not deployed**.
+**Evidence:** `tests/e2e/recording/instant-plvc.mjs`. Final run 12 Nov 05:56 UTC: **6/6**, results in `tests/e2e/recording/results/instant-plvc-2026-11-12T05-57-21-722Z.json`, screenshots in `…/screenshots/instant-plvc/`. API test `An_instant_PLVC_call_with_a_customer_records_automatically_and_nobody_has_to_accept`.
+
+| # | Scenario | Status | Evidence | UAT |
+|---|---|---|---|---|
+| P1 | Dashboard button renamed "Instant meeting" | Passed | IP-01 | ⏳ |
+| P2 | Instant dialog offers Customer — PLVC and Customer — General (plus internal types) | Passed | IP-01: two option groups | ⏳ |
+| P3 | PLVC shows "Recording starts automatically … no acceptance is needed"; no NONE/OPTIONAL choice | Passed | IP-02 | ⏳ |
+| P4 | Customer general keeps consent ("each participant is asked to accept") | Passed | IP-02; API test: `CUSTOMER_GENERAL` → `CUSTOMER_MEETING` | ⏳ |
+| P5 | A customer is required for a customer instant meeting | Passed | IP-02 (UI message); API test (400) | ⏳ |
+| P6 | Instant PLVC call created with the customer; Invite dialog shows the customer's personal link | Passed | IP-03: `CUSTOMER_PLVC`, `INSTANT`, `REQUIRED`, policy number defaulted | ⏳ |
+| P7 | PLVC recording starts automatically; REC only after the recorder confirms capture; no consent request | Passed | IP-04: `PENDING → RECORDING` about 8–11 s after the host joined; audit "Mandatory recording started automatically"; 0 requests | ⏳ |
+| P8 | Customer joins via personal link (phone width): REC + notice banner, no Accept/Decline | Passed | IP-05: `CUSTOMER` participant; banner shown; acknowledgement stored automatically (1 row) | ⏳ |
+| P9 | Actual MP4 | Passed | IP-06: `COMPLETED` 34 s, H.264/AAC, ffprobe 33.6 s | ⏳ |
+| P10 | Production deployment | Passed (smoke) | Deployed 12 Nov 11:45 IST: API health Healthy; live bundle contains "Instant meeting", "Start an instant meeting", "Recording starts automatically", the customer link; DB: `CUSTOMER_PLVC` → `CUSTOMER_PLVC` (MANDATORY, NOTIFICATION_ONLY). A real PLVC call on production not yet made | ⏳ |
+| P11 | Approved notice wording / policy approval for PLVC | **Blocked** | Placeholder shown verbatim and flagged; with `Recording:Environment` = Pilot/Production the gate refuses customer recording until the policy is confirmed (unchanged rule) | ⏳ |
+
+**Test-environment note (not an app issue):** after another network adapter on the server came up, the isolated LiveKit advertised `127.0.0.1` for UDP but was not bound there, so the headless recorder could not connect. Fixed for the test by advertising the bound vEthernet address (`node_ip 172.21.80.1`). Production LiveKit and its configuration were not touched.
+
+## Recording consent requests — popup for every participant (12 Nov 2026)
+
+**Environment:** isolated, on the server — **not production**.
+- LocalDB `OneInsureVideoMeetingDB_Rec` with V001–V020;
+- API (Debug build) on `https://localhost:7192`;
+- Vite on `http://127.0.0.1:5176`;
+- a separate LiveKit 1.13.11 on loopback ports 7890–7892;
+- the real R2 recorder (`OneInsure.Connect.Recorder`, Release build) with FFmpeg.
+
+**Not deployed.**
+
+**Browsers:**
+- 5 independent headless Microsoft Edge instances, each with its own fake camera and microphone: host, two employees, a late-joining employee, and a guest who joins through the meeting link on a **390 × 844 phone-sized** viewport.
+- No physical phone, tablet or Mac was used.
+
+**Evidence:**
+- `tests/e2e/recording/consent-request.mjs`. The final run, 12 Nov 04:35–04:39 UTC, passed **15/15**. Results are in `tests/e2e/recording/results/consent-request-2026-11-12T04-39-44-971Z.json` and screenshots in `tests/e2e/recording/results/screenshots/consent/` (not committed).
+- API tests in `RecordingTests.cs`.
+
+**Policy used:** team meetings, optional recording, `CONSENT_REQUIRED`, consent from all. Notice wording left as the configured placeholder, which must not be invented.
+
+**Measured:**
+- Popup on every participant **0.7–1.6 s** after the host's click (5 runs).
+- Host panel updated **at once**, with no refresh.
+- Last acceptance → REC **9.2–9.9 s** (recorder start-up, unchanged).
+
+**Earlier runs found and fixed three real issues** before the final run:
+1. The host panel covered the Participants panel's Admit button.
+2. A link guest who rejoins is a *new* participant, so their old entry stayed Disconnected for good. Fixed with the host's remove action.
+3. The original host's room did not wire up that remove action.
+
+| # | Scenario | Status | Evidence | UAT |
+|---|---|---|---|---|
+| C1 | Host + one participant | Passed | CR-14: request → popup → accept → REC → MP4 `COMPLETED` (10 s) | ⏳ |
+| C2 | Host + multiple participants | Passed | CR-01/02: host + 2 employees + guest; +1 newcomer (CR-10) | ⏳ |
+| C3 | Host + guest participant | Passed | CR-01/02/06/09/11: guest via meeting link (phone width) got the popup, declined, rejoined, accepted | ⏳ |
+| C4 | All participants receive the popup | Passed | CR-02: Ravi, Priya and the guest within about 1 s; not the requesting host; the control bar stays clickable; no horizontal overflow at 390 px | ⏳ |
+| C5 | Everyone accepts → recording starts | Passed | CR-11: request `STARTED`; host indicator `PENDING → RECORDING`; REC only when the DB says `RECORDING`; all 5 see REC; audit "Host started recording: every participant accepted the recording request" | ⏳ |
+| C6 | One participant declines → no recording | Passed | CR-06: request `DECLINED` (audited); host toast "Neha Guest declined recording. The recording request was cancelled."; 0 recordings; Record available again. API test too | ⏳ |
+| C7 | One participant stays pending → no recording | Passed | CR-05: 6 s with the guest pending → 0 recordings, host panel Pending | ⏳ |
+| C8 | Participant disconnects before responding | Passed | CR-08: host panel "Disconnected" (grey); no recording. API test: Disconnected is never counted as accepted | ⏳ |
+| C9 | Participant reconnects while pending | Passed | CR-09: guest rejoined → popup again automatically → Pending. The old entry was removed by the host (audited). CR-10: employee page reload → asked again, listed once | ⏳ |
+| C10 | New participant joins while pending | Passed | CR-10: Arjun gets the popup on joining; host panel "3 of 5 accepted" | ⏳ |
+| C11 | Duplicate Accept click | Passed | CR-03: double click + extra click → 1 evidence row; confirmation, then the popup closes | ⏳ |
+| C12 | Network interruption during submission | Passed | CR-04: request cut off → error shown, buttons re-enabled, still Pending on the host; retry → Accepted | ⏳ |
+| C13 | R2 recorder start-up failure | Passed | CR-13: every recorder launch killed before capture (3 of 3) → `FAILED`; host toast "Recording could not be started: …"; REC never shown; no start time recorded. (A single crash is healed by the existing relaunch, as seen in run 6.) | ⏳ |
+| C14 | Actual MP4 recording and playback | Passed | CR-12: 25 s, 1.38 MB, H.264/AAC 1280×720, ffprobe 25.0 s; signed play URL → HTTP 206 `video/mp4` | ⏳ |
+| C15 | No popup when the meeting starts (optional recording) | Passed | CR-01: no popup on any of 4 screens for 5 s; no request row | ⏳ |
+| C16 | Host cancels / request expires | Passed (API) | `The_host_can_cancel_a_consent_request_and_an_unanswered_request_expires`; ending the meeting closed the open request (E2E cleanup log) | ⏳ |
+| C17 | Production | Passed (smoke) | Deployed 12 Nov 11:45 IST; live room bundle contains the consent popup and host panel; V020 tables exist. A live multi-user request not yet made | ⏳ |
+| C18 | Real phones/tablets, other browsers (Safari, Firefox) | **Not Tested** | Only headless Edge, including a phone-sized viewport | ⏳ |
+| C19 | Approved consent wording | **Blocked** | Placeholder still shown and flagged; needs the policy administrator | ⏳ |
+
 ## Phases E–H
 
 Added here as each phase is delivered.

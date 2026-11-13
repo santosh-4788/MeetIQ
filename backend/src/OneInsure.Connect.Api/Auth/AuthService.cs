@@ -35,7 +35,7 @@ public abstract record AuthOutcome
 public sealed record MfaVerifyRequest(string? MfaToken, string? Code, string? Method, bool RememberDevice);
 
 public sealed class AuthService(Db db, Passwords passwords, IClock clock, IOptions<SecurityOptions> securityOptions,
-    IOptions<PublicEndpointOptions> endpoints, IOptions<EmailOptions> emailOptions, MfaService mfa, ILogger<AuthService> log)
+    IOptions<PublicEndpointOptions> endpoints, IOptions<EmailOptions> emailOptions, MfaService mfa, ILogger<AuthService> log, DailyLogoutService daily)
 {
     const string InvalidCredentials = "The login ID or password is incorrect.";
     SecurityOptions Sec => securityOptions.Value;
@@ -100,8 +100,29 @@ public sealed class AuthService(Db db, Passwords passwords, IClock clock, IOptio
         await RecordAttemptAsync(c, login, userId, true, null, client);
         var (token, persistentUntil) = await CreateSessionAsync(c, userId, rememberMe, client);
         await Audit.WriteUserAsync(c, "USER", userId, "LOGIN", userId, summary, client.Ip);
+        await AutoLinkEmployeeAsync(c, userId, client.Ip);
         var user = (await GetUserSummaryAsync(c, userId))!;
         return new AuthOutcome.Success(user, token, persistentUntil, mustChangePassword, trustedDeviceToken);
+    }
+
+    /// <summary>
+    /// An account that is not linked to an employee (created "e-mail only", or before its employee record existed) cannot
+    /// schedule meetings or have a calendar. If exactly one ACTIVE employee has this account's e-mail as official e-mail and
+    /// that employee has no account yet, the two are linked at sign-in (audited). Anything ambiguous is left for an administrator.
+    /// </summary>
+    internal static async Task AutoLinkEmployeeAsync(IDbConnection c, long userId, string? ip)
+    {
+        var linked = await c.ExecuteAsync("""
+            UPDATE u SET EmployeeId = e.EmployeeId
+            FROM auth.Users u
+            JOIN org.Employees e ON e.OfficialEmail = u.Email AND e.IsActive = 1
+            WHERE u.UserId = @userId AND u.EmployeeId IS NULL
+              AND NOT EXISTS (SELECT 1 FROM auth.Users x WHERE x.EmployeeId = e.EmployeeId)
+              AND (SELECT COUNT(*) FROM org.Employees e2 WHERE e2.OfficialEmail = u.Email AND e2.IsActive = 1) = 1
+            """, new { userId });
+        if (linked > 0)
+            await Audit.WriteUserAsync(c, "SYSTEM", null, "USER_EMPLOYEE_LINKED", userId,
+                "Account linked automatically at sign-in to the employee with the same official e-mail", ip, privileged: true);
     }
 
     /// <summary>Counts a failed password or MFA code; the threshold-th failure locks the account for LockoutMinutes (atomic).</summary>
@@ -160,8 +181,11 @@ public sealed class AuthService(Db db, Passwords passwords, IClock clock, IOptio
     async Task<(string Token, DateTime? PersistentUntil)> CreateSessionAsync(IDbConnection c, long userId, bool rememberMe, ClientInfo client)
     {
         var now = clock.UtcNow;
-        var absolute = rememberMe ? now.AddDays(Sec.RememberMeDays) : now.AddHours(Sec.SessionAbsoluteHours);
-        var idle = now.AddMinutes(Sec.SessionIdleMinutes);
+        // Session policy (12 Nov 2026): no idle sign-out during the working day; every employee session ends at the next daily
+        // logout (23:30 IST). Only when the daily logout is switched off do the fixed absolute limits apply.
+        var absolute = daily.NextCutoffUtc(now) is { } cutoff ? cutoff
+            : rememberMe ? now.AddDays(Sec.RememberMeDays) : now.AddHours(Sec.SessionAbsoluteHours);
+        var idle = Sec.SessionIdleMinutes > 0 ? now.AddMinutes(Sec.SessionIdleMinutes) : absolute;
         var token = Tokens.New();
         await c.ExecuteAsync("""
             INSERT auth.UserSessions (SessionId, TokenHash, UserId, CreatedUtc, LastSeenUtc, ExpiresUtc, AbsoluteExpiryUtc, IpAddress, UserAgent)

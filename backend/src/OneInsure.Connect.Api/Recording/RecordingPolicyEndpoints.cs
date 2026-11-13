@@ -41,13 +41,13 @@ public static partial class RecordingPolicyEndpoints
         return api;
     }
 
-    sealed record RecordingOptionRow(string Category, string PolicyCode, string Title, bool IsEnabled, string Requirement);
+    sealed record RecordingOptionRow(string Category, string PolicyCode, string Title, bool IsEnabled, string Requirement, string ConsentMode);
 
     static async Task<IResult> RecordingOptions(Db db, CancellationToken ct)
     {
         using var c = await db.OpenAsync(ct);
         var rows = await c.QueryAsync<RecordingOptionRow>("""
-            SELECT m.Category, p.PolicyCode, p.Title, p.IsEnabled, p.Requirement
+            SELECT m.Category, p.PolicyCode, p.Title, p.IsEnabled, p.Requirement, p.ConsentMode
             FROM rec.RecordingPolicyCategories m JOIN rec.RecordingPolicies p ON p.PolicyCode = m.PolicyCode
             ORDER BY m.Category
             """);
@@ -55,7 +55,7 @@ public static partial class RecordingPolicyEndpoints
         {
             category = r.Category, policyCode = r.PolicyCode, policyTitle = r.Title,
             // Recording is possible only when the mapped policy is switched on and not set to Disabled.
-            enabled = r.IsEnabled && r.Requirement != "DISABLED", requirement = r.Requirement,
+            enabled = r.IsEnabled && r.Requirement != "DISABLED", requirement = r.Requirement, consentMode = r.ConsentMode,
         }));
     }
 
@@ -129,7 +129,8 @@ public static partial class RecordingPolicyEndpoints
         var consentMode = input.ConsentMode?.Trim().ToUpperInvariant() ?? "";
         if (!RecordingPolicyStore.ConsentModes.Contains(consentMode)) v.Add("consentMode", "Choose consent required or notification only.");
         var expiry = input.ExpiryAction?.Trim().ToUpperInvariant() ?? "";
-        if (!RecordingPolicyStore.ExpiryActions.Contains(expiry)) v.Add("expiryAction", "Choose review only, archive or delete.");
+        if (expiry == "DELETE") v.Add("expiryAction", "Automatic deletion is disabled: recordings are only deleted manually by an authorised user. Choose review only or archive.");
+        else if (!RecordingPolicyStore.ExpiryActions.Contains(expiry)) v.Add("expiryAction", "Choose review only or archive.");
         var notice = v.Required("noticeText", input.NoticeText, 4000, "Consent / notification wording");
         var noticeVersion = v.Required("noticeVersion", input.NoticeVersion, 30, "Wording version");
         if (noticeVersion is not null && !VersionRe().IsMatch(noticeVersion)) v.Add("noticeVersion", "Use letters, digits, '.', '-' or '_' (max 30).");
@@ -240,10 +241,10 @@ public static partial class RecordingPolicyEndpoints
             var customer = Meetings.MeetingEndpoints.IsCustomerCategory(cat);
             if (!RecordingPolicyStore.Codes.Contains(policy) || policy == "CUSTOMER_AUDIO_CALL")
                 v.Add(cat, "Choose a meeting policy (customer audio calls are not meetings).");
-            else if (customer && policy != "CUSTOMER_MEETING")
-                v.Add(cat, "Customer meeting categories must use the customer meetings policy.");
-            else if (!customer && policy == "CUSTOMER_MEETING")
-                v.Add(cat, "Internal meeting categories cannot use the customer meetings policy.");
+            else if (customer && !RecordingPolicyStore.CustomerMeetingCodes.Contains(policy))
+                v.Add(cat, "Customer meeting categories must use a customer policy (customer meetings or customer PLVC calls).");
+            else if (!customer && RecordingPolicyStore.CustomerMeetingCodes.Contains(policy))
+                v.Add(cat, "Internal meeting categories cannot use a customer policy.");
         }
         if (!v.IsValid) return v.Problem();
         using var c = await db.OpenAsync(ct);

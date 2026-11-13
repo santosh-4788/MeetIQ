@@ -5,7 +5,7 @@ import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  ArrowRight, CalendarCheck, CalendarClock, CalendarDays, CalendarPlus, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CircleCheck, Clapperboard, Clock,
+  ArrowRight, CalendarCheck, CalendarClock, CalendarDays, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CircleCheck, Clapperboard, Clock,
   Handshake, Hourglass, LogIn, RefreshCw, UserCheck, Users, Video, Radio,
 } from 'lucide-react'
 import { dashboardApi } from '../api'
@@ -80,7 +80,7 @@ export function DashboardPage() {
         <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
           {can('meetings.create') && (
             <Button onClick={() => setQuick('new')} leftIcon={<Video className="size-4" />} data-testid="new-meeting">
-              New meeting
+              Instant meeting
             </Button>
           )}
           {(can('meetings.view.own') || can('meetings.view.all')) && (
@@ -88,11 +88,7 @@ export function DashboardPage() {
               Join meeting
             </Button>
           )}
-          {can('meetings.create') && (
-            <ButtonLink to="/schedule" variant="secondary" leftIcon={<CalendarPlus className="size-4" />}>
-              Schedule
-            </ButtonLink>
-          )}
+          {/* No "Schedule" here: the header's "Schedule meeting" button is the one way to schedule (it was offered twice). */}
           {can('calendar.view') && (
             <ButtonLink to="/calendar" variant="secondary" leftIcon={<CalendarDays className="size-4" />}>
               Calendar
@@ -151,8 +147,8 @@ function DashboardContent({ data, fmt, reloading, onReload }: { data: DashboardS
   const k = data.kpis
   const kpis: { label: string; value: number; icon: ReactNode; accent: Parameters<typeof StatCard>[0]['accent']; footnote: string; to?: string }[] = [
     { label: 'Total Employees', value: k.totalEmployees, icon: <Users className="size-[18px]" />, accent: 'navy', footnote: 'Active employees', to: can('employees.manage') ? '/employees' : undefined },
-    { label: "Today's Meetings", value: k.todaysMeetings, icon: <CalendarCheck className="size-[18px]" />, accent: 'brand', footnote: 'Scheduled today', to: can('meetings.view.own') ? '/meetings' : undefined },
-    { label: 'Upcoming Meetings', value: k.upcomingMeetings, icon: <CalendarClock className="size-[18px]" />, accent: 'cyan', footnote: 'Next 7 days', to: can('calendar.view') ? '/calendar' : undefined },
+    { label: "Today's Meetings", value: k.todaysMeetings, icon: <CalendarCheck className="size-[18px]" />, accent: 'brand', footnote: 'Scheduled today', to: can('meetings.view.own') ? '/meetings?tab=today' : undefined },
+    { label: 'Upcoming Meetings', value: k.upcomingMeetings, icon: <CalendarClock className="size-[18px]" />, accent: 'cyan', footnote: 'Next 7 days', to: can('meetings.view.own') ? '/meetings?tab=upcoming' : undefined },
     { label: 'Internal Meetings', value: k.internalMeetings, icon: <Video className="size-[18px]" />, accent: 'brand', footnote: 'This month', to: can('meetings.view.own') ? '/internal' : undefined },
     { label: 'Customer Meetings', value: k.customerMeetings, icon: <Handshake className="size-[18px]" />, accent: 'success', footnote: 'This month', to: can('customer.meetings.view') ? '/customer-meetings' : undefined },
     { label: 'Completed Meetings', value: k.completedMeetings, icon: <CircleCheck className="size-[18px]" />, accent: 'success', footnote: 'This month', to: can('reports.view') ? '/reports' : can('meetings.view.own') ? '/meetings' : undefined },

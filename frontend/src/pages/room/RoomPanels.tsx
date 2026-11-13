@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { useLocalParticipant, useMediaDeviceSelect, useParticipants } from '@livekit/components-react'
 import { ConnectionQuality, supportsAudioOutputSelection, type Participant } from 'livekit-client'
-import { Check, CircleAlert, Crown, DoorOpen, Hand, Lock, LockOpen, LoaderCircle, Mic, MicOff, PlayCircle, RotateCw, SendHorizontal, UserMinus, Video, VideoOff, X } from 'lucide-react'
+import { Check, CircleAlert, Crown, Headset, DoorOpen, Hand, Lock, LockOpen, LoaderCircle, Mic, MicOff, PlayCircle, RotateCw, SendHorizontal, UserMinus, Video, VideoOff, X } from 'lucide-react'
 import { CHAT_MAX_LENGTH, type WaitingEntry } from '../../api/room'
+import { SUPPORT } from '../../config'
 import type { RoomRecordingState } from '../../api/recordings'
 import { errorMessage } from '../../api/types'
 import { ConfirmDialog } from '../../components/ui/Overlay'
@@ -383,6 +384,7 @@ const consentBadge: Record<string, { label: string; className: string }> = {
   PENDING: { label: 'Awaiting consent', className: 'text-warning' },
   DENIED: { label: 'Declined', className: 'text-danger' },
   WITHDRAWN: { label: 'Withdrawn', className: 'text-danger' },
+  DISCONNECTED: { label: 'Disconnected', className: 'text-white/50' },
 }
 
 function PersonRow({
@@ -599,7 +601,21 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
           On a weak network the video quality adapts automatically and your voice is given priority. You are connected as {localParticipant.name || 'yourself'}.
         </p>
+        <SupportLine />
       </div>
     </>
+  )
+}
+
+/** In-room help contact. Lives in Settings (desktop) and the More sheet (phones) - never in the control bar, where the
+    sign-in layout's footer line used to show through and sit on top of the buttons. */
+export function SupportLine({ className }: { className?: string }) {
+  return (
+    <p className={cn('flex flex-wrap items-center justify-center gap-1.5 text-center text-[12px] leading-5 text-white/60', className)} data-testid="room-support">
+      <Headset className="size-3.5 shrink-0" aria-hidden /> Need help?{' '}
+      <a href={`mailto:${SUPPORT.email}`} target="_blank" rel="noreferrer" className="font-medium text-white/85 hover:text-white hover:underline">
+        {SUPPORT.email}
+      </a>
+    </p>
   )
 }

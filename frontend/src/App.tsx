@@ -14,6 +14,7 @@ import { DashboardPage } from './pages/DashboardPage'
 import { PlannedModulePage } from './pages/PlannedModulePage'
 import { AdminPage } from './pages/admin/AdminPage'
 import { AuditLogPage } from './pages/admin/AuditLogPage'
+import { ApiDocsPage } from './pages/admin/ApiDocsPage'
 import { RecordingsRoutes } from './pages/recordings/RecordingsPage'
 import { EmployeesPage } from './pages/employees/EmployeesPage'
 import { OrganisationPage } from './pages/org/OrganisationPage'
@@ -26,6 +27,7 @@ import { CustomerMeetingsPage, InternalMeetingsPage, MeetingsRoutes } from './pa
 import { NotificationsPage } from './pages/notifications/NotificationsPage'
 import { ReportsPage } from './pages/reports/ReportsPage'
 import { RoomLoading } from './pages/room/RoomScreens'
+import { ErrorBoundary, PageErrorCard } from './components/ErrorBoundary'
 
 // Phase 4: the video room (LiveKit client + components) is a separate chunk, downloaded only when someone joins.
 const EmployeeRoomPage = lazy(() => import('./pages/room/EmployeeRoomPage'))
@@ -47,6 +49,7 @@ const builtPages: Record<string, ReactNode> = {
   '/organisation': <OrganisationPage />,
   '/admin': <AdminPage />,
   '/audit-log': <AuditLogPage />,
+  '/api-docs': <ApiDocsPage />,
   '/recordings': <RecordingsRoutes />,
   '/reports': <ReportsPage />,
   '/settings': <SettingsPage />,
@@ -80,9 +83,11 @@ export default function App() {
               <Route
                 path="/meetings/:id/room"
                 element={
-                  <Suspense fallback={<RoomLoading />}>
-                    <EmployeeRoomPage />
-                  </Suspense>
+                  <ErrorBoundary fallback={() => <div className="oic-room-canvas fixed inset-0 z-40 flex items-center justify-center bg-[#081525]"><PageErrorCard dark onRetry={() => window.location.reload()} /></div>}>
+                    <Suspense fallback={<RoomLoading />}>
+                      <EmployeeRoomPage />
+                    </Suspense>
+                  </ErrorBoundary>
                 }
               />
               <Route path="/room/:id" element={<LegacyRoomRedirect />} />

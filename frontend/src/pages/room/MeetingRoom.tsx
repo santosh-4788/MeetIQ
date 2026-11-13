@@ -1,6 +1,7 @@
-﻿import '@livekit/components-styles'
+import '@livekit/components-styles'
 import './room.css'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'motion/react'
 import {
   CarouselLayout,
@@ -21,6 +22,7 @@ import {
   useIsMuted,
   useLocalParticipant,
   useParticipants,
+  usePinnedTracks,
   useRoomContext,
   useSpeakingParticipants,
   useTrackToggle,
@@ -31,28 +33,30 @@ import {
   ConnectionQuality,
   ConnectionState,
   DisconnectReason,
+  RemoteTrackPublication,
   RoomEvent,
   ScreenSharePresets,
   Track,
   VideoPresets,
   type RemoteParticipant,
+  type TrackPublication,
   type RoomOptions,
 } from 'livekit-client'
 import {
-  Ellipsis, Hand, LayoutGrid, Lock, LoaderCircle, LogOut, MessageSquare, Mic, MicOff, MonitorUp, MonitorX, PhoneOff, Presentation, Settings2, UserPlus, Users, Video, VideoOff, WifiOff,
+  Ellipsis, Hand, LayoutGrid, Lock, LoaderCircle, LogOut, MessageSquare, Mic, MicOff, MonitorUp, MonitorX, PhoneOff, Presentation, Settings2, UserPlus, Users, Video, VideoOff, WifiOff, X,
 } from 'lucide-react'
-import type { MuteSource, RoomConnection, RoomMeetingInfo, WaitingEntry } from '../../api/room'
+import type { EndTimes, MuteSource, RoomConnection, RoomMeetingInfo, WaitingEntry } from '../../api/room'
 import { resolveLiveKitUrl, roomApi } from '../../api/room'
 import { roomRecordingApi } from '../../api/recordings'
 import { errorMessage } from '../../api/types'
-import { ACTIVITY_EVENT } from '../../auth/AuthContext'
+import { ACTIVITY_EVENT, markInMeeting } from '../../auth/AuthContext'
 import { ConnectMark } from '../../components/brand/ConnectLogo'
 import { ConfirmDialog } from '../../components/ui/Overlay'
 import { useToast } from '../../components/ui/Toast'
 import { cn } from '../../lib/cn'
-import { formatTime, zoneLabel } from '../../lib/format'
+import { formatTime, parseUtc, zoneLabel } from '../../lib/format'
 import { initialsOf, type MediaChoices, type PreviewTracks } from './PreJoin'
-import { ChatPanel, PeoplePanel, SettingsPanel, type ChatMessage } from './RoomPanels'
+import { ChatPanel, PeoplePanel, SettingsPanel, SupportLine, type ChatMessage } from './RoomPanels'
 import { useRoomRecording } from './RecordingControls'
 import { ShareLinkDialog } from '../meetings/MeetingLinkShare'
 import { RoomUiContext, participantRole, useRoomUi, type RoomBackend, type RoomUi } from './roomUi'
@@ -61,7 +65,7 @@ export type { RoomBackend } from './roomUi'
 
 export type RoomExit =
   | { kind: 'left' }
-  | { kind: 'ended' }
+  | { kind: 'ended'; endedBy?: 'host' | 'auto'; endedUtc?: string }
   | { kind: 'removed' }
   | { kind: 'duplicate' }
   | { kind: 'error'; message: string }
@@ -71,6 +75,8 @@ const TOPIC_HAND = 'oic.hand'
 const TOPIC_WAITING = 'oic.waiting'
 const TOPIC_HOST_TRANSFER = 'oic.host-transfer'
 const TOPIC_NOTICE = 'oic.host-notice'
+/** Server → everyone: { type: 'meeting-ended', endedBy: 'host' | 'auto' } (MeetingAutoEnd.MeetingEndedTopic). */
+const TOPIC_MEETING = 'oic.meeting'
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
@@ -87,7 +93,10 @@ function roomOptions(): RoomOptions {
   return {
     adaptiveStream: { pixelDensity: 'screen' },
     dynacast: true,
-    disconnectOnPageLeave: true,
+    // Not LiveKit's own handler: it disconnects on `beforeunload`, which Chrome/Edge also fire when a mailto:/tel: link
+    // opens the mail app - the call dropped as soon as "E-mail" was clicked in Invite people. `pagehide` (see
+    // useLeaveOnPageHide) fires only when the page really goes away.
+    disconnectOnPageLeave: false,
     audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     videoCaptureDefaults: { resolution: VideoPresets.h720.resolution },
     publishDefaults: {
@@ -159,7 +168,14 @@ export function MeetingRoom({
       audio={false}
       video={false}
       options={options}
-      onDisconnected={(reason) => exit(exitFor(reason))}
+      onDisconnected={(reason) => {
+        const e = exitFor(reason)
+        // A dropped connection may really be the end of the meeting (the "room deleted" signal was missed, e.g. a phone in
+        // the background): ask the API before showing "Connection lost". Never waits longer than 5 s.
+        if (e.kind !== 'error' || !backend.hasEnded) return exit(e)
+        const timeout = new Promise<boolean>((r) => window.setTimeout(() => r(false), 5000))
+        void Promise.race([backend.hasEnded().catch(() => false), timeout]).then((ended) => exit(ended ? { kind: 'ended', endedUtc: new Date().toISOString() } : e))
+      }}
       onError={(e) => {
         // Errors while connecting end the attempt; later ones (e.g. a failed device switch) are only reported.
         toast.error(errorMessage(e, 'Something went wrong in the meeting room.'))
@@ -172,12 +188,27 @@ export function MeetingRoom({
       data-testid="meeting-room"
     >
       <LayoutContextProvider>
-        <RoomShell connection={connection} meeting={meeting} backend={backend} onConnectFailed={(m) => exit({ kind: 'error', message: m })} onEnded={() => exit({ kind: 'ended' })} />
+        <LeaveOnPageHide />
+        <RoomShell connection={connection} meeting={meeting} backend={backend} onConnectFailed={(m) => exit({ kind: 'error', message: m })}
+          onEnded={(endedBy) => exit({ kind: 'ended', endedBy, endedUtc: new Date().toISOString() })} />
         {connection.canPublish && <PublishOnConnect media={connection.canPublishVideo === false ? { ...media, videoEnabled: false } : media} tracks={connection.canPublishVideo === false ? { audio: tracks.audio } : tracks} />}
       </LayoutContextProvider>
       <RoomAudioRenderer />
     </LiveKitRoom>
   )
+}
+
+/** Leaves the room when the page is really closed or navigated away (not when a mailto: link opens the mail app). */
+function LeaveOnPageHide() {
+  const room = useRoomContext()
+  useEffect(() => {
+    const onHide = (e: PageTransitionEvent) => {
+      if (!e.persisted) void room.disconnect()
+    }
+    window.addEventListener('pagehide', onHide)
+    return () => window.removeEventListener('pagehide', onHide)
+  }, [room])
+  return null
 }
 
 /**
@@ -399,25 +430,57 @@ function RoomShell({
   onConnectFailed: (message: string) => void
   /** Called as soon as our own "end for all" API call succeeds - don't wait for LiveKit's own disconnect signal,
       which can show a "Reconnecting…" banner first before it gives up, leaving the host stuck looking at a dead call. */
-  onEnded: () => void
+  onEnded: (endedBy?: 'host' | 'auto') => void
 }) {
   const room = useRoomContext()
   const state = useConnectionState()
   const toast = useToast()
+
+  // Host ended the meeting for everyone (or it ended automatically): the server says so in-band just before it closes the
+  // room. Leave at once - no "Reconnecting…", no retries - and release camera, microphone and screen share (disconnect
+  // unpublishes and stops every local track).
+  const endedRef = useRef(false)
+  const finish = useCallback((endedBy?: 'host' | 'auto') => {
+    if (endedRef.current) return
+    endedRef.current = true
+    onEnded(endedBy)
+    void room.disconnect()
+  }, [onEnded, room])
+  useEffect(() => {
+    const onData = (payload: Uint8Array, _p?: RemoteParticipant, _k?: unknown, topic?: string) => {
+      if (topic !== TOPIC_MEETING) return
+      try {
+        const d = JSON.parse(decoder.decode(payload)) as { type?: string; endedBy?: string }
+        if (d.type === 'meeting-ended') finish(d.endedBy === 'auto' ? 'auto' : 'host')
+      } catch {
+        /* ignore */
+      }
+    }
+    room.on(RoomEvent.DataReceived, onData)
+    return () => {
+      room.off(RoomEvent.DataReceived, onData)
+    }
+  }, [room, finish])
+  // Reconnecting: the API is the source of truth. If the meeting has ended meanwhile, stop reconnecting and show it.
+  useEffect(() => {
+    if (!backend.hasEnded || (state !== ConnectionState.Reconnecting && state !== ConnectionState.SignalReconnecting)) return
+    let alive = true
+    const check = () => void backend.hasEnded!().then((ended) => { if (alive && ended) finish() }).catch(() => undefined)
+    const first = window.setTimeout(check, 1500)
+    const t = window.setInterval(check, 4000)
+    return () => {
+      alive = false
+      window.clearTimeout(first)
+      window.clearInterval(t)
+    }
+  }, [state, backend, finish])
   const [panel, setPanel] = useState<Panel>(null)
   const [layout, setLayout] = useState<'grid' | 'speaker'>('grid')
   const [ending, setEnding] = useState(false)
+  const [ends, setEnds] = useEndTimes(meeting)
   // A meeting just started from "New meeting" opens with the invite link on screen.
   const [inviting, setInviting] = useState(!!backend.share?.openOnStart)
 
-  // A one-time notice when the scheduled end time passes - informational only, nobody is disconnected. A genuinely
-  // overrunning call is meant to keep running (see MeetingExpiryWorker); this just lets people in the room know.
-  useEffect(() => {
-    const wait = new Date(meeting.endUtc).getTime() - Date.now()
-    if (wait <= 0 || wait > 24 * 3_600_000) return
-    const t = window.setTimeout(() => toast.success("This meeting's scheduled time is up. The call keeps going until a host ends it."), wait)
-    return () => window.clearTimeout(t)
-  }, [meeting.endUtc, toast])
 
   // Host transfer: `backend` is built once, at join time, from the role the caller had then. A participant who becomes
   // (or stops being) host mid-meeting needs their host-only capabilities to appear (or disappear) without reconnecting -
@@ -479,7 +542,7 @@ function RoomShell({
       return {
         ...backend,
         host: undefined,
-        recording: backend.recording && { state: backend.recording.state, consent: backend.recording.consent },
+        recording: backend.recording && { state: backend.recording.state, consent: backend.recording.consent }, // no start/stop/remove once host is lost
       }
     }
     // hostOverride === true: gained host. Keep whatever was already there (e.g. was already co-host), otherwise build it.
@@ -493,6 +556,7 @@ function RoomShell({
         requestUnmute: (identity) => roomApi.requestUnmute(meeting.id, identity),
         remove: (identity, block) => roomApi.remove(meeting.id, identity, block),
         end: () => roomApi.end(meeting.id),
+        extend: (minutes) => roomApi.extend(meeting.id, minutes),
         setLocked: (locked) => roomApi.setLocked(meeting.id, locked).then(() => undefined),
         transferHost: (identity) => roomApi.transferHost(meeting.id, identity),
       },
@@ -500,6 +564,7 @@ function RoomShell({
         ...backend.recording,
         start: backend.recording.start ?? ((version: string) => roomRecordingApi.start(meeting.id, version)),
         stop: backend.recording.stop ?? (() => roomRecordingApi.stop(meeting.id)),
+        removeFromRequest: backend.recording.removeFromRequest ?? ((identity: string) => roomRecordingApi.removeFromRequest(meeting.id, identity)),
       },
     }
   }, [backend, hostOverride, meeting.id])
@@ -522,6 +587,12 @@ function RoomShell({
     return () => window.clearTimeout(t)
   }, [state, room, onConnectFailed])
 
+  // In a meeting: an ended portal session (expiry, daily 23:30 reset) must not navigate away and drop the call.
+  useEffect(() => {
+    markInMeeting(true)
+    return () => markInMeeting(false)
+  }, [])
+
   // While connected: count as activity (no idle sign-out mid-call) and keep the session alive. Media never depends on this.
   useEffect(() => {
     if (state !== ConnectionState.Connected) return
@@ -539,7 +610,7 @@ function RoomShell({
   return (
     <RoomUiContext.Provider value={ui}>
       <RoomHeader
-        meeting={meeting}
+        meeting={{ ...meeting, endUtc: ends.endUtc }}
         extra={
           <>
             {locked && (
@@ -559,6 +630,7 @@ function RoomShell({
         }
       />
       <ConnectionBanner />
+      <EndTimeBanner ends={ends} setEnds={setEnds} tz={meeting.timeZoneId || 'Asia/Kolkata'} extend={effectiveBackend.host?.extend} onEndNow={effectiveBackend.host ? () => setEnding(true) : undefined} />
       {recording.banner}
       <div className="flex min-h-0 flex-1 gap-3 px-3 pb-1 sm:px-4">
         <main className="relative min-w-0 flex-1" aria-label="Participants' video">
@@ -620,7 +692,7 @@ function RoomShell({
         extra={recording.control}
       />
       {recording.dialogs}
-      {backend.share && <ShareLinkDialog open={inviting} onClose={() => setInviting(false)} meetingId={backend.share.meetingId} title={meeting.title} />}
+      {backend.share && <ShareLinkDialog open={inviting} onClose={() => setInviting(false)} meetingId={backend.share.meetingId} title={meeting.title} customer={backend.share.customer} guests={backend.share.guests} customerMeeting={meeting.categoryGroup === 'CUSTOMER' && !backend.share.noCustomer} />}
       {effectiveBackend.host && (
         <ConfirmDialog
           open={ending}
@@ -629,7 +701,7 @@ function RoomShell({
           confirmLabel="End for all"
           onConfirm={async () => {
             await effectiveBackend.host!.end()
-            onEnded()
+            finish('host')
           }}
         >
           <p>Everyone is disconnected and the meeting is marked as completed. This cannot be undone.</p>
@@ -754,6 +826,95 @@ function ConnectionBanner() {
   return null
 }
 
+// ---- Scheduled end (GoodDay #14208) ----------------------------------------------------------------------------------
+
+/** The meeting's scheduled end and automatic end, kept current when a host extends it (data message "end-changed"). */
+function useEndTimes(meeting: RoomMeetingInfo) {
+  const room = useRoomContext()
+  const toast = useToast()
+  const [ends, setEnds] = useState<EndTimes>({ endUtc: meeting.endUtc, autoEndUtc: meeting.autoEndUtc ?? null })
+  useEffect(() => {
+    const onData = (payload: Uint8Array, _p?: RemoteParticipant, _k?: unknown, topic?: string) => {
+      if (topic !== TOPIC_NOTICE) return
+      try {
+        const d = JSON.parse(decoder.decode(payload)) as { type?: string; endUtc?: string; autoEndUtc?: string | null; minutes?: number }
+        if (d.type !== 'end-changed' || !d.endUtc) return
+        setEnds({ endUtc: d.endUtc, autoEndUtc: d.autoEndUtc ?? null })
+        toast.success(d.minutes ? `The meeting was extended by ${d.minutes} min.` : 'The meeting was extended.')
+      } catch {
+        /* ignore */
+      }
+    }
+    room.on(RoomEvent.DataReceived, onData)
+    return () => {
+      room.off(RoomEvent.DataReceived, onData)
+    }
+  }, [room, toast])
+  return [ends, setEnds] as const
+}
+
+function mmss(ms: number) {
+  const s = Math.max(0, Math.ceil(ms / 1000))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+const END_WARNING_MS = 5 * 60_000
+
+/**
+ * From 5 minutes before the scheduled end: "Meeting ends in m:ss". After it: "Scheduled time is up - the meeting ends
+ * automatically in m:ss" (when the server will end it) with Extend / End now for hosts. Nobody is cut off without warning.
+ */
+function EndTimeBanner({ ends, setEnds, extend, onEndNow, tz }: {
+  ends: EndTimes
+  setEnds: (e: EndTimes) => void
+  extend?: (minutes: number) => Promise<EndTimes>
+  onEndNow?: () => void
+  tz: string
+}) {
+  const toast = useToast()
+  const [now, setNow] = useState(() => Date.now())
+  const [busy, setBusy] = useState(false)
+  const end = parseUtc(ends.endUtc).getTime()
+  const auto = ends.autoEndUtc ? parseUtc(ends.autoEndUtc).getTime() : null
+  const show = now >= end - END_WARNING_MS
+  useEffect(() => {
+    // Tick every second only while the banner is (nearly) on screen; otherwise wake up shortly before it is due.
+    const wait = end - END_WARNING_MS - Date.now()
+    const t = wait > 1000 ? window.setTimeout(() => setNow(Date.now()), Math.min(wait, 2 ** 31 - 1)) : window.setInterval(() => setNow(Date.now()), 1000)
+    return () => (wait > 1000 ? window.clearTimeout(t) : window.clearInterval(t))
+  }, [end, show])
+  if (!show) return null
+  const over = now >= end
+  const doExtend = async (minutes: number) => {
+    if (!extend) return
+    setBusy(true)
+    try {
+      setEnds(await extend(minutes)) // everyone, the host included, also gets the "end-changed" notice (one toast)
+    } catch (e) {
+      toast.error(errorMessage(e, 'The meeting could not be extended.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const text = !over
+    ? `This meeting is scheduled to end at ${formatTime(ends.endUtc, tz)} (in ${mmss(end - now)}).`
+    : auto
+      ? `Scheduled time is up. The meeting ends automatically in ${mmss(auto - now)}${extend ? ' unless you extend it' : ' unless the host extends it'}.`
+      : "This meeting's scheduled time is up. The call keeps going until a host ends it."
+  return (
+    <div role="status" className={cn('mx-3 mb-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 rounded-lg px-4 py-2 text-[13px] text-white sm:mx-4', over ? 'bg-[#B45309]' : 'bg-white/10')} data-testid="end-time-banner" data-over={over || undefined}>
+      <span className="tabular-nums">{text}</span>
+      {extend && (
+        <span className="flex items-center gap-2">
+          <button type="button" disabled={busy} className="rounded-full bg-white/15 px-3 py-1 text-[12.5px] font-semibold hover:bg-white/25 disabled:opacity-60" onClick={() => void doExtend(15)} data-testid="extend-15">Extend 15 min</button>
+          <button type="button" disabled={busy} className="rounded-full bg-white/15 px-3 py-1 text-[12.5px] font-semibold hover:bg-white/25 disabled:opacity-60" onClick={() => void doExtend(30)} data-testid="extend-30">30 min</button>
+          {over && onEndNow && <button type="button" className="rounded-full bg-[#DC2626] px-3 py-1 text-[12.5px] font-semibold hover:brightness-110" onClick={onEndNow} data-testid="end-now">End now</button>}
+        </span>
+      )}
+    </div>
+  )
+}
+
 // ---- Stage and tiles -------------------------------------------------------------------------------------------------
 
 function Stage({ layout }: { layout: 'grid' | 'speaker' }) {
@@ -772,7 +933,11 @@ function Stage({ layout }: { layout: 'grid' | 'speaker' }) {
   }, [speakers])
 
   const screen = tracks.find((t) => isTrackReference(t) && t.source === Track.Source.ScreenShare)
-  let focus: TrackReferenceOrPlaceholder | undefined = screen
+  // The tile's expand button (LiveKit FocusToggle) pins a track in the layout context: the pinned tile takes the stage
+  // until the same button is pressed again. Ignored once that participant/track has gone.
+  const pinned = usePinnedTracks()[0]
+  const pinnedLive = pinned && tracks.find((t) => t.participant.identity === pinned.participant.identity && t.source === pinned.source)
+  let focus: TrackReferenceOrPlaceholder | undefined = pinnedLive ?? screen
   if (!focus && layout === 'speaker' && tracks.length > 1) {
     const cams = tracks.filter((t) => t.source === Track.Source.Camera)
     focus = cams.find((t) => t.participant.identity === lastSpeaker) ?? cams.find((t) => !t.participant.isLocal) ?? cams[0]
@@ -806,11 +971,13 @@ function Tile({ trackRef: given }: { trackRef?: TrackReferenceOrPlaceholder }) {
   const showVideo = isTrackReference(trackRef) && !videoMuted
   const { role, type } = participantRole(p)
   const name = p.name || p.identity
+  const videoEl = useRef<HTMLVideoElement>(null)
+  useScreenShareRecovery(screen && !p.isLocal && isTrackReference(trackRef) ? trackRef.publication : undefined, videoEl)
 
   return (
     <ParticipantTile trackRef={trackRef} data-testid={screen ? 'tile-screen' : 'tile'} data-identity={p.identity}>
       {showVideo ? (
-        <VideoTrack trackRef={trackRef} data-testid={screen ? 'video-screen' : 'video-camera'} />
+        <VideoTrack ref={videoEl} trackRef={trackRef} data-testid={screen ? 'video-screen' : 'video-camera'} />
       ) : (
         <div className="oic-tile-placeholder">
           <span className="oic-tile-avatar">{initialsOf(name)}</span>
@@ -842,6 +1009,42 @@ function Tile({ trackRef: given }: { trackRef?: TrackReferenceOrPlaceholder }) {
       </div>
     </ParticipantTile>
   )
+}
+
+/**
+ * A remote screen share that shows no picture (13 Nov 2026, live log: an iPhone/Safari that joined while someone was already
+ * presenting was subscribed to the share by the server but never showed it). Every 2 s while no frame has arrived: make
+ * sure it is subscribed and the element is playing (Safari can leave a newly attached video paused); after ~6 s without a
+ * frame, re-subscribe (fresh negotiation + keyframe from the SFU) - at most 3 times. Never touches a share that is
+ * rendering, never restarts the presenter's share, never creates a second track.
+ */
+function useScreenShareRecovery(pub: TrackPublication | undefined, el: React.RefObject<HTMLVideoElement | null>) {
+  useEffect(() => {
+    if (!(pub instanceof RemoteTrackPublication)) return
+    let ticks = 0
+    let resubscribes = 0
+    const t = window.setInterval(() => {
+      const v = el.current
+      if (v && v.videoWidth > 0) {
+        if (v.paused) void v.play().catch(() => undefined)
+        ticks = 0
+        return
+      }
+      if (!pub.isSubscribed) {
+        pub.setSubscribed(true)
+        return
+      }
+      if (v?.paused) void v.play().catch(() => undefined)
+      if (++ticks >= 3 && resubscribes < 3) {
+        ticks = 0
+        resubscribes++
+        console.warn(`[oic] screen share ${pub.trackSid} shows no picture - re-subscribing (${resubscribes}/3)`)
+        pub.setSubscribed(false)
+        window.setTimeout(() => pub.setSubscribed(true), 500)
+      }
+    }, 2000)
+    return () => window.clearInterval(t)
+  }, [pub, el])
 }
 
 // ---- Controls --------------------------------------------------------------------------------------------------------
@@ -958,7 +1161,7 @@ function ControlBar({
     </button>
   )
   return (
-    <nav aria-label="Meeting controls" className="oic-controls flex shrink-0 items-center justify-between gap-2 px-2 sm:h-20 sm:px-5 [@media(max-height:500px)]:h-16" data-compact={compact || undefined}>
+    <nav aria-label="Meeting controls" className="oic-controls flex shrink-0 items-center justify-between gap-2 px-2 sm:h-[68px] sm:px-5 [@media(max-height:500px)]:h-14" data-compact={compact || undefined}>
       {!compact && <div className="hidden w-48 lg:block" />}
       <div className="flex flex-1 items-center justify-center gap-1.5 sm:gap-2.5">
         {connection.canPublish && (
@@ -1010,26 +1213,40 @@ function ControlBar({
   )
 }
 
-/** Bottom sheet with the less frequent controls on phones. Using any control closes it. */
+/**
+ * Bottom sheet with the less frequent controls on phones. Closed by its Close button, a tap anywhere outside it, Escape,
+ * or using any control. Rendered through a portal into the room element: the toolbar has backdrop-filter, which makes it
+ * the containing block of "position: fixed" children, so inside it the "full-screen" backdrop only covered the toolbar
+ * and tapping the video did nothing - on an iPhone there was no way to close the sheet (GoodDay MaXW9q, reopened 13 Nov).
+ */
 function MoreSheet({ onClose, children }: { onClose: () => void; children: ReactNode }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
-  return (
-    <div className="fixed inset-0 z-30" data-testid="more-sheet">
-      <button type="button" aria-label="Close" className="absolute inset-0 bg-black/40" onClick={onClose} />
+  const target = (typeof document !== 'undefined' && document.querySelector<HTMLElement>('.oic-room')) || document.body
+  return createPortal(
+    <div className="fixed inset-0 z-40" data-testid="more-sheet">
+      <button type="button" aria-label="Close more options" className="absolute inset-0 bg-black/40" onClick={onClose} data-testid="more-sheet-backdrop" />
       <div
         role="dialog"
         aria-label="More options"
-        className="oic-panel oic-sheet absolute inset-x-2 bottom-2 rounded-2xl p-4"
+        className="oic-panel oic-sheet absolute inset-x-2 bottom-2 rounded-2xl px-4 pb-4 pt-2"
         onClickCapture={(e) => (e.target as HTMLElement).closest('button') && window.setTimeout(onClose, 0)}
       >
-        <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-white/25" aria-hidden />
+        <div className="relative mb-2 flex h-11 items-center justify-center">
+          <div className="h-1 w-10 rounded-full bg-white/25" aria-hidden />
+          <button type="button" onClick={onClose} aria-label="Close" data-testid="more-sheet-close"
+            className="absolute right-0 top-0 inline-flex size-11 items-center justify-center rounded-full text-white/80 hover:bg-white/10 hover:text-white">
+            <X className="size-5" />
+          </button>
+        </div>
         <div className="grid grid-cols-3 gap-3">{children}</div>
+        <SupportLine className="mt-4 border-t border-white/10 pt-3" />
       </div>
-    </div>
+    </div>,
+    target,
   )
 }
 

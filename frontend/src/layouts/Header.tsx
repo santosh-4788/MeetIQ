@@ -70,11 +70,11 @@ export function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
         {can('meetings.create') && (
           <>
             <span className="hidden sm:block">
-              <ButtonLink to="/schedule" leftIcon={<Plus className="size-4" />} className="btn-shine">
-                New Meeting
+              <ButtonLink to="/schedule" leftIcon={<Plus className="size-4" />} className="btn-shine" data-testid="header-schedule">
+                Schedule meeting
               </ButtonLink>
             </span>
-            <ButtonLink to="/schedule" aria-label="New meeting" title="New meeting" className="size-10 px-0 sm:hidden">
+            <ButtonLink to="/schedule" aria-label="Schedule meeting" title="Schedule meeting" className="size-10 px-0 sm:hidden">
               <Plus className="size-5" />
             </ButtonLink>
           </>

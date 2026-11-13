@@ -123,9 +123,10 @@ public sealed class MediaVerifier(string ffmpegPath, string ffprobePath, bool lo
     /// readable with any media player or ffprobe, so the recording is identifiable without the on-disk path or
     /// filename itself ever naming the meeting (the path stays an opaque, random key by design).
     /// </summary>
-    public async Task<FfmpegRun> TagMetadataAsync(string sourcePath, string outputPath, string meetingCode, CancellationToken ct) =>
+    public async Task<FfmpegRun> TagMetadataAsync(string sourcePath, string outputPath, string meetingCode, CancellationToken ct, string? prarambhMainId = null) =>
         await RunAsync(ffmpegPath, ["-hide_banner", "-nostdin", "-y", "-loglevel", "warning", "-i", sourcePath, "-map", "0", "-c", "copy",
-            "-movflags", "+faststart", "-metadata", $"title={meetingCode}", "-metadata", $"comment=OneInsure Connect meeting {meetingCode}",
+            "-movflags", "+faststart", "-metadata", $"title={(prarambhMainId is null ? meetingCode : $"{prarambhMainId}-{meetingCode}")}",
+            "-metadata", $"comment=OneInsure Connect meeting {meetingCode}{(prarambhMainId is null ? "" : $"; Prarambh Main ID {prarambhMainId}")}",
             "-f", "mp4", outputPath], ct);
 
     /// <summary>The real pixel dimensions of a video's first stream - used to recover what canvas size a recording

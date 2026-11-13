@@ -1,6 +1,9 @@
 ﻿import { useEffect, useState, type FormEvent } from 'react'
-import { CircleAlert, Mail, UserRound } from 'lucide-react'
+import { CircleAlert, Mail, UserPlus, UserRound } from 'lucide-react'
 import { adminApi, type AdminUser, type CreatedUser, type Role } from '../../api/admin'
+import { employeesApi } from '../../api/employees'
+import { orgApi } from '../../api/org'
+import { EmployeeFormDrawer } from '../employees/EmployeeForm'
 import { fieldErrors } from '../../api/types'
 import { useAuth } from '../../auth/AuthContext'
 import { EmployeePicker, type PickedEmployee } from '../../components/EmployeePicker'
@@ -81,6 +84,49 @@ export function RolePicker({ value, onChange, error, disabled }: { value: string
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
 
 /**
+ * "Add new employee" next to an employee picker: opens the normal employee form (same validation and audit as Employee
+ * Management), optionally with the account's e-mail prefilled, and hands the saved employee back to be picked. Without this,
+ * an account for someone not yet in the employee master could only be created "e-mail only" - and such accounts cannot
+ * schedule meetings or have a calendar. Needs employees.manage (Admin, HR); hidden otherwise.
+ */
+function AddEmployee({ email, onAdded }: { email?: string; onAdded: (e: PickedEmployee) => void }) {
+  const { can } = useAuth()
+  const [open, setOpen] = useState(false)
+  const masters = useLoader(
+    async () => {
+      if (!open) return null
+      const [departments, designations, branches] = await Promise.all([orgApi.list('departments', true), orgApi.list('designations', true), orgApi.list('branches', true)])
+      return { departments, designations, branches }
+    },
+    [open],
+    'Unable to load departments, designations and branches.',
+  )
+  if (!can('employees.manage')) return null
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)} className="inline-flex items-center gap-1 self-end text-[12.5px] font-semibold text-brand-700 hover:underline" data-testid="add-new-employee">
+        <UserPlus className="size-3.5" aria-hidden /> Add new employee
+      </button>
+      <EmployeeFormDrawer
+        employee={open ? 'new' : null}
+        masters={masters.data ?? null}
+        defaults={email ? { officialEmail: email } : undefined}
+        onClose={async (savedId) => {
+          setOpen(false)
+          if (!savedId) return
+          try {
+            const d = await employeesApi.get(savedId)
+            onAdded({ id: savedId, displayName: d.employee.displayName ?? d.employee.firstName, employeeCode: d.employee.employeeCode })
+          } catch {
+            onAdded({ id: savedId, displayName: 'New employee' })
+          }
+        }}
+      />
+    </>
+  )
+}
+
+/**
  * Creates a sign-in account (POST /admin/users) and shows the one-time password once.
  * With `employee` the account is linked to that employee (Employee Management); otherwise the
  * administrator picks an employee or enters an e-mail address.
@@ -110,6 +156,8 @@ export function CreateUserDialog({ open, onClose, employee }: { open: boolean; o
 
   async function submit(e: FormEvent) {
     e.preventDefault()
+    // React submit events bubble through portals: the inline "Add new employee" form is not this form.
+    if (e.target !== e.currentTarget) return
     const target = employee ?? (mode === 'employee' ? picked : null)
     const v: Record<string, string> = {}
     if (!employee && mode === 'employee' && !picked) v.employeeId = 'Choose an employee.'
@@ -182,18 +230,29 @@ export function CreateUserDialog({ open, onClose, employee }: { open: boolean; o
                 ))}
               </div>
               {mode === 'employee' ? (
-                <EmployeePicker label="Employee" value={picked} onChange={(p) => (setPicked(p), setErrors({}))} error={errors.employeeId} hint="The account uses the employee's official e-mail." />
+                <div className="flex flex-col gap-1.5">
+                  <EmployeePicker label="Employee" value={picked} onChange={(p) => (setPicked(p), setErrors({}))} error={errors.employeeId}
+                    hint="The account uses the employee's official e-mail. Not in the list yet? Add the employee first." />
+                  <AddEmployee onAdded={(p) => (setPicked(p), setErrors({}))} />
+                </div>
               ) : (
-                <TextField
-                  label="E-mail address"
-                  type="email"
-                  autoComplete="off"
-                  value={email}
-                  onChange={(e) => (setEmail(e.target.value), setErrors({}))}
-                  error={errors.email}
-                  placeholder="name@oneinsure.com"
-                  hint="For service or external accounts that are not in the employee master."
-                />
+                <>
+                  <TextField
+                    label="E-mail address"
+                    type="email"
+                    autoComplete="off"
+                    value={email}
+                    onChange={(e) => (setEmail(e.target.value), setErrors({}))}
+                    error={errors.email}
+                    placeholder="name@oneinsure.com"
+                    hint="For service or external accounts that are not in the employee master. If an employee with this official e-mail exists, the account is linked to them automatically."
+                  />
+                  <div data-testid="email-only-warning">
+                    <Alert tone="warning">
+                      An e-mail-only account cannot schedule meetings, use the calendar or appear in availability. For a member of staff, choose <strong>Employee</strong> (use “Add new employee” if they are not in the list yet).
+                    </Alert>
+                  </div>
+                </>
               )}
             </>
           )}
@@ -328,14 +387,17 @@ export function LinkEmployeeDialog({ user, onClose }: { user: AdminUser | null; 
             <p className="font-semibold text-warning-ink">Not linked: this account cannot schedule meetings or use the calendar.</p>
           )}
         </div>
-        <EmployeePicker
-          label={linked ? 'New employee' : 'Employee'}
-          value={picked}
-          onChange={(p) => (setPicked(p), setFieldError(undefined))}
-          excludeIds={user?.employeeId ? [user.employeeId] : []}
-          error={fieldError}
-          hint="An employee can be linked to one account only. Its employee code becomes this account's sign-in code."
-        />
+        <div className="flex flex-col gap-1.5">
+          <EmployeePicker
+            label={linked ? 'New employee' : 'Employee'}
+            value={picked}
+            onChange={(p) => (setPicked(p), setFieldError(undefined))}
+            excludeIds={user?.employeeId ? [user.employeeId] : []}
+            error={fieldError}
+            hint="An employee can be linked to one account only. Its employee code becomes this account's sign-in code. Not in the list yet? Add the employee."
+          />
+          <AddEmployee email={user?.email} onAdded={(p) => (setPicked(p), setFieldError(undefined))} />
+        </div>
       </div>
     </Dialog>
   )

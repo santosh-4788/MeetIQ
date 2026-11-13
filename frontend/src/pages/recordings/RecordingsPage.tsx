@@ -98,6 +98,8 @@ function RecordingLibrary() {
             <FilterSelect aria-label="Meeting category" value={category} onChange={(e) => setCategory(e.target.value)}>
               <option value="">All categories</option>
               <option value="CUSTOMER">Customer meetings</option>
+                <option value="CUSTOMER_PLVC_IDENTIFIED">Customer PLVC — identified</option>
+                <option value="CUSTOMER_PLVC_UNIDENTIFIED">Customer PLVC — unidentified</option>
               <option value="INTERNAL">Internal meetings</option>
               <option value="TRAINING">Training</option>
               <option value="REVIEW">Review</option>
@@ -241,6 +243,8 @@ function Row({ r, tz, onDelete }: { r: RecordingItem; tz: string; onDelete?: () 
           <span className="font-mono">{r.meeting.meetingCode}</span>
           <CategoryBadge group={r.meeting.categoryGroup} />
           {r.customer && <span>· {r.customer.name}{r.customer.reference ? ` (${r.customer.reference})` : ''}</span>}
+          {r.prarambhMainId && <span className="font-mono">· Prarambh {r.prarambhMainId}</span>}
+              {r.plvcIdentification === 'UNIDENTIFIED' && <span className="font-semibold text-warning-ink" data-testid="rec-unidentified">· Unidentified PLVC</span>}
           {r.legalHold && <Badge tone="warning"><Gavel className="size-3" /> Legal hold</Badge>}
         </div>
       </td>
@@ -454,6 +458,8 @@ function RecordingDetailPage() {
               <Info label="Owner (meeting creator)">{r.owner.name}{r.owner.employeeCode ? ` · ${r.owner.employeeCode}` : ''}</Info>
               <Info label="Department">{r.owner.department ?? '—'}</Info>
               {r.customer && <Info label="Customer">{r.customer.name}{r.customer.reference ? ` (${r.customer.reference})` : ''}</Info>}
+              {r.prarambhMainId && <Info label="Prarambh Main ID">{r.prarambhMainId}</Info>}
+            {r.plvcIdentification === 'UNIDENTIFIED' && <Info label="Prarambh Main ID">Unidentified PLVC (no ID when it was recorded)</Info>}
               <Info label="Recorded">{formatDateTime(r.startedUtc, tz)} – {formatDateTime(r.endedUtc, tz)}</Info>
               <Info label="Started by">{d.startedBy ?? 'Automatically (mandatory policy)'}</Info>
               {d.stopReason && <Info label="Stopped">{d.stopReason}</Info>}

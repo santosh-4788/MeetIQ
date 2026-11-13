@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
+﻿import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, CalendarCheck, CircleCheck, Info, LoaderCircle, Repeat, Save, Trash2, TriangleAlert, UserPlus, X } from 'lucide-react'
 import {
@@ -28,6 +28,8 @@ import { CustomerPicker, type PickedCustomer } from '../customers/CustomerPicker
 import { ConflictDialog, ConflictList } from './Conflicts'
 import { CUSTOMER_CATEGORIES, INTERNAL_CATEGORIES, combineMeetingDetails, conflictLabel, dbCategoryLabel, isCustomerCategory, useTimeZone } from './meta'
 import { useAvailability, type AvailabilityState } from './useAvailability'
+import { newParticipant, ParticipantRows, participantsPayload, PrarambhField, validatePlvc, type ParticipantRow } from './PlvcFields'
+import './schedule.css'
 
 /** Whether a meeting category can be recorded (GET /meetings/recording-options). */
 type RecordingOption = { category: string; policyCode: string; policyTitle: string; enabled: boolean; requirement: string }
@@ -95,7 +97,7 @@ function toUtc(form: Pick<Form, 'date' | 'time' | 'duration'>, tz: string) {
 
 // ---- Pages -----------------------------------------------------------------------
 
-/** /schedule — new meeting (meetings.create). `?category=CUSTOMER_PLVC` preselects a category. */
+/** /schedule â€” new meeting (meetings.create). `?category=CUSTOMER_PLVC` preselects a category. */
 export function ScheduleMeetingPage() {
   const { user } = useAuth()
   return (
@@ -104,7 +106,7 @@ export function ScheduleMeetingPage() {
       {user?.employeeLinked === false ? (
         <Alert tone="warning" title="Your account is not linked to an employee record">
           Meetings are scheduled for employees, so you cannot schedule one yet. Ask an administrator to link your account in
-          Administration → Users &amp; roles (action "Link to employee"), then reload this page.
+          Administration â†’ Users &amp; roles (action "Link to employee"), then reload this page.
         </Alert>
       ) : (
         <MeetingForm />
@@ -113,7 +115,7 @@ export function ScheduleMeetingPage() {
   )
 }
 
-/** /meetings/:id/edit — edit or reschedule (host, organiser or meetings.view.all). */
+/** /meetings/:id/edit â€” edit or reschedule (host, organiser or meetings.view.all). */
 export function EditMeetingPage() {
   const { id = '' } = useParams()
   const { can } = useAuth()
@@ -123,7 +125,7 @@ export function EditMeetingPage() {
     <div className="flex flex-col gap-5">
       <PageHeader
         title={m?.status === 'DRAFT' ? 'Edit draft meeting' : 'Edit or reschedule meeting'}
-        description={m ? `${m.title} · ${m.meetingCode}` : undefined}
+        description={m ? `${m.title} Â· ${m.meetingCode}` : undefined}
         actions={<ButtonLink to={`/meetings/${id}`} variant="secondary" leftIcon={<ArrowLeft className="size-4" />}>Back to meeting</ButtonLink>}
       />
       {meeting.error || (!m && !meeting.loading) ? (
@@ -189,7 +191,7 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
     setErrors((x) => ({ ...x, [k]: '' }))
   }
 
-  // Which meeting types can be recorded at all (Administration → Recording policies). If this type's policy is
+  // Which meeting types can be recorded at all (Administration â†’ Recording policies). If this type's policy is
   // switched off, the recording choices are disabled with an explanation instead of silently doing nothing later.
   const [recordingOptions, setRecordingOptions] = useState<RecordingOption[] | null>(null)
   useEffect(() => {
@@ -206,6 +208,11 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
   }, [recordingOff, form.recordingPolicy])
 
   const customerMeeting = isCustomerCategory(form.category)
+  // Customer â€“ PLVC (new meetings): Prarambh Main ID + participant rows instead of picking a customer record (12 Nov 2026).
+  const plvcNew = !existing && form.category === 'CUSTOMER_PLVC'
+  const [prarambh, setPrarambh] = useState('')
+  const [plvcRows, setPlvcRows] = useState<ParticipantRow[]>([newParticipant(0)])
+  const [plvcSeq, setPlvcSeq] = useState(1)
   const times = toUtc(form, tz)
   const editable = !existing || existing.status === 'DRAFT' || existing.status === 'SCHEDULED'
 
@@ -233,7 +240,8 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
     if (!times) v.startUtc = 'Enter a valid date and start time.'
     else if (status !== 'DRAFT' && (existing?.status !== 'SCHEDULED' || times.startUtc !== parseUtc(existing.startUtc).toISOString()) && parseUtc(times.startUtc).getTime() < Date.now() - 60_000)
       v.startUtc = 'The start time is in the past. Choose a future time.'
-    if (!existing && customerMeeting && !customer) v.customerId = 'Select the customer for a customer meeting.'
+    if (plvcNew) Object.assign(v, validatePlvc(prarambh, plvcRows))
+    else if (!existing && customerMeeting && !customer) v.customerId = 'Select the customer for a customer meeting.'
     guests.forEach((g, i) => {
       if (!g.name.trim()) v[`guests[${i}].name`] = 'Guest name is required.'
       if (!EMAIL_RE.test(g.email.trim())) v[`guests[${i}].email`] = 'Enter a valid e-mail address.'
@@ -292,9 +300,10 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
         ...common,
         timeZoneId: tz,
         employeeIds: people.map((p) => p.id),
-        customerId: isCustomerCategory(form.category) ? customer?.id ?? null : null,
+        customerId: isCustomerCategory(form.category) && !plvcNew ? customer?.id ?? null : null,
         guests: guests.map((g) => ({ name: g.name.trim(), email: g.email.trim() })),
         recurrence: recurrencePayload(form.recurrence),
+        ...(plvcNew ? { prarambhMainId: prarambh.trim(), participants: participantsPayload(plvcRows) } : {}),
       }
       const r = await meetingsApi.createRecurring(body)
       toast.success(`${r.occurrences.length} meeting${r.occurrences.length === 1 ? '' : 's'} scheduled. Invitations are on their way.`)
@@ -305,8 +314,9 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
         timeZoneId: tz,
         status: status === 'DRAFT' ? 'DRAFT' : 'SCHEDULED',
         employeeIds: people.map((p) => p.id),
-        customerId: isCustomerCategory(form.category) ? customer?.id ?? null : null,
+        customerId: isCustomerCategory(form.category) && !plvcNew ? customer?.id ?? null : null,
         guests: guests.map((g) => ({ name: g.name.trim(), email: g.email.trim() })),
+        ...(plvcNew ? { prarambhMainId: prarambh.trim(), participants: participantsPayload(plvcRows) } : {}),
       }
       const r = await meetingsApi.create(body)
       finish(r.id, r.warnings, status === 'DRAFT' ? `Draft saved (${r.meetingCode}).` : `Meeting ${r.meetingCode} scheduled. Invitations are on their way.`)
@@ -371,13 +381,14 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
   const rescheduling = existing?.status === 'SCHEDULED' && times && (times.startUtc !== parseUtc(existing.startUtc).toISOString() || times.endUtc !== parseUtc(existing.endUtc).toISOString())
 
   return (
-    <form onSubmit={onSubmit} onKeyDown={onKeyDown} noValidate className="grid grid-cols-1 gap-5 xl:grid-cols-3">
-      <div className="flex min-w-0 flex-col gap-5 xl:col-span-2">
+    <form onSubmit={onSubmit} onKeyDown={onKeyDown} noValidate className="oic-sched grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_340px]" data-testid="schedule-form">
+      <div className="flex min-w-0 flex-col gap-4">
         {error && <Alert tone="danger">{error}</Alert>}
 
         <Card>
           <CardHeader title="Meeting details" />
           <div className="flex flex-col gap-4 px-5 pb-5">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <TextField label="Title" value={form.title} onChange={(e) => set('title', e.target.value)} error={errors.title} maxLength={200} autoComplete="off" placeholder="e.g. Weekly claims review" data-autofocus />
             <SelectField
               label="Category"
@@ -409,13 +420,22 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
                 {INTERNAL_FORMATS.map((c) => <option key={c} value={c}>{dbCategoryLabel[c]}</option>)}
               </SelectField>
             )}
+            </div>
 
             {customerMeeting && (
-              <div className="flex flex-col gap-4 rounded-md border border-line bg-surface-muted p-4">
-                {existing ? (
+              <div className="flex flex-col gap-3 rounded-xl border border-line bg-surface-muted p-3.5">
+                {plvcNew ? (
+                  <div className="flex flex-col gap-4" data-testid="plvc-fields">
+                    <PrarambhField value={prarambh} onChange={(v) => { setPrarambh(v); setErrors((x) => ({ ...x, prarambhMainId: '' })) }} error={errors.prarambhMainId || undefined} />
+                    <ParticipantRows rows={plvcRows} errors={errors} nextKey={() => { setPlvcSeq((n) => n + 1); return plvcSeq }}
+                      onChange={(r) => { setPlvcRows(r); setErrors((x) => Object.fromEntries(Object.entries(x).filter(([k]) => !k.startsWith('participants')))) }}
+                      hint="The first participant is the customer. Every participant gets a personal, expiring join link by e-mail." />
+                  </div>
+                ) : existing ? (
                   <div>
+                    {existing.prarambhMainId && <p className="mb-2 text-[13px] text-ink"><span className="font-semibold">Prarambh Main ID:</span> <span data-testid="prarambh-readonly">{existing.prarambhMainId}</span></p>}
                     <p className="text-[13px] font-semibold text-ink">Customer</p>
-                    <p className="mt-1 text-[13.5px] text-ink">{existing.customer?.name ?? '—'}{existing.customer?.customerRef && <span className="ml-1.5 text-[12px] text-ink-secondary">{existing.customer.customerRef}</span>}</p>
+                    <p className="mt-1 text-[13.5px] text-ink">{existing.customer?.name ?? 'â€”'}{existing.customer?.customerRef && <span className="ml-1.5 text-[12px] text-ink-secondary">{existing.customer.customerRef}</span>}</p>
                     <p className="text-[12px] text-ink-secondary">The customer of a meeting cannot be changed.</p>
                   </div>
                 ) : (
@@ -445,7 +465,7 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
               onChange={(e) => set('details', e.target.value)}
               error={errors.details}
               maxLength={4000}
-              rows={5}
+              rows={3}
               placeholder="Enter the meeting agenda, discussion topics, purpose and any additional information..."
             />
           </div>
@@ -525,7 +545,7 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
                 <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
                 <span>
                   {recordingOff
-                    ? <>Recording is switched off for <strong className="font-semibold">{recordingOption?.policyTitle}</strong>, the recording policy used by this meeting type. An administrator can turn it on in Administration → Recording policies.</>
+                    ? <>Recording is switched off for <strong className="font-semibold">{recordingOption?.policyTitle}</strong>, the recording policy used by this meeting type. An administrator can turn it on in Administration â†’ Recording policies.</>
                     : recordingOption
                       ? <>Recording follows the <strong className="font-semibold">{recordingOption.policyTitle}</strong> policy: participants see the recording notice in the meeting, and the host starts and stops recording.</>
                       : 'Participants see the recording notice in the meeting, and the host starts and stops recording.'}
@@ -537,8 +557,8 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
         </Card>
       </div>
 
-      <div className="flex min-w-0 flex-col gap-5">
-        <div className="flex flex-col gap-5 xl:sticky xl:top-[88px]">
+      <div className="flex min-w-0 flex-col gap-4">
+        <div className="flex flex-col gap-4 lg:sticky lg:top-[88px]">
           <AvailabilityCard availability={availability} tz={tz} draft={existing?.status === 'DRAFT'} />
           <Card>
             <div className="flex flex-col gap-2 p-5">
@@ -631,7 +651,7 @@ function OccurrenceConflictDialog({
         {(occConflicts ?? []).map((o) => (
           <li key={o.seq} className="rounded-md border border-line bg-surface-muted p-3">
             <p className="text-[13px] font-semibold text-ink">
-              Occurrence {o.seq} · {formatDate(o.startUtc, tz)}, {formatTime(o.startUtc, tz)}
+              Occurrence {o.seq} Â· {formatDate(o.startUtc, tz)}, {formatTime(o.startUtc, tz)}
             </p>
             <ConflictList conflicts={o.conflicts} tz={tz} />
           </li>
@@ -650,10 +670,13 @@ function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft;
   const set = <K extends keyof RecurrenceDraft>(k: K, v: RecurrenceDraft[K]) => onChange({ ...value, [k]: v })
   const toggleDay = (d: Weekday) => set('byWeekdays', value.byWeekdays.includes(d) ? value.byWeekdays.filter((x) => x !== d) : [...value.byWeekdays, d])
 
+  // GoodDay #14213: fields in a row are aligned by their tops (labels on one line, boxes on one line). Bits without a
+  // label of their own (the unit, the radio buttons) sit under an invisible label-height spacer so they line up with the boxes.
+  const spacer = <span className="invisible text-[13px] font-semibold" aria-hidden>.</span>
   return (
-    <div className="flex flex-col gap-4 rounded-md border border-line bg-surface-muted p-4">
-      <div className="flex flex-wrap items-end gap-3">
-        <SelectField label="Frequency" value={value.pattern} onChange={(e) => set('pattern', e.target.value as RecurrenceRule['pattern'])} className="w-40">
+    <div className="flex flex-col gap-4 rounded-md border border-line bg-surface-muted p-4" data-testid="recurrence-editor">
+      <div className="flex flex-wrap items-start gap-3">
+        <SelectField label="Frequency" value={value.pattern} onChange={(e) => set('pattern', e.target.value as RecurrenceRule['pattern'])} className="w-40" data-testid="repeat-frequency">
           <option value="DAILY">Daily</option>
           <option value="WEEKLY">Weekly</option>
           <option value="MONTHLY">Monthly</option>
@@ -665,9 +688,13 @@ function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft;
           max={30}
           value={String(value.interval)}
           onChange={(e) => set('interval', Math.min(30, Math.max(1, Number(e.target.value) || 1)))}
-          hint={PATTERN_LABEL[value.pattern]}
           className="w-28"
+          data-testid="repeat-interval"
         />
+        <div className="flex flex-col gap-1.5">
+          {spacer}
+          <span className="flex h-11 items-center text-[13px] text-ink-secondary" data-testid="repeat-unit">{PATTERN_LABEL[value.pattern]}</span>
+        </div>
       </div>
 
       {value.pattern === 'WEEKLY' && (
@@ -695,11 +722,14 @@ function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft;
       <fieldset>
         <legend className="mb-1.5 text-[13px] font-semibold text-ink">Ends</legend>
         <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="flex h-11 items-center gap-2 text-[13px] text-ink">
-              <input type="radio" checked={value.endType === 'COUNT'} onChange={() => set('endType', 'COUNT')} className="size-4 accent-brand-500" />
-              After
-            </label>
+          <div className="flex items-start gap-3">
+            <div className="flex w-[84px] shrink-0 flex-col gap-1.5 sm:w-24">
+              {spacer}
+              <label className="flex h-11 items-center gap-2 text-[13px] text-ink">
+                <input type="radio" checked={value.endType === 'COUNT'} onChange={() => set('endType', 'COUNT')} className="size-4 accent-brand-500" data-testid="ends-after" />
+                After
+              </label>
+            </div>
             <TextField
               label="Occurrences"
               type="number"
@@ -711,11 +741,14 @@ function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft;
               className="w-28"
             />
           </div>
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="flex h-11 items-center gap-2 text-[13px] text-ink">
-              <input type="radio" checked={value.endType === 'UNTIL'} onChange={() => set('endType', 'UNTIL')} className="size-4 accent-brand-500" />
-              On date
-            </label>
+          <div className="flex items-start gap-3">
+            <div className="flex w-[84px] shrink-0 flex-col gap-1.5 sm:w-24">
+              {spacer}
+              <label className="flex h-11 items-center gap-2 text-[13px] text-ink">
+                <input type="radio" checked={value.endType === 'UNTIL'} onChange={() => set('endType', 'UNTIL')} className="size-4 accent-brand-500" data-testid="ends-on" />
+                On date
+              </label>
+            </div>
             <DateField label="End date" value={value.endUntilDate} onChange={(v) => (set('endType', 'UNTIL'), set('endUntilDate', v))} error={errors['recurrence.endUntilDate']} />
           </div>
         </div>
@@ -836,7 +869,7 @@ function PersonRow({ name, detail, status, onRemove }: { name: string; detail?: 
 }
 
 function PersonStatus({ issues, checked, checking }: { issues: Conflict[]; checked: boolean; checking: boolean }) {
-  if (checking) return <span className="inline-flex items-center gap-1 text-ink-muted"><LoaderCircle className="size-3 animate-spin" aria-hidden /> Checking…</span>
+  if (checking) return <span className="inline-flex items-center gap-1 text-ink-muted"><LoaderCircle className="size-3 animate-spin" aria-hidden /> Checkingâ€¦</span>
   if (!checked) return null
   const blocking = issues.filter((c) => c.type !== 'OUTSIDE_WORKING_HOURS')
   if (blocking.length) return <span className="inline-flex items-center gap-1 font-medium text-danger"><TriangleAlert className="size-3" aria-hidden /> {[...new Set(blocking.map((c) => conflictLabel[c.type]))].join(', ')}</span>
@@ -854,7 +887,7 @@ function AvailabilityCard({ availability, tz, draft }: { availability: Availabil
         {error ? (
           <Alert tone="warning" title="Availability could not be checked">{error}</Alert>
         ) : !checked ? (
-          <p className="text-[13px] text-ink-secondary">{checking ? 'Checking availability…' : 'Enter a date and time to check availability.'}</p>
+          <p className="text-[13px] text-ink-secondary">{checking ? 'Checking availabilityâ€¦' : 'Enter a date and time to check availability.'}</p>
         ) : (
           <>
             {conflicts.length === 0 ? (

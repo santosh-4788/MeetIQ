@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react'
 import type { Participant } from 'livekit-client'
-import type { ChatItem, MuteSource, RoomConnection, WaitingEntry } from '../../api/room'
+import type { CustomerJoinLink } from '../../api/meetings'
+import type { ChatItem, EndTimes, MuteSource, RoomConnection, WaitingEntry } from '../../api/room'
 import type { RecordingBackend } from './RecordingControls'
 
 /** Server calls the room needs. Employees use their session; guests their invitation token. Hosts also get `host`. */
@@ -11,8 +12,11 @@ export type RoomBackend = {
   keepAlive?: () => Promise<unknown>
   /** Recording notice/consent (everyone) and start/stop (hosts). */
   recording?: RecordingBackend
+  /** Asks the API (the source of truth) whether the meeting has ended for everyone - used while reconnecting and when the
+      connection drops, so an ended meeting shows "Meeting ended" instead of "Reconnecting…"/"Connection lost". */
+  hasEnded?: () => Promise<boolean>
   /** Hosts/organiser: the meeting's shareable link (Invite button). `openOnStart` for a meeting just started. */
-  share?: { meetingId: string; openOnStart?: boolean }
+  share?: { meetingId: string; openOnStart?: boolean; customer?: CustomerJoinLink | null; customerMeeting?: boolean; /** PLVC instant: the other participants' personal links. */ guests?: CustomerJoinLink[]; /** Unidentified PLVC: no customer to send a link to. */ noCustomer?: boolean }
   host?: {
     waiting: () => Promise<WaitingEntry[]>
     admit: (entryId: string) => Promise<void>
@@ -22,6 +26,8 @@ export type RoomBackend = {
     requestUnmute: (identity: string) => Promise<void>
     remove: (identity: string, block?: boolean) => Promise<void>
     end: () => Promise<void>
+    /** Pushes the scheduled end (and the automatic end) back by `minutes`. */
+    extend?: (minutes: number) => Promise<EndTimes>
     /** Present only for the literal host (not a co-host): hands host privileges to another employee participant. */
     transferHost?: (identity: string) => Promise<void>
     /** Locked: nobody who hasn't already attended can join. Never disconnects anyone already in. */

@@ -21,7 +21,8 @@ export default defineConfig(({ command }) => ({
     port: 5173,
     allowedHosts,
     proxy: {
-      '/api': { target: apiTarget, changeOrigin: true, secure: false },
+      // '^/api/' (not '/api'): a plain prefix would also proxy the app's own /api-docs page to the API.
+      '^/api/': { target: apiTarget, changeOrigin: true, secure: false },
       '/hubs': { target: apiTarget, ws: true, secure: false },
       // LiveKit signalling through the site's own host/port (API setting LiveKit:PublicUrl = "/"), so browsers on
       // other machines reach the video server via the same HTTPS address; only the media ports need the firewall.

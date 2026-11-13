@@ -89,6 +89,12 @@ export type MeetingDetail = {
   overrideConflictReason: string | null
   purpose: string | null
   policyNumber: string | null
+  /** Customer – PLVC only (digits). */
+  prarambhMainId?: string | null
+  /** V024: IDENTIFIED (has a Prarambh Main ID) / UNIDENTIFIED (started with "Skip details"); null for other categories. */
+  plvcIdentification?: 'IDENTIFIED' | 'UNIDENTIFIED' | null
+  /** Set when the meeting was created by an external portal through the integration API. */
+  integration?: string | null
   department: string | null
   host: { id: string; name: string }
   createdBy: { id: string; name: string }
@@ -149,6 +155,10 @@ export type MeetingCreateInput = {
   policyNumber?: string | null
   overrideConflicts?: boolean
   overrideReason?: string | null
+  /** Customer – PLVC: required, digits only. */
+  prarambhMainId?: string
+  /** Customer – PLVC: name + e-mail rows; the first becomes the customer. */
+  participants?: GuestInput[]
 }
 
 export type Weekday = 'MON' | 'TUE' | 'WED' | 'THU' | 'FRI' | 'SAT' | 'SUN'
@@ -220,7 +230,10 @@ export type Conflict = { employeeId: string; employeeName: string; type: Conflic
 
 export type AvailabilityResult = { available: boolean; conflicts: Conflict[]; warnings: Conflict[] }
 
-export type MeetingScope = 'mine' | 'hosting' | 'attending' | 'all'
+/** A customer's personal join link (/join/{token}); e-mail and mobile from the customer record, for sending it to them. */
+export type CustomerJoinLink = { name: string; joinUrl: string; email?: string | null; mobile?: string | null }
+
+export type MeetingScope ='mine' | 'hosting' | 'attending' | 'all'
 export type MeetingQuery = {
   scope?: MeetingScope
   status?: MeetingState | ''
@@ -261,13 +274,16 @@ export const meetingsApi = {
   removeParticipant: (id: string, participantId: string) =>
     http<void>(`${one(id)}/participants/${encodeURIComponent(participantId)}`, { method: 'DELETE' }),
   /** Start a meeting now (no calendar check, no e-mails). The response carries the shareable link. */
-  instant: (body: InstantMeetingInput) => http<{ id: string; meetingCode: string; kind: 'INSTANT'; link: MeetingLink }>('/meetings/instant', { method: 'POST', body }),
+  instant: (body: InstantMeetingInput) => http<{ id: string; meetingCode: string; kind: 'INSTANT'; link: MeetingLink; customer: CustomerJoinLink | null;
+    prarambhMainId: string | null; participants: (CustomerJoinLink & { type: 'CUSTOMER' | 'GUEST' })[] }>('/meetings/instant', { method: 'POST', body }),
   /** "Join meeting" by code: only meetings the signed-in user can already see. */
   byCode: (code: string) => http<{ id: string }>(`/meetings/by-code/${encodeURIComponent(code)}`),
   /** The meeting's shareable link (created on first request). Hosts, co-hosts and the organiser. */
   link: (id: string) => http<MeetingLink>(`${one(id)}/link`),
   regenerateLink: (id: string) => http<MeetingLink>(`${one(id)}/link/regenerate`, { method: 'POST' }),
   revokeLink: (id: string) => http<void>(`${one(id)}/link/revoke`, { method: 'POST' }),
+  /** Host/organiser of a customer meeting: a fresh personal join link for the customer, to send directly (WhatsApp, e-mail...). */
+  customerLink: (id: string) => http<CustomerJoinLink>(`${one(id)}/link/customer`, { method: 'POST' }),
   /** Live form check; `employeeIds` empty = the signed-in user. */
   availability: (body: { employeeIds: string[]; startUtc: string; endUtc: string; excludeMeetingId?: string }) =>
     http<AvailabilityResult>('/meetings/availability', { method: 'POST', body }),
@@ -358,6 +374,18 @@ export type JoinInfo = {
   displayName: string | null
 }
 
+/** Instant meeting invitation e-mails (13 Nov 2026): delivery per address, and "send again" (a fresh personal link for that person). */
+export type InvitationEmailState = { email: string; status: 'PENDING' | 'SENDING' | 'SENT' | 'FAILED' | 'CANCELLED'; attempts: number; queuedUtc: string; sentUtc: string | null; error: string | null }
+/** V024: add the Prarambh Main ID to an UNIDENTIFIED PLVC meeting (host / organiser / administrator; never overwrites). */
+export const prarambhApi = {
+  set: (id: string, prarambhMainId: string) => http<{ prarambhMainId: string; plvcIdentification: 'IDENTIFIED'; recordingsUpdated: number }>(`/meetings/${encodeURIComponent(id)}/prarambh`, { method: 'POST', body: { prarambhMainId } }),
+}
+
+export const invitationEmailsApi = {
+  status: (id: string) => http<{ items: InvitationEmailState[] }>(`/meetings/${encodeURIComponent(id)}/invitation-emails`).then((r) => r.items),
+  resend: (id: string, email: string) => http<{ email: string; status: string; joinUrl: string }>(`/meetings/${encodeURIComponent(id)}/invitation-emails/resend`, { method: 'POST', body: { email } }),
+}
+
 export const joinApi = {
   get: (token: string) => http<JoinInfo>(`/join/${encodeURIComponent(token)}`),
 }
@@ -371,6 +399,14 @@ export type InstantMeetingInput = {
   audioOnly?: boolean
   waitingRoomEnabled?: boolean
   recordingPolicy?: RecordingPolicy
+  /** Customer meetings (PLVC / general): the customer (crm.Customers PublicId). */
+  customerId?: string
+  /** Customer – PLVC: required, digits only. */
+  prarambhMainId?: string
+  /** Name + e-mail rows (PLVC): the first becomes the customer, the rest guests - each gets a personal join link. */
+  participants?: GuestInput[]
+  /** Customer – PLVC: "Skip details & start meeting" - no ID, no customer, no participants (an UNIDENTIFIED meeting). */
+  skipPlvcDetails?: boolean
 }
 
 export type MeetingLink = { url: string; path: string; createdUtc: string; expiresUtc: string; useCount: number; lastUsedUtc: string | null }

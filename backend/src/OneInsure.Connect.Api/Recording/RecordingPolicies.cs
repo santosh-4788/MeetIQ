@@ -58,6 +58,15 @@ public sealed class PolicyRow
 
     public bool HasPlaceholders => ToGate(MeetingRecordingKind.Internal).HasPlaceholders;
 
+    /// <summary>
+    /// The participant-facing WORDING is confirmed (13 Nov 2026): the whole policy is confirmed, or the notice itself carries a real
+    /// version and an approval reference and no placeholder. Only decides whether hosts see the "wording not confirmed" note - the
+    /// recording gate still uses the full policy status (an APPROVED policy also needs a retention period, which is intentionally unset).
+    /// </summary>
+    public bool NoticeConfirmed => IsConfirmed
+        || (!string.IsNullOrWhiteSpace(PolicyReference) && !NoticeText.Contains(RecordingPolicy.PlaceholderMarker, StringComparison.OrdinalIgnoreCase)
+            && !NoticeVersion.StartsWith("PLACEHOLDER", StringComparison.OrdinalIgnoreCase));
+
     /// <summary>The policy as the shared <see cref="RecordingPolicyGate"/> (and the R2 recorder) understands it.</summary>
     public RecordingPolicy ToGate(MeetingRecordingKind kind)
     {
@@ -117,11 +126,14 @@ public sealed record MeetingPolicy(PolicyRow Policy, MeetingRecordingKind Kind, 
 
 public static class RecordingPolicyStore
 {
-    public static readonly string[] Codes = ["CUSTOMER_MEETING", "CUSTOMER_AUDIO_CALL", "INTERNAL_MEETING", "TRAINING_TEAM_MEETING"];
+    public static readonly string[] Codes = ["CUSTOMER_MEETING", "CUSTOMER_PLVC", "CUSTOMER_AUDIO_CALL", "INTERNAL_MEETING", "TRAINING_TEAM_MEETING"];
+    /// <summary>Policies a customer meeting category may use (V021: PLVC calls have their own).</summary>
+    public static readonly string[] CustomerMeetingCodes = ["CUSTOMER_MEETING", "CUSTOMER_PLVC"];
     public static readonly string[] Statuses = ["PENDING_CONFIRMATION", "EXISTING_BUSINESS_POLICY", "APPROVED"];
     public static readonly string[] Requirements = ["DISABLED", "OPTIONAL", "MANDATORY"];
     public static readonly string[] ConsentModes = ["CONSENT_REQUIRED", "NOTIFICATION_ONLY"];
-    public static readonly string[] ExpiryActions = ["REVIEW_ONLY", "ARCHIVE", "DELETE"];
+    /// <summary>Selectable expiry actions. DELETE was removed 12 Nov 2026 (no automatic deletion); legacy rows still holding it are treated as REVIEW_ONLY.</summary>
+    public static readonly string[] ExpiryActions = ["REVIEW_ONLY", "ARCHIVE"];
 
     const string Columns = """
         p.PolicyCode, p.DisplayOrder, p.Title, p.AppliesTo, p.PolicyName, p.PolicyVersion, p.EffectiveFrom, p.ApprovalStatus, p.PolicyReference,
@@ -132,7 +144,7 @@ public static class RecordingPolicyStore
         """;
 
     public static async Task<List<PolicyRow>> AllAsync(IDbConnection c, IDbTransaction? tx = null) =>
-        (await c.QueryAsync<PolicyRow>($"SELECT {Columns} FROM rec.RecordingPolicies p LEFT JOIN auth.Users u ON u.UserId = p.ModifiedByUserId ORDER BY p.DisplayOrder", transaction: tx)).ToList();
+        (await c.QueryAsync<PolicyRow>($"SELECT {Columns} FROM rec.RecordingPolicies p LEFT JOIN auth.Users u ON u.UserId = p.ModifiedByUserId ORDER BY p.DisplayOrder, p.PolicyCode", transaction: tx)).ToList();
 
     public static Task<PolicyRow?> GetAsync(IDbConnection c, string code, IDbTransaction? tx = null) =>
         c.QuerySingleOrDefaultAsync<PolicyRow>($"SELECT {Columns} FROM rec.RecordingPolicies p LEFT JOIN auth.Users u ON u.UserId = p.ModifiedByUserId WHERE p.PolicyCode = @code",

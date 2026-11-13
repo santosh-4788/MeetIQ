@@ -105,16 +105,50 @@ public sealed class Phase2Tests(ApiFixture fx)
     // ---- Linking an existing account to an employee ---------------------------------------------------------
 
     [Fact]
+    public async Task An_account_for_someone_in_the_employee_master_is_linked_automatically_never_left_without_a_calendar()
+    {
+        var super = await SignedIn("admin@test.invalid");
+        // 1. "E-mail only" for an existing employee: linked at once (the account can schedule and has a calendar).
+        await super.PostAsync("/api/v1/employees", new { employeeCode = "ALK-0001", firstName = "Asha", lastName = "Auto", officialEmail = "asha.auto@test.invalid", departmentCode = "TST", designationCode = "TEX" });
+        var asha = await Json(await super.PostAsync("/api/v1/admin/users", new { email = "asha.auto@test.invalid", roles = new[] { "Employee" } }));
+        Assert.True(asha.GetProperty("linkedToEmployee").GetBoolean());
+        var ashaClient = await fx.NewClientAsync();
+        await ashaClient.LoginAsync("asha.auto@test.invalid", asha.GetProperty("oneTimePassword").GetString()!);
+        Assert.True((await Json(await ashaClient.Http.GetAsync("/api/v1/auth/me"))).GetProperty("employeeLinked").GetBoolean());
+
+        // 2. Account created first, employee added later: the next sign-in links them (privileged audit entry).
+        var harsh = await Json(await super.PostAsync("/api/v1/admin/users", new { email = "harsh.later@test.invalid", roles = new[] { "Employee" } }));
+        Assert.False(harsh.GetProperty("linkedToEmployee").GetBoolean());
+        var oneTime = harsh.GetProperty("oneTimePassword").GetString()!;
+        var first = await fx.NewClientAsync();
+        await first.LoginAsync("harsh.later@test.invalid", oneTime);
+        Assert.False((await Json(await first.Http.GetAsync("/api/v1/auth/me"))).GetProperty("employeeLinked").GetBoolean());
+        await super.PostAsync("/api/v1/employees", new { employeeCode = "ALK-0002", firstName = "Harsh", lastName = "Later", officialEmail = "harsh.later@test.invalid", departmentCode = "TST", designationCode = "TEX" });
+        var again = await fx.NewClientAsync();
+        await again.LoginAsync("harsh.later@test.invalid", oneTime);
+        Assert.True((await Json(await again.Http.GetAsync("/api/v1/auth/me"))).GetProperty("employeeLinked").GetBoolean());
+        Assert.Equal(1, await fx.QueryAsync<int>("""
+            SELECT COUNT(*) FROM app.AuditLog a JOIN auth.Users u ON CONVERT(VARCHAR(64), u.PublicId) = a.EntityId
+            WHERE a.[Action] = 'USER_EMPLOYEE_LINKED' AND u.Email = N'harsh.later@test.invalid' AND a.IsPrivileged = 1
+            """));
+
+        // 3. Never ambiguous: an employee who already has an account is not taken over by another account with that e-mail.
+        Assert.Equal(1, await fx.QueryAsync<int>("SELECT COUNT(*) FROM auth.Users u JOIN org.Employees e ON e.EmployeeId = u.EmployeeId WHERE e.EmployeeCode = 'ALK-0002'"));
+    }
+
+    [Fact]
     public async Task Existing_account_can_be_linked_to_employee_changed_and_unlinked_with_guards()
     {
         var super = await SignedIn("admin@test.invalid");
-        var emp = await Json(await super.PostAsync("/api/v1/employees", new { employeeCode = "LNK-0001", firstName = "Lina", lastName = "Link", officialEmail = "linkme@test.invalid", departmentCode = "TST", designationCode = "TEX" }));
-        var empId = emp.GetProperty("id").GetGuid();
+        // The account exists before its employee record (an "e-mail only" account): it signs in unlinked.
         var user = await Json(await super.PostAsync("/api/v1/admin/users", new { email = "linkme@test.invalid", roles = new[] { "Employee" } }));
+        Assert.False(user.GetProperty("linkedToEmployee").GetBoolean());
         var userId = user.GetProperty("id").GetGuid();
         var linkMe = await fx.NewClientAsync();
         await linkMe.LoginAsync("linkme@test.invalid", user.GetProperty("oneTimePassword").GetString()!);
         Assert.False((await Json(await linkMe.Http.GetAsync("/api/v1/auth/me"))).GetProperty("employeeLinked").GetBoolean());
+        var emp = await Json(await super.PostAsync("/api/v1/employees", new { employeeCode = "LNK-0001", firstName = "Lina", lastName = "Link", officialEmail = "linkme@test.invalid", departmentCode = "TST", designationCode = "TEX" }));
+        var empId = emp.GetProperty("id").GetGuid();
 
         // The employee detail offers the existing account; creating a second one is refused with a pointer to linking.
         var detail = await Json(await super.Http.GetAsync($"/api/v1/employees/{empId}"));

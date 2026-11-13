@@ -4,7 +4,11 @@ namespace OneInsure.Connect.Api.Recording;
 
 /// <summary>One recorder process to start: "record" (joins the room) or "finalize" (re-builds the MP4 from a job's spool).</summary>
 public sealed record RecorderLaunch(string Mode, string JobKey, string JobDir, string? Room, string? Title, string? Kind, bool ConsentGranted, int MaxMinutes,
-    IReadOnlyDictionary<string, string> Environment);
+    IReadOnlyDictionary<string, string> Environment)
+{
+    /// <summary>Called (on a thread-pool thread) when the recorder reports a state change or exits, so the worker reacts at once instead of on its next poll.</summary>
+    public Action? OnChange { get; init; }
+}
 
 /// <summary>A running (or finished) recorder process.</summary>
 public interface IRecorderRun : IDisposable
@@ -13,6 +17,8 @@ public interface IRecorderRun : IDisposable
     bool HasExited { get; }
     /// <summary>The recorder reported that it is in the room and recording ("attempt_started").</summary>
     bool Started { get; }
+    /// <summary>The recorder reported that capture has ended ("recording_finished"); it is now only building and verifying the MP4.</summary>
+    bool CaptureEnded => false;
     /// <summary>Graceful stop: the recorder stops MediaRecorder, finalises and verifies the MP4, then exits.</summary>
     void RequestStop();
     void Kill();
@@ -63,7 +69,7 @@ public sealed class ProcessRecorderLauncher(RecordingPaths paths, ILogger<Proces
             psi.Environment["DOTNET_ROOT"] = Path.GetDirectoryName(host)!;
         var p = Process.Start(psi) ?? throw new InvalidOperationException("The recorder process could not be started.");
         log.LogInformation("Recorder {Mode} started for job {Job} (pid {Pid})", l.Mode, l.JobKey, p.Id);
-        return new ProcessRun(p, l.JobDir, log);
+        return new ProcessRun(p, l.JobDir, log, l.OnChange);
     }
 
     public IRecorderRun? Adopt(int processId, string jobDir)
@@ -98,15 +104,24 @@ public sealed class ProcessRecorderLauncher(RecordingPaths paths, ILogger<Proces
         readonly Process p;
         readonly string jobDir;
         volatile bool started;
+        volatile bool captureEnded;
 
-        public ProcessRun(Process p, string jobDir, ILogger log)
+        public ProcessRun(Process p, string jobDir, ILogger log, Action? onChange)
         {
             this.p = p;
             this.jobDir = jobDir;
+            void Notify()
+            {
+                try { onChange?.Invoke(); } catch (Exception e) { log.LogWarning(e, "Recorder change callback failed"); }
+            }
             p.OutputDataReceived += (_, e) =>
             {
-                if (e.Data is { } line && line.Contains("\"attempt_started\"", StringComparison.Ordinal)) started = true;
+                if (e.Data is not { } line) return;
+                if (!started && line.Contains("\"attempt_started\"", StringComparison.Ordinal)) { started = true; Notify(); }
+                else if (!captureEnded && line.Contains("\"recording_finished\"", StringComparison.Ordinal)) { captureEnded = true; Notify(); }
             };
+            p.EnableRaisingEvents = true;
+            p.Exited += (_, _) => Notify();
             p.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) log.LogWarning("Recorder {Pid}: {Line}", p.Id, e.Data); };
             p.BeginOutputReadLine();
             p.BeginErrorReadLine();
@@ -115,6 +130,7 @@ public sealed class ProcessRecorderLauncher(RecordingPaths paths, ILogger<Proces
         public int? ProcessId => p.Id;
         public bool HasExited => p.HasExited;
         public bool Started => started;
+        public bool CaptureEnded => captureEnded;
 
         public void RequestStop()
         {

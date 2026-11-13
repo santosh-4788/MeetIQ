@@ -1,0 +1,62 @@
+/* Schedule / edit meeting form - compact premium layout (13 Nov 2026). Scoped to .oic-sched so no other page changes.
+   Same fields, same logic: only spacing, radius, shadow and control heights. Touch screens keep 44 px controls. */
+
+.oic-sched .rounded-lg {
+  border-radius: 16px;
+}
+.oic-sched .shadow-card {
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04), 0 8px 24px -16px rgb(15 23 42 / 0.18);
+  border-color: rgb(15 23 42 / 0.07);
+}
+
+/* Card header and body padding: 20 px → 16 px, header tighter to its fields. */
+.oic-sched .pt-4\.5 {
+  padding-top: 0.875rem;
+}
+.oic-sched .px-5 {
+  padding-inline: 1rem;
+}
+.oic-sched .pb-5 {
+  padding-bottom: 1rem;
+}
+.oic-sched .p-5 {
+  padding: 1rem;
+}
+.oic-sched h2.text-\[15px\] {
+  font-size: 14.5px;
+  letter-spacing: -0.005em;
+}
+@media (min-width: 640px) {
+  .oic-sched .px-5 {
+    padding-inline: 1.125rem;
+  }
+}
+
+/* Field stacks: labels close to their inputs, rows closer together. */
+.oic-sched .flex-col.gap-4 {
+  gap: 0.875rem;
+}
+.oic-sched .flex-col.gap-1\.5 {
+  gap: 0.3rem;
+}
+.oic-sched label.text-\[13px\] {
+  font-size: 12.5px;
+}
+
+/* Inputs and selects: 40 px with a mouse, 44 px on touch screens; softer corners. */
+@media (pointer: fine) {
+  .oic-sched .h-11 {
+    height: 2.5rem;
+  }
+}
+.oic-sched .rounded-sm {
+  border-radius: 10px;
+}
+.oic-sched textarea {
+  min-height: 0;
+}
+
+/* Recording-policy choices: tighter tiles. */
+.oic-sched .py-2\.5 {
+  padding-block: 0.5rem;
+}

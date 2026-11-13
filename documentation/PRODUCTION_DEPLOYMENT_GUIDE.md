@@ -110,3 +110,31 @@ The password must be changed at the first sign-in.
 - **Data Protection keys** (`data\keys`) encrypt two-factor secrets and meeting links. Back them up with the server. A **new server has new keys**: people who set up two-factor sign-in on the test laptop must set it up again (an administrator resets it in Users & roles), and meeting links created on the laptop stop working.
 - **Recording** stays refused in production until a policy is confirmed in Administration → Recording policies (by design). The recorder is a proof of concept.
 - **Mobile:** works in Chrome (Android) and Safari (iOS 15+); the site can be added to the home screen. Screen sharing is not available on phones (browser limitation). Keep the meeting screen open: phones may cut audio when the browser is in the background.
+
+## 11. Session policy and daily logout (11 Nov 2026)
+
+Settings in `appsettings.json`, `Security` section:
+
+- `SessionIdleMinutes`: 30. The idle clock is shared by all tabs of a browser, and genuine activity keeps the server session alive.
+- `SessionAbsoluteHours`: 18. The daily logout below is the effective daily cap.
+- `DailyLogout`: `{ "Enabled": true, "Time": "23:30", "TimeZoneId": "Asia/Kolkata", "WarningMinutes": 5 }`.
+  - At the cutoff every portal session created before it stops working: the server refuses it from that moment and marks it revoked (`DAILY_LOGOUT`) within 30 s.
+  - Each run writes the audit entry `SESSIONS_DAILY_LOGOUT`.
+  - Users see the warning with a countdown 5 minutes before the cutoff.
+  - People in a meeting keep their audio and video; host controls need a new sign-in.
+  - Server-side recordings are not affected.
+- **Test mode (admin.ops):**
+  - `POST /api/v1/admin/ops/daily-logout/test {"minutes": 2}` ends only the caller's own sessions after N minutes. It never changes the configured time and is kept in memory only.
+  - `GET /api/v1/admin/ops/daily-logout/status` shows the next cutoff and a dry-run count.
+- Restart the `MeetIQApi` service after changing these values.
+
+## 12. Recording reconciliation (read-only)
+
+`scripts\recording-reconciliation.ps1 -StorageRoot <library> -SpoolRoot <spool> [-ProbeOrphans] [-OutFile report.json]` checks the following and changes nothing:
+- every COMPLETED row against its file (present, size, SHA-256);
+- library files that no row references (orphans);
+- interrupted `*.partial` copies;
+- stale spool folders;
+- recordings stuck for more than an hour.
+
+Orphan files are only reported, never matched automatically.
