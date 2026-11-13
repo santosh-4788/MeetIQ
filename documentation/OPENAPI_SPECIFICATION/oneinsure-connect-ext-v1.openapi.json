@@ -1134,6 +1134,12 @@
               "null",
               "string"
             ]
+          },
+          "plvcIdentification": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -1333,6 +1339,12 @@
             "items": {
               "$ref": "#/components/schemas/ExtParticipant"
             }
+          },
+          "plvcIdentification": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
