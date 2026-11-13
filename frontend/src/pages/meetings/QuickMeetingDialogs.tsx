@@ -180,11 +180,12 @@ export function NewMeetingDialog({ open, onClose }: { open: boolean; onClose: ()
             <PrarambhField value={prarambh} onChange={(v) => { setPrarambh(v); setFieldErrors((x) => ({ ...x, prarambhMainId: '' })) }} error={fieldErrors.prarambhMainId || undefined} />
             <ParticipantRows rows={rows} onChange={(r) => { setRows(r); setFieldErrors({}) }} errors={fieldErrors} nextKey={() => { setRowSeq((n) => n + 1); return rowSeq }}
               hint="The first participant is the customer. When you start, each participant is e-mailed their own personal join link; you also get the links to share." />
-            <div className="flex flex-col gap-1.5 border-t border-line pt-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-[12px] leading-4 text-ink-secondary">No customer details yet? Start without them and share the meeting link. The meeting is marked <strong className="text-ink">Unidentified PLVC</strong>; you can add the Prarambh Main ID later.</p>
-              <Button type="button" variant="secondary" size="sm" className="shrink-0" disabled={busy} onClick={() => void once(doSkip)} data-testid="skip-plvc-details">
-                Skip details &amp; start meeting
-              </Button>
+            <div className="flex items-center justify-between gap-3 border-t border-line pt-3">
+              <p className="text-[12px] leading-4 text-ink-secondary">No details yet? Start now and add the ID later.</p>
+              <button type="button" disabled={busy} onClick={() => void once(doSkip)} data-testid="skip-plvc-details"
+                className="inline-flex h-8 shrink-0 cursor-pointer items-center rounded-full bg-brand-600 px-3.5 text-[12.5px] font-semibold text-white shadow-[0_4px_12px_-4px_rgb(37_99_235/0.6)] transition hover:bg-brand-700 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60">
+                Skip details &amp; start
+              </button>
             </div>
           </div>
         )}
