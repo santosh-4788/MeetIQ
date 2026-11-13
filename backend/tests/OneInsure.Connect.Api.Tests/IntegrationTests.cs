@@ -329,7 +329,10 @@ public sealed class IntegrationTests(ApiFixture fx)
     [Fact]
     public async Task OpenApi_document_lists_only_the_external_endpoints()
     {
-        var r = await fx.Factory.CreateClient().GetAsync("/api/ext/openapi/ext-v1.json");
+        // V025: only for people with the API Documentation page (api.docs.view) or integration admins - not anonymous, not employees.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await fx.Factory.CreateClient().GetAsync("/api/ext/openapi/ext-v1.json")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await (await SignedIn("mthird@test.invalid")).Http.GetAsync("/api/ext/openapi/ext-v1.json")).StatusCode);
+        var r = await (await SignedIn("admin@test.invalid")).Http.GetAsync("/api/ext/openapi/ext-v1.json");
         Assert.Equal(HttpStatusCode.OK, r.StatusCode);
         var text = await r.Content.ReadAsStringAsync();
         var doc = JsonDocument.Parse(text).RootElement;

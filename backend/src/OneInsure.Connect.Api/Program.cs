@@ -1,4 +1,4 @@
-﻿using System.Threading.RateLimiting;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.DataProtection;
 using Dapper;
 using Microsoft.Extensions.Options;
@@ -191,7 +191,8 @@ api.MapReportsEndpoints();
 api.MapAuditEndpoints();
 api.MapIntegrationAdminEndpoints();
 app.MapExternalApi();
-app.MapOpenApi("/api/ext/openapi/{documentName}.json");
+// 13 Nov 2026: the API description is for people given the API Documentation page (api.docs.view) or integration admins - not public.
+app.MapOpenApi("/api/ext/openapi/{documentName}.json").RequireAnyPermission("api.docs.view", "integrations.manage");
 api.MapGet("/health", async (Db db, CancellationToken ct) =>
 {
     try

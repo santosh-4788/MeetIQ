@@ -7,8 +7,8 @@
 | Base URL | `https://www.oneinsure.com/meet/api/ext/v1` |
 | Format | JSON (UTF-8). Every time is ISO-8601 in India Standard Time (`+05:30`). |
 | Version | `v1` (in the path) |
-| OpenAPI | `https://www.oneinsure.com/meet/api/ext/openapi/ext-v1.json`, also saved as [OPENAPI_SPECIFICATION/oneinsure-connect-ext-v1.openapi.json](OPENAPI_SPECIFICATION/oneinsure-connect-ext-v1.openapi.json) |
-| In the portal | Organisation → System → **API Documentation**: the guide, an interactive Swagger UI, and integration management |
+| OpenAPI | `https://www.oneinsure.com/meet/api/ext/openapi/ext-v1.json`: **not public since V025**; it needs a portal sign-in with the `api.docs.view` permission. Also saved as [OPENAPI_SPECIFICATION/oneinsure-connect-ext-v1.openapi.json](OPENAPI_SPECIFICATION/oneinsure-connect-ext-v1.openapi.json), or use **Download OpenAPI (JSON)** on the page. |
+| In the portal | Organisation → System → **API Documentation**: the complete guide (every endpoint with parameters, example request and response), an interactive Swagger UI, and, for administrators only, integration and API key management. It is visible to Admin, Super Admin and anyone given the **API Documentation Viewer** role. |
 
 The full endpoint list is in [API_ENDPOINT_REFERENCE.md](API_ENDPOINT_REFERENCE.md).
 

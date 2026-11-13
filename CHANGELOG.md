@@ -1,5 +1,33 @@
 # Changelog
 
+## 13 Nov 2026 — API Documentation page: complete guide, admin-only with a grantable role (V025)
+
+**Not deployed yet. It needs approval and migration V025 on the live database.**
+
+- **Page** (`ApiGuide.tsx`, `ApiDocsPage.tsx`): a self-explanatory guide with an "On this page" menu. Sections:
+  - Quick start (6 steps)
+  - Connection details (base URL, auth header, OpenAPI URL, format, time zone)
+  - **API keys**: Integration ID, key format, how to get, send, rotate and revoke a key, isolation, audit, how to test with `/me`, how to store it safely
+  - Scopes
+  - **13 endpoints**, each opening to show the full URL, scope, success code, parameters / body fields with rules, an example `curl` request, an example response and its errors
+  - Categories & PLVC rules, including identified / unidentified
+  - Meeting and recording statuses
+  - Errors (15 codes)
+  - Rate limits & idempotency
+  - Webhooks: events with their exact `data` fields, headers, payload, and signature checks in Node.js, C# and Python
+  - Postman / OpenAPI import
+  - Go-live checklist
+
+  Every detail was checked against the API code. Keys themselves are never shown on the page (only their hash is stored).
+- **Access (V025):**
+  - New permission `api.docs.view`, granted to Admin and Super Admin.
+  - New role **API Documentation Viewer** (`api.docs.view` + `dashboard.view`). An administrator gives the page to anyone by adding this role in Users & roles.
+  - The Integrations & API keys tab stays with `integrations.manage`.
+  - The OpenAPI document `/api/ext/openapi/ext-v1.json` is no longer public: 401 when not signed in, 403 without the permission.
+- **Tests:**
+  - API **93/93** (the OpenAPI test now checks 401 / 403 / 200).
+  - New `tests/e2e/recording/api-docs-page.mjs` **5/5**: admin sees the full guide, Swagger and the download; an employee is refused; an employee given the role sees everything except API keys; no sideways scroll on a phone (fixed 757 → 390 px).
+
 ## 13 Nov 2026 — "Skip details" / unidentified PLVC (V024), approved wording on every recording policy, PLVC recording fix
 
 **Deployed 13 Nov 2026 16:20 IST** with approval ("approved all the pending things related to recording … go live"). No live meeting or recording at the time.
