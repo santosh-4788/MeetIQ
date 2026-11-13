@@ -1,5 +1,18 @@
 # Changelog
 
+## 13 Nov 2026 — GoodDay #14217 (reopened) and #14220
+
+**Deployed 13 Nov 2026 18:40 IST** with approval ("yes deploy and mark"). Website only. Backup `deploy\_backup-20261113-184030`. Checked live: both changes are served, 0 garbled characters, API Healthy. Both tasks are Resolved in GoodDay, each with a comment.
+
+- **#14217**, reopened as "not removed":
+  - The red "Choose between 2 and 52 occurrences" message is gone completely.
+  - The typed number is corrected to 2–52 when you leave the field, with the grey hint "Between 2 and 52".
+  - Fixed two updates in a row overwriting each other in the repeat editor (the After / On date choice).
+- **#14220**, customer cannot turn on the mic (live call OIC-261113-HTDE):
+  - The customer's Chrome (Android 10) refused the site's mic and camera; the server had granted them.
+  - The room now shows one clear message per cause (blocked, with steps to allow; in use by another app; not found) instead of three identical "could not be started" toasts.
+- **Tests:** `goodday-fixes-4` **4/4** (G4-04 joins with the mic blocked: exactly one message), `doc3-instant-schedule` 10/10, `end-and-late-share` 10/10.
+
 ## 13 Nov 2026 — GoodDay #14217, #14218, #14219 and a text-encoding repair
 
 **Deployed 13 Nov 2026 17:56 IST** with approval ("deploy and mark as resolved in goodday"). No live meeting or recording at the time. API and website only; no database change. Backup `deploy\_backup-20261113-175604`; about 9 s of downtime; Healthy. All three tasks are Resolved in GoodDay, each with a comment.
