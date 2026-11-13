@@ -95,17 +95,33 @@ await tc('G4-02', '#14217 Repeat → After N occurrences: the "between 2 and 52"
   await form.getByLabel('Title', { exact: true }).fill(`G4 repeat ${tag}`)
   await form.getByLabel('Category').selectOption('INTERNAL_MEETING')
   await form.getByText('Repeat this meeting').click()
-  const occ = form.getByLabel('Occurrences')
+  const occ = host.getByTestId('occurrences')
   await occ.waitFor()
   await host.getByTestId('ends-after').check()
-  await occ.fill('99')
-  await form.getByRole('button', { name: /Schedule recurring meeting|Schedule meeting/ }).click()
-  await form.getByText(/Choose between 2 and \d+ occurrences/).waitFor()
-  await occ.fill('2')
-  await until(async () => (await form.getByText(/Choose between 2 and \d+ occurrences/).count()) === 0, 'message still shown under a valid value', 3000)
+  const seen = []
+  for (const [typed, expect] of [['99', '52'], ['1', '2'], ['', '2'], ['7', '7']]) {
+    await occ.fill(typed)
+    await occ.blur()
+    const v = await occ.inputValue()
+    seen.push(`${typed || '(empty)'}→${v}`)
+    check(v === expect, `typed "${typed}" became "${v}" (expected ${expect})`)
+    check((await form.getByText(/Choose between 2 and \d+ occurrences/).count()) === 0, `red message shown after typing "${typed}"`)
+  }
+  check((await form.getByText('Between 2 and 52').count()) === 1, 'range hint missing')
+  // "On date" keeps its choice (two updates in a row used to overwrite each other).
+  await host.getByTestId('ends-on').check()
+  check(await host.getByTestId('ends-on').isChecked(), '"On date" not kept')
+  await host.getByTestId('ends-after').check()
+  await occ.fill('3'); await occ.blur()
+  // G4-01's booking makes the host busy now: finish it so this booking is not (correctly) refused as a clash.
+  sqlcmd(`UPDATE mtg.Meetings SET [Status] = 'COMPLETED', ActualEndUtc = COALESCE(ActualEndUtc, SYSUTCDATETIME()) WHERE [Status] IN ('SCHEDULED', 'LIVE')`)
   await occ.scrollIntoViewIfNeeded()
-  await host.screenshot({ path: path.join(SHOTS, 'g4-02-occurrences-valid.png') })
-  return '99 → message shown on Schedule; 2 → message gone at once'
+  await host.screenshot({ path: path.join(SHOTS, 'g4-02-occurrences.png') })
+  await form.getByRole('button', { name: /Schedule recurring meeting|Schedule meeting/ }).click()
+  await host.waitForURL(/\/meetings\/[0-9a-f-]{36}$/, { timeout: 25_000 })
+  const n = sqlcmd(`SELECT COUNT(*) FROM mtg.Meetings WHERE Title = N'G4 repeat ${tag}'`)
+  check(n === '3', `${n} occurrences created (expected 3)`)
+  return `${seen.join(', ')}; no red message at any point; hint "Between 2 and 52"; scheduled 3 occurrences`
 })
 
 await tc('G4-03', '#14219 In a call: the host sees a hint and a labelled "Make host" next to a colleague (not next to customers/guests); hand-over works', async () => {
@@ -141,6 +157,36 @@ await tc('G4-03', '#14219 In a call: the host sees a hint and a labelled "Make h
   await r.getByText('You are now the host.').waitFor({ timeout: 15_000 })
   await api(r, 'POST', `/meetings/${id}/room/end`)
   return `hint alone: "${alone.slice(0, 60)}…"; "${label}" next to Ravi; hand-over recorded and Ravi told "You are now the host."`
+})
+
+await tc('G4-04', '#14220 Microphone blocked by the browser: ONE clear message with the steps to allow it (was 3 identical "could not be started")', async () => {
+  sqlcmd(`UPDATE mtg.Meetings SET [Status] = 'COMPLETED', ActualEndUtc = COALESCE(ActualEndUtc, SYSUTCDATETIME()) WHERE [Status] IN ('SCHEDULED', 'LIVE')`)
+  // A browser where this site's camera and microphone are blocked (no fake-ui auto-allow, permissions not granted).
+  const b = await chromium.launch({ executablePath: EDGE, headless: process.env.E2E_HEADED !== '1', args: ['--use-fake-device-for-media-stream', '--deny-permission-prompts'] })
+  browsers.push(b)
+  const p = await (await b.newContext({ baseURL: WEB, viewport: { width: 412, height: 860 }, isMobile: true, hasTouch: true, locale: 'en-IN', timezoneId: 'Asia/Kolkata' })).newPage()
+  pages.push(p); p.setDefaultTimeout(20_000)
+  await p.goto('/login')
+  await p.getByLabel('Official Email / Employee ID').fill(HOST)
+  await p.getByLabel('Password', { exact: true }).fill(PASSWORD)
+  await p.getByRole('button', { name: 'Sign In' }).click()
+  await p.waitForURL(/\/dashboard/)
+  const created = await api(p, 'POST', '/meetings/instant', { category: 'GROUP', durationMinutes: 15 })
+  check(created.status === 201, `instant ${created.status}`)
+  await p.goto(`/meetings/${created.body.id}/room`)
+  await p.getByRole('button', { name: 'Start meeting' }).click()
+  await p.locator('[data-testid="meeting-room"]').waitFor({ timeout: 30_000 })
+  await p.keyboard.press('Escape').catch(() => {})
+  await sleep(2500)
+  await p.getByTestId('ctl-mic').click().catch(async () => p.locator('[aria-label*="microphone" i]').first().click())
+  await sleep(2500)
+  const texts = await p.locator('[role="status"][aria-live="polite"] > *').allInnerTexts() // one entry per toast
+  const mic = texts.filter((t) => /microphone/i.test(t))
+  await p.screenshot({ path: path.join(SHOTS, 'g4-04-mic-blocked.png') })
+  check(mic.length === 1, `${mic.length} microphone messages: ${JSON.stringify(mic)}`)
+  check(/blocked for this site/.test(mic[0]) && /Permissions/.test(mic[0]), `message: ${mic[0]}`)
+  await api(p, 'POST', `/meetings/${created.body.id}/room/end`)
+  return `one message: "${mic[0].replace(/\s+/g, ' ').slice(0, 140)}…"`
 })
 
 for (const b of browsers) await b.close().catch(() => {})

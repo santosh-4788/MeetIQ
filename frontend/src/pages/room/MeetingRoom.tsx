@@ -180,9 +180,7 @@ export function MeetingRoom({
         // Errors while connecting end the attempt; later ones (e.g. a failed device switch) are only reported.
         toast.error(errorMessage(e, 'Something went wrong in the meeting room.'))
       }}
-      onMediaDeviceFailure={(_failure, kind) =>
-        toast.error(kind === 'videoinput' ? 'Your camera could not be started. Check that no other app is using it.' : 'Your microphone could not be started. Check the device and browser permissions.')
-      }
+      onMediaDeviceFailure={(failure, kind) => notifyDevice(toast, kind === 'videoinput' ? 'camera' : 'microphone', { name: String(failure ?? '') })}
       data-lk-theme="default"
       className="oic-room fixed inset-0 z-40 flex flex-col overflow-hidden"
       data-testid="meeting-room"
@@ -236,14 +234,14 @@ function PublishOnConnect({ media, tracks }: { media: MediaChoices; tracks: Prev
       try {
         if (tracks.audio) await lp.publishTrack(tracks.audio, { source: Track.Source.Microphone })
         else if (media.audioEnabled) await retry(() => lp.setMicrophoneEnabled(true, { deviceId: media.audioDeviceId || undefined }))
-      } catch {
-        toast.error('Your microphone could not be started. Use the microphone button to try again.')
+      } catch (e) {
+        notifyDevice(toast, 'microphone', e)
       }
       try {
         if (tracks.video) await lp.publishTrack(tracks.video, { source: Track.Source.Camera })
         else if (media.videoEnabled) await retry(() => lp.setCameraEnabled(true, { deviceId: media.videoDeviceId || undefined, resolution: VideoPresets.h720.resolution }))
-      } catch {
-        toast.error('Your camera could not be started. Check that no other app is using it, then use the camera button.')
+      } catch (e) {
+        notifyDevice(toast, 'camera', e)
       }
     })()
   }, [state, room, media, tracks, toast])
@@ -1047,13 +1045,44 @@ function useScreenShareRecovery(pub: TrackPublication | undefined, el: React.Ref
   }, [pub, el])
 }
 
+/**
+ * One clear message per camera/microphone failure (GoodDay #14220: a customer on Android Chrome got three identical "Your microphone
+ * could not be started" toasts and no way forward - the browser had blocked the site's microphone). The reason decides the text,
+ * with the steps to fix it; the same message is not repeated within 8 s (the toggle and LiveKit both report one failure).
+ */
+const lastDeviceNotice = new Map<string, number>()
+type DeviceKind = 'microphone' | 'camera'
+function deviceReason(e: unknown): 'denied' | 'busy' | 'missing' | 'other' {
+  const name = (e as { name?: string } | null)?.name ?? String(e ?? '')
+  if (/NotAllowed|PermissionDenied|Security/i.test(name)) return 'denied'
+  if (/NotReadable|TrackStart|DeviceInUse|Abort/i.test(name)) return 'busy'
+  if (/NotFound|DevicesNotFound|Overconstrained/i.test(name)) return 'missing'
+  return 'other'
+}
+export function deviceMessage(kind: DeviceKind, reason: ReturnType<typeof deviceReason>) {
+  const Dev = kind === 'microphone' ? 'Microphone' : 'Camera'
+  if (reason === 'denied')
+    return `${Dev} access is blocked for this site. Tap the lock icon next to the web address → Permissions → ${Dev} → Allow, then tap the ${kind} button again. On Android also check Settings → Apps → Chrome → Permissions.`
+  if (reason === 'busy') return `Your ${kind} is being used by another app (for example a phone or WhatsApp call). Close that app, then tap the ${kind} button again.`
+  if (reason === 'missing') return `No ${kind} was found on this device.`
+  return `Your ${kind} could not be started. Check that the browser may use it, then tap the ${kind} button again.`
+}
+function notifyDevice(toast: { error: (t: string) => void }, kind: DeviceKind, e: unknown) {
+  const reason = deviceReason(e)
+  const key = `${kind}:${reason}`
+  const now = Date.now()
+  if (now - (lastDeviceNotice.get(key) ?? 0) < 8000) return
+  lastDeviceNotice.set(key, now)
+  toast.error(deviceMessage(kind, reason))
+}
+
 // ---- Controls --------------------------------------------------------------------------------------------------------
 
 function MediaToggle({ source, labelOn, labelOff, iconOn, iconOff, testId }: { source: Track.Source.Microphone | Track.Source.Camera; labelOn: string; labelOff: string; iconOn: ReactNode; iconOff: ReactNode; testId: string }) {
   const toast = useToast()
   const { enabled, pending, toggle } = useTrackToggle({
     source,
-    onDeviceError: () => toast.error(source === Track.Source.Camera ? 'Your camera could not be started. Check that no other app is using it.' : 'Your microphone could not be started.'),
+    onDeviceError: (e) => notifyDevice(toast, source === Track.Source.Camera ? 'camera' : 'microphone', e),
   })
   return (
     <button type="button" className="oic-ctl" data-off={!enabled || undefined} aria-pressed={enabled} disabled={pending} onClick={() => void toggle()} aria-label={enabled ? labelOn : labelOff} title={enabled ? labelOn : labelOff} data-testid={testId}>

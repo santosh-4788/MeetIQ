@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, CalendarCheck, CircleCheck, Info, LoaderCircle, Repeat, Save, Trash2, TriangleAlert, UserPlus, X } from 'lucide-react'
 import {
@@ -682,6 +682,9 @@ function OccurrenceConflictDialog({
 
 const PATTERN_LABEL: Record<RecurrenceRule['pattern'], string> = { DAILY: 'day(s)', WEEKLY: 'week(s)', MONTHLY: 'month(s)' }
 
+/** GoodDay #14217: any typed number is brought into 2-MAX (empty or 0 -> 2). */
+const clampCount = (n: number) => Math.min(MAX_RECURRENCE_OCCURRENCES, Math.max(2, Number.isFinite(n) && n > 0 ? Math.round(n) : 2))
+
 function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft; onChange: (r: RecurrenceDraft) => void; errors: Record<string, string> }) {
   const set = <K extends keyof RecurrenceDraft>(k: K, v: RecurrenceDraft[K]) => onChange({ ...value, [k]: v })
   const toggleDay = (d: Weekday) => set('byWeekdays', value.byWeekdays.includes(d) ? value.byWeekdays.filter((x) => x !== d) : [...value.byWeekdays, d])
@@ -689,6 +692,8 @@ function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft;
   // GoodDay #14213: fields in a row are aligned by their tops (labels on one line, boxes on one line). Bits without a
   // label of their own (the unit, the radio buttons) sit under an invisible label-height spacer so they line up with the boxes.
   const spacer = <span className="invisible text-[13px] font-semibold" aria-hidden>.</span>
+  // What is typed in Occurrences (may be empty or out of range while typing); the rule itself only ever holds 2-52.
+  const [countText, setCountText] = useState(() => String(value.endCount))
   return (
     <div className="flex flex-col gap-4 rounded-md border border-line bg-surface-muted p-4" data-testid="recurrence-editor">
       <div className="flex flex-wrap items-start gap-3">
@@ -751,11 +756,22 @@ function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft;
               type="number"
               min={2}
               max={MAX_RECURRENCE_OCCURRENCES}
-              value={String(value.endCount)}
-              onChange={(e) => (set('endType', 'COUNT'), set('endCount', Number(e.target.value) || 2))}
-              // GoodDay #14217: the message from the last Schedule click stayed under a value that is now valid (e.g. "2").
-              // Show it only while the current value really is out of range.
-              error={value.endType === 'COUNT' && !(value.endCount >= 2 && value.endCount <= MAX_RECURRENCE_OCCURRENCES) ? errors['recurrence.endCount'] : undefined}
+              value={countText}
+              // GoodDay #14217 (reopened: "not removed"): no red "Choose between 2 and 52" message any more. Type freely; the number is
+              // kept within 2-52 automatically (on leaving the field, and on Schedule), and the range is shown as a plain hint.
+              onChange={(e) => {
+                const raw = e.target.value.replace(/[^0-9]/g, '').slice(0, 3)
+                setCountText(raw)
+                const n = Number(raw)
+                onChange({ ...value, endType: 'COUNT', endCount: raw && n >= 2 && n <= MAX_RECURRENCE_OCCURRENCES ? n : value.endCount })
+              }}
+              onBlur={() => {
+                const n = clampCount(Number(countText))
+                setCountText(String(n))
+                onChange({ ...value, endCount: n })
+              }}
+              hint={`Between 2 and ${MAX_RECURRENCE_OCCURRENCES}`}
+              data-testid="occurrences"
               className="w-28"
             />
           </div>
@@ -767,7 +783,7 @@ function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft;
                 On date
               </label>
             </div>
-            <DateField label="End date" value={value.endUntilDate} onChange={(v) => (set('endType', 'UNTIL'), set('endUntilDate', v))} error={errors['recurrence.endUntilDate']} />
+            <DateField label="End date" value={value.endUntilDate} onChange={(v) => onChange({ ...value, endType: 'UNTIL', endUntilDate: v })} error={errors['recurrence.endUntilDate']} />
           </div>
         </div>
       </fieldset>
