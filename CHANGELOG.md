@@ -123,6 +123,54 @@ The host or organiser writes the minutes of meeting on the meeting page. **No AI
 
 **Docs:** `AI_MEETING_ASSISTANT.md`, `AI_PRIVACY_AND_PROCESSING.md`, `TRANSCRIPTION_AND_MOM.md`, `VIRTUAL_BACKGROUND_AND_AUDIO.md`, `WHITEBOARD_FEATURE.md`, `PRIVATE_CHAT_SECURITY.md`, `GESTURE_RECOGNITION.md`, `RESOURCE_BENCHMARK.md`, `OPEN_SOURCE_LICENCE_REVIEW.md`, `FEATURE_CONFIGURATION.md`, `ROLLBACK_PLAN.md`.
 
+## 14 Nov 2026 (evening) — GoodDay #14208, #14227 and #14223 (reopened)
+
+Deployed with approval on 14 Nov 2026 ~21:02 IST (website only; backup `deploy/_backup-20261114-210143`). Checked in GoodDay (project Meet): these three were reopened, and there were no new bugs. All three are marked Resolved in GoodDay with comments.
+
+- **Before the deploy:** the production LiveKit log had no activity since 18:12 IST, so no meeting was live. The database check was not possible from this session.
+- **Checked live:** `index.html` is new (Last-Modified 15:32 UTC); the bundles contain the three changes; no garbled characters; the sign-in page loads without script errors.
+
+- **#14208** "popup to extend meeting is not coming for host":
+  - Before, the host got only the orange strip with small Extend buttons.
+  - Now, when the scheduled time is up, the host also gets a **popup**: "The scheduled time is up … ends automatically for everyone in m:ss". It has Extend 15 min, Extend 30 min, End now and Keep going.
+  - Other participants get no popup.
+  - "Keep going" closes it and the strip stays. An extension that runs out brings it back (`EndTimeBanner` in `MeetingRoom.tsx`).
+- **#14227** "Only happening for nothing phones and its OS":
+  - Nothing OS (like Xiaomi and OnePlus) stops the browser's network soon after it is minimised, unless the browser's battery use is "Unrestricted". A website cannot change that setting.
+  - On Android, a person whose connection dropped while the app was in the background now gets, on return, the steps: Settings → Apps → Chrome → Battery → Unrestricted. "Don't show again" is remembered on that phone.
+  - The call is registered as an ongoing call (Media Session).
+  - Both are in `BackgroundCallKeeper`.
+- **#14223** reopened again with no comment after the 17:18 deploy, which was confirmed live (`index.html` dated 11:47 UTC).
+  - The phone header's icon-only "+" square is now a labelled **"+ Schedule"** pill. The icon's size is also set as SVG attributes, so it cannot be squeezed (`Header.tsx`).
+  - The dashboard button from 17:18 stays.
+- **Tests:**
+  - new `room/goodday-14208-14227.mjs`: 2/2;
+  - `goodday-14222-14223.mjs`: 6/6 (GD14223-01 now checks the labelled pill at 320/360/412 px);
+  - `goodday-14227-14217.mjs`: 2/2;
+  - `mobile-audit.mjs`: 8/8;
+  - the frontend type check is clean.
+
+## 14 Nov 2026 — GoodDay #14223 (reopened: "Still the same")
+
+- The 13:15 fix (full-size + icon in the phone header) is live: no service worker, and `index.html` is served `no-cache`. But on a phone the only "schedule" option was still that unlabelled "+" in the header, next to a second "+" at the bottom.
+- Change: on phones (under 640 px) the dashboard's quick actions now include a labelled **"Schedule meeting"** button (just "Schedule" under 360 px), next to Calendar, which also fills the half-empty second row (`DashboardPage.tsx`).
+  - Desktop is unchanged: there, Schedule stays only in the header, as asked earlier.
+- Tests: `goodday-14222-14223.mjs` 6/6 (new GD14223-02: 320/360/412 px visible, icon 16 px, no clipping, opens Schedule; hidden at 1366 px); `mobile-audit.mjs` 8/8.
+- Deployed 14 Nov 2026 ~17:18 IST (website only; backup `deploy/_backup-20261114-170022`). I waited until test meeting OIC-261114-5HC7 had ended. Marked Resolved in GoodDay with a comment.
+
+## 14 Nov 2026 — GoodDay #14227 and #14217 (reopened, retitled)
+
+Deployed 14 Nov 2026 ~16:37 IST (website only; backup `deploy/_backup-20261114-163448`). Both marked Resolved in GoodDay with comments.
+
+- **#14227** "If customer is minimizing the app and running the meet in background he is not showing in the meeting".
+  - Evidence: meeting OIC-261114-FJX2, customer on Android 10 / Chrome Mobile. Each time the app was minimised, the phone closed the connection after 10–25 s. The server timed it out about 20 s later (CONNECTION_TIMEOUT, four times). On return the app rejoined by itself within about 3 s.
+  - A website cannot keep running in the background on a phone the way an installed app can.
+  - Changed:
+    - **"<name> is away"** notice for everyone in the call when someone drops without leaving (connection timeout or signal lost; not "left", "removed" or "meeting ended"). It clears when they are back, or after 3 minutes (`AwayNotice`).
+    - The screen is kept on during a call (Screen Wake Lock, `KeepScreenOn`), so the phone does not lock by itself and pause the call.
+- **#14217** (reopened, retitled "Remove the after radio button and occurrence input field from the repeat button"): the "After [n] occurrences" choice and its box are removed. A series now ends on a date ("Ends on", default 90 days); the server still stops at 52 meetings.
+- Tests: `room/goodday-14227-14217.mjs` (new, 2/2). The older #14217 checks in `goodday-14222-14223.mjs` (GD14217-01) and `recording/goodday-fixes-4.mjs` (G4-02) now expect no After/Occurrences.
+
 ## 14 Nov 2026 — Blocked guest message (IL-05) and remaining test runs
 
 - A person removed with "Do not allow them to rejoin" now sees "You can no longer join this meeting. The host removed you from this meeting and turned off rejoining." This replaces "This link needs to be refreshed. Please try joining again." (`GuestRoom.tsx`). The page asks the existing `GET /join/{token}` for the reason ("Removed by the host"), and the token is kept, so trying again gets the same answer. No API change.

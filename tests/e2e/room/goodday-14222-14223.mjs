@@ -18,56 +18,64 @@ retire()
 
 const ok = {}
 let phone
-ok.header = await tc('GD14223-01', '#14223 Phone header: the "Schedule meeting" button shows its + icon and opens Schedule', 'Icon ≥ 18 px wide, white on blue, inside the 40 px button; tap → /schedule', async () => {
-  phone = await newPage({ width: 360, height: 780, mobile: true })
-  await loginUI(phone, HOST.email)
+ok.header = await tc('GD14223-01', '#14223 Phone header: a labelled "+ Schedule" button (reopened again 14 Nov evening) opens Schedule', 'Phones 320/360/412: icon 18 px, white on blue, label "Schedule" not clipped, whole header fits (no overflow); tap → /schedule', async () => {
+  const seen = []
+  for (const w of [320, 412, 360]) {
+    phone = await newPage({ width: w, height: 780, mobile: true })
+    await loginUI(phone, HOST.email)
+    const btn = phone.getByTestId('header-schedule-mobile')
+    await btn.waitFor()
+    const m = await btn.evaluate((a) => {
+      const r = (e) => e.getBoundingClientRect()
+      const s = a.querySelector('svg')
+      const header = a.closest('header')
+      return { btnW: Math.round(r(a).width), btnH: Math.round(r(a).height), iconW: Math.round(r(s).width), iconH: Math.round(r(s).height), text: a.innerText.trim(), clipped: a.scrollWidth > a.clientWidth,
+        stroke: getComputedStyle(s).stroke, right: Math.round(r(header.lastElementChild).right), vw: innerWidth, overflowX: document.documentElement.scrollWidth - innerWidth }
+    })
+    if (w === 360) await phone.screenshot({ path: path.join(SHOTS, 'gd14223-header.png'), clip: { x: 0, y: 0, width: 360, height: 90 } })
+    check(m.iconW === 18 && m.iconH === 18, `${w}px icon ${m.iconW}×${m.iconH}`)
+    check(m.text === 'Schedule' && !m.clipped && m.btnH === 40, `${w}px button ${JSON.stringify(m)}`)
+    check(m.stroke === 'rgb(255, 255, 255)', `icon colour ${m.stroke}`)
+    check(m.right <= m.vw && m.overflowX === 0, `${w}px header does not fit ${JSON.stringify(m)}`)
+    seen.push(`${w}px ${m.btnW}×${m.btnH}`)
+  }
+  const m = seen.join(', ')
   const btn = phone.getByTestId('header-schedule-mobile')
-  await btn.waitFor()
-  const m = await btn.evaluate((a) => {
-    const r = (e) => e.getBoundingClientRect()
-    const s = a.querySelector('svg')
-    return { btnW: Math.round(r(a).width), btnH: Math.round(r(a).height), iconW: Math.round(r(s).width), iconH: Math.round(r(s).height), padL: getComputedStyle(a).paddingLeft, stroke: getComputedStyle(s).stroke }
-  })
-  await phone.screenshot({ path: path.join(SHOTS, 'gd14223-header.png'), clip: { x: 0, y: 0, width: 360, height: 90 } })
-  check(m.iconW >= 18 && m.iconH >= 18, `icon ${m.iconW}×${m.iconH}`)
-  check(m.btnW === 40 && m.btnH === 40 && m.padL === '0px', `button ${JSON.stringify(m)}`)
-  check(m.stroke === 'rgb(255, 255, 255)', `icon colour ${m.stroke}`)
   await btn.click()
   await phone.waitForURL(/\/schedule$/)
-  return JSON.stringify(m)
+  return m
 })
 
-ok.occ = await tc('GD14217-01', '#14217 Repeat → After: nothing is shown under Occurrences (no red message, no hint); values are clamped; 2 occurrences schedule', 'typed 99→52, 1→2, empty→2, 2→2; no text under the field; schedules 2 meetings', async () => {
+ok.dash = await tc('GD14223-02', '#14223 (reopened) Phone dashboard has a labelled "Schedule meeting" button; desktop keeps only the header one', 'Phones 320/360/412: visible, icon 16 px, label fits (no clipping, no page overflow), opens /schedule; 1366: hidden', async () => {
+  const seen = []
+  for (const w of [320, 360, 412]) {
+    const p = await newPage({ width: w, height: 800, mobile: true })
+    await loginUI(p, HOST.email)
+    await p.goto('/dashboard')
+    const b = p.getByTestId('dashboard-schedule-mobile')
+    await b.waitFor()
+    const m = await b.evaluate((a) => ({ icon: Math.round(a.querySelector('svg').getBoundingClientRect().width), clipped: a.scrollWidth > a.clientWidth, text: a.innerText.trim(), overflowX: document.documentElement.scrollWidth - innerWidth }))
+    check(m.icon === 16 && !m.clipped && m.overflowX === 0 && /^Schedule( meeting)?$/.test(m.text), `${w}px: ${JSON.stringify(m)}`)
+    if (w === 360) { await p.screenshot({ path: path.join(SHOTS, 'gd14223-dashboard-360.png') }); await b.click(); await p.waitForURL(/\/schedule$/) }
+    seen.push(`${w}px "${m.text}"`)
+  }
+  const d = await newPage({ width: 1366, height: 860 })
+  await loginUI(d, HOST.email)
+  await d.goto('/dashboard')
+  await d.getByTestId('new-meeting').waitFor()
+  check(!(await d.getByTestId('dashboard-schedule-mobile').isVisible()), 'shown on desktop')
+  return `${seen.join(', ')}; opens /schedule; hidden at 1366 px`
+})
+
+ok.occ = await tc('GD14217-01', '#14217 Repeat: the "After"/Occurrences choice is gone (reopened 14 Nov; full check in room/goodday-14227-14217.mjs GD14217-02)', 'No ends-after or occurrences on the Repeat editor', async () => {
   const p = await newPage({ width: 1366, height: 900 })
   await loginUI(p, HOST.email)
   await p.goto('/schedule')
-  const form = p.getByTestId('schedule-form')
-  await form.getByLabel('Title', { exact: true }).fill(`GD14217 repeat ${tag}`)
-  await form.getByLabel('Category').selectOption('INTERNAL_MEETING')
-  await form.getByText('Repeat this meeting').click()
-  const occ = p.getByTestId('occurrences')
-  await occ.waitFor()
-  await p.getByTestId('ends-after').check()
-  const seen = []
-  for (const [typed, expect] of [['99', '52'], ['1', '2'], ['', '2'], ['2', '2']]) {
-    await occ.fill(typed)
-    await occ.blur()
-    const v = await occ.inputValue()
-    seen.push(`${typed || '(empty)'}→${v}`)
-    check(v === expect, `typed "${typed}" became "${v}" (expected ${expect})`)
-    // The field's wrapper: label + input only - no hint or error paragraph.
-    const under = await occ.evaluate((i) => [...i.closest('div.flex.flex-col, div')?.parentElement?.querySelectorAll('p') ?? []].map((x) => x.innerText.trim()).filter(Boolean))
-    check(under.length === 0, `text under the field after "${typed}": ${JSON.stringify(under)}`)
-  }
-  check((await form.getByText(/Choose between 2 and|Between 2 and 52/).count()) === 0, 'an occurrences message or hint is still shown')
-  await occ.scrollIntoViewIfNeeded()
-  await p.screenshot({ path: path.join(SHOTS, 'gd14217-occurrences.png') })
-  retire()
-  await form.getByRole('button', { name: /Schedule recurring meeting|Schedule meeting/ }).click()
-  await p.waitForURL(/\/meetings\/[0-9a-f-]{36}$/, { timeout: 25_000 })
-  const n = scalar(`SELECT COUNT(*) AS v FROM mtg.Meetings WHERE Title = N'GD14217 repeat ${tag}'`)
-  check(Number(n) === 2, `${n} occurrences created (expected 2)`)
-  return `${seen.join(', ')}; nothing under the field; scheduled ${n} occurrences`
+  await p.getByTestId('schedule-form').getByText('Repeat this meeting').click()
+  await p.getByTestId('recurrence-editor').waitFor()
+  check((await p.getByTestId('ends-after').count()) === 0 && (await p.getByTestId('occurrences').count()) === 0, '"After"/Occurrences still shown')
+  check((await p.getByTestId('ends-on-date').count()) === 1, '"Ends on" date missing')
+  return 'no After/Occurrences; "Ends on" date only'
 })
 
 // A phone browser where this site's camera and microphone are blocked (prompts denied, nothing granted).

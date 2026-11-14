@@ -89,40 +89,14 @@ await tc('G4-01', '#14218 Schedule Meeting + Customer PLVC: no No recording / Op
   return `PLVC shows: "${text.replace(/\s+/g, ' ').slice(0, 90)}…"; Internal shows 3 choices; scheduled PLVC stored ${pol}`
 })
 
-await tc('G4-02', '#14217 Repeat → After N occurrences: the "between 2 and 52" message disappears as soon as the value is valid', async () => {
-  await host.goto('/schedule')
-  const form = host.getByTestId('schedule-form')
-  await form.getByLabel('Title', { exact: true }).fill(`G4 repeat ${tag}`)
-  await form.getByLabel('Category').selectOption('INTERNAL_MEETING')
-  await form.getByText('Repeat this meeting').click()
-  const occ = host.getByTestId('occurrences')
-  await occ.waitFor()
-  await host.getByTestId('ends-after').check()
-  const seen = []
-  for (const [typed, expect] of [['99', '52'], ['1', '2'], ['', '2'], ['7', '7']]) {
-    await occ.fill(typed)
-    await occ.blur()
-    const v = await occ.inputValue()
-    seen.push(`${typed || '(empty)'}→${v}`)
-    check(v === expect, `typed "${typed}" became "${v}" (expected ${expect})`)
-    check((await form.getByText(/Choose between 2 and \d+ occurrences/).count()) === 0, `red message shown after typing "${typed}"`)
-  }
-  // GoodDay #14217 reopened again (14 Nov): the grey hint was removed too - nothing under the field.
-  check((await form.getByText('Between 2 and 52').count()) === 0, 'range hint still shown')
-  // "On date" keeps its choice (two updates in a row used to overwrite each other).
-  await host.getByTestId('ends-on').check()
-  check(await host.getByTestId('ends-on').isChecked(), '"On date" not kept')
-  await host.getByTestId('ends-after').check()
-  await occ.fill('3'); await occ.blur()
-  // G4-01's booking makes the host busy now: finish it so this booking is not (correctly) refused as a clash.
-  sqlcmd(`UPDATE mtg.Meetings SET [Status] = 'COMPLETED', ActualEndUtc = COALESCE(ActualEndUtc, SYSUTCDATETIME()) WHERE [Status] IN ('SCHEDULED', 'LIVE')`)
-  await occ.scrollIntoViewIfNeeded()
-  await host.screenshot({ path: path.join(SHOTS, 'g4-02-occurrences.png') })
-  await form.getByRole('button', { name: /Schedule recurring meeting|Schedule meeting/ }).click()
-  await host.waitForURL(/\/meetings\/[0-9a-f-]{36}$/, { timeout: 25_000 })
-  const n = sqlcmd(`SELECT COUNT(*) FROM mtg.Meetings WHERE Title = N'G4 repeat ${tag}'`)
-  check(n === '3', `${n} occurrences created (expected 3)`)
-  return `${seen.join(', ')}; no red message or hint at any point; scheduled 3 occurrences`
+await tc('G4-02', '#14217 Repeat: the "After"/Occurrences choice is gone (reopened 14 Nov; full check in room/goodday-14227-14217.mjs GD14217-02)', async () => {
+  const p = host
+  await p.goto('/schedule')
+  await p.getByTestId('schedule-form').getByText('Repeat this meeting').click()
+  await p.getByTestId('recurrence-editor').waitFor()
+  check((await p.getByTestId('ends-after').count()) === 0 && (await p.getByTestId('occurrences').count()) === 0, '"After"/Occurrences still shown')
+  check((await p.getByTestId('ends-on-date').count()) === 1, '"Ends on" date missing')
+  return 'no After/Occurrences; "Ends on" date only'
 })
 
 await tc('G4-03', '#14219 In a call: the host sees a labelled "Make host" next to a colleague (not next to customers/guests); hand-over works', async () => {

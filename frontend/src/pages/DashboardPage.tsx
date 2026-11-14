@@ -5,7 +5,7 @@ import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  ArrowRight, CalendarCheck, CalendarClock, CalendarDays, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CircleCheck, Clapperboard, Clock,
+  ArrowRight, CalendarCheck, CalendarClock, CalendarDays, CalendarPlus, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CircleCheck, Clapperboard, Clock,
   Handshake, Hourglass, LogIn, RefreshCw, UserCheck, Users, Video, Radio,
 } from 'lucide-react'
 import { dashboardApi } from '../api'
@@ -88,7 +88,16 @@ export function DashboardPage() {
               Join meeting
             </Button>
           )}
-          {/* No "Schedule" here: the header's "Schedule meeting" button is the one way to schedule (it was offered twice). */}
+          {/* No "Schedule" here on larger screens: the header's "Schedule meeting" button is the one way to schedule (it was
+              offered twice). GoodDay #14223 (reopened): on phones the header only has room for a "+" icon, which was not
+              recognisable as "Schedule" - so phones also get a labelled button here. */}
+          {can('meetings.create') && (
+            <ButtonLink to="/schedule" variant="secondary" leftIcon={<CalendarPlus className="size-4 shrink-0" />} className="px-3! whitespace-nowrap sm:hidden" data-testid="dashboard-schedule-mobile">
+              {/* The smallest phones (under 360 px) have room for "Schedule" only. */}
+              <span className="max-[359px]:hidden">Schedule meeting</span>
+              <span className="min-[360px]:hidden">Schedule</span>
+            </ButtonLink>
+          )}
           {can('calendar.view') && (
             <ButtonLink to="/calendar" variant="secondary" leftIcon={<CalendarDays className="size-4" />}>
               Calendar

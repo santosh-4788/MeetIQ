@@ -64,7 +64,7 @@ type Form = {
 }
 
 function defaultRecurrence(date: string, weekday: Weekday): RecurrenceDraft {
-  return { pattern: 'WEEKLY', interval: 1, byWeekdays: [weekday], endType: 'COUNT', endCount: 10, endUntilDate: addDays(date, 90) }
+  return { pattern: 'WEEKLY', interval: 1, byWeekdays: [weekday], endType: 'UNTIL', endCount: 10, endUntilDate: addDays(date, 90) } // GoodDay #14217: end date only
 }
 
 const WEEKDAY_BY_JS_DAY: Weekday[] = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
@@ -681,9 +681,6 @@ function OccurrenceConflictDialog({
 
 const PATTERN_LABEL: Record<RecurrenceRule['pattern'], string> = { DAILY: 'day(s)', WEEKLY: 'week(s)', MONTHLY: 'month(s)' }
 
-/** GoodDay #14217: any typed number is brought into 2-MAX (empty or 0 -> 2). */
-const clampCount = (n: number) => Math.min(MAX_RECURRENCE_OCCURRENCES, Math.max(2, Number.isFinite(n) && n > 0 ? Math.round(n) : 2))
-
 function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft; onChange: (r: RecurrenceDraft) => void; errors: Record<string, string> }) {
   const set = <K extends keyof RecurrenceDraft>(k: K, v: RecurrenceDraft[K]) => onChange({ ...value, [k]: v })
   const toggleDay = (d: Weekday) => set('byWeekdays', value.byWeekdays.includes(d) ? value.byWeekdays.filter((x) => x !== d) : [...value.byWeekdays, d])
@@ -691,8 +688,6 @@ function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft;
   // GoodDay #14213: fields in a row are aligned by their tops (labels on one line, boxes on one line). Bits without a
   // label of their own (the unit, the radio buttons) sit under an invisible label-height spacer so they line up with the boxes.
   const spacer = <span className="invisible text-[13px] font-semibold" aria-hidden>.</span>
-  // What is typed in Occurrences (may be empty or out of range while typing); the rule itself only ever holds 2-52.
-  const [countText, setCountText] = useState(() => String(value.endCount))
   return (
     <div className="flex flex-col gap-4 rounded-md border border-line bg-surface-muted p-4" data-testid="recurrence-editor">
       <div className="flex flex-wrap items-start gap-3">
@@ -739,53 +734,11 @@ function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft;
         </fieldset>
       )}
 
-      <fieldset>
-        <legend className="mb-1.5 text-[13px] font-semibold text-ink">Ends</legend>
-        <div className="flex flex-col gap-3">
-          <div className="flex items-start gap-3">
-            <div className="flex w-[84px] shrink-0 flex-col gap-1.5 sm:w-24">
-              {spacer}
-              <label className="flex h-11 items-center gap-2 text-[13px] text-ink">
-                <input type="radio" checked={value.endType === 'COUNT'} onChange={() => set('endType', 'COUNT')} className="size-4 accent-brand-500" data-testid="ends-after" />
-                After
-              </label>
-            </div>
-            <TextField
-              label="Occurrences"
-              type="number"
-              min={2}
-              max={MAX_RECURRENCE_OCCURRENCES}
-              value={countText}
-              // GoodDay #14217 (reopened twice): nothing is shown under this field any more - no red message, no hint. Type freely;
-              // the number is kept within 2-52 automatically (on leaving the field); the limit is in the sentence under the editor.
-              onChange={(e) => {
-                const raw = e.target.value.replace(/[^0-9]/g, '').slice(0, 3)
-                setCountText(raw)
-                const n = Number(raw)
-                onChange({ ...value, endType: 'COUNT', endCount: raw && n >= 2 && n <= MAX_RECURRENCE_OCCURRENCES ? n : value.endCount })
-              }}
-              onBlur={() => {
-                const n = clampCount(Number(countText))
-                setCountText(String(n))
-                onChange({ ...value, endCount: n })
-              }}
-              data-testid="occurrences"
-              className="w-28"
-            />
-          </div>
-          <div className="flex items-start gap-3">
-            <div className="flex w-[84px] shrink-0 flex-col gap-1.5 sm:w-24">
-              {spacer}
-              <label className="flex h-11 items-center gap-2 text-[13px] text-ink">
-                <input type="radio" checked={value.endType === 'UNTIL'} onChange={() => set('endType', 'UNTIL')} className="size-4 accent-brand-500" data-testid="ends-on" />
-                On date
-              </label>
-            </div>
-            <DateField label="End date" value={value.endUntilDate} onChange={(v) => onChange({ ...value, endType: 'UNTIL', endUntilDate: v })} error={errors['recurrence.endUntilDate']} />
-          </div>
-        </div>
-      </fieldset>
-      <p className="text-[12px] text-ink-secondary">At most {MAX_RECURRENCE_OCCURRENCES} occurrences, within one year. Each one is a separate meeting that can be rescheduled or cancelled on its own.</p>
+      {/* GoodDay #14217 (reopened, 14 Nov): the "After [n] occurrences" choice and its box are removed - a series ends on a date. */}
+      <div className="flex flex-wrap items-start gap-3" data-testid="ends-on-date">
+        <DateField label="Ends on" value={value.endUntilDate} onChange={(v) => onChange({ ...value, endType: 'UNTIL', endUntilDate: v })} error={errors['recurrence.endUntilDate']} />
+      </div>
+      <p className="text-[12px] text-ink-secondary">The meeting repeats until this date (at most {MAX_RECURRENCE_OCCURRENCES} meetings, within one year). Each one is a separate meeting that can be rescheduled or cancelled on its own.</p>
     </div>
   )
 }

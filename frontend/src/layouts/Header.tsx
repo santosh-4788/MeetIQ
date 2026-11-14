@@ -76,8 +76,11 @@ export function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
             </span>
             {/* GoodDay #14223: px-0! - cn() does not merge classes, so the button's own px-4 won over px-0 and squeezed the
                 icon to 8 px (an empty blue square on phones). shrink-0 keeps the icon at its full 20 px. */}
-            <ButtonLink to="/schedule" aria-label="Schedule meeting" title="Schedule meeting" className="size-10 px-0! sm:hidden" data-testid="header-schedule-mobile">
-              <Plus className="size-5 shrink-0" />
+            {/* GoodDay #14223 (reopened again 14 Nov evening): an icon-only square was still read as "not visible properly", so
+                phones get a labelled "+ Schedule" pill. The icon's size is set as SVG attributes too, not only by CSS. */}
+            <ButtonLink to="/schedule" aria-label="Schedule meeting" title="Schedule meeting" className="gap-1 px-3! text-[13px] sm:hidden" data-testid="header-schedule-mobile">
+              <Plus width={18} height={18} strokeWidth={2.5} className="size-[18px] shrink-0" aria-hidden />
+              <span>Schedule</span>
             </ButtonLink>
           </>
         )}

@@ -51,7 +51,8 @@ import { roomRecordingApi } from '../../api/recordings'
 import { errorMessage } from '../../api/types'
 import { ACTIVITY_EVENT, markInMeeting } from '../../auth/AuthContext'
 import { ConnectMark } from '../../components/brand/ConnectLogo'
-import { ConfirmDialog } from '../../components/ui/Overlay'
+import { ConfirmDialog, Dialog } from '../../components/ui/Overlay'
+import { Button } from '../../components/ui/Button'
 import { useToast } from '../../components/ui/Toast'
 import { cn } from '../../lib/cn'
 import { formatTime, parseUtc, zoneLabel } from '../../lib/format'
@@ -212,6 +213,8 @@ export function MeetingRoom({
     >
       <LayoutContextProvider>
         <LeaveOnPageHide />
+        <KeepScreenOn />
+        <BackgroundCallKeeper title={meeting.title} />
         <OneConnectionGuard claim={claim} identityRef={identityRef} onReplaced={onReplaced} />
         <RoomShell connection={connection} meeting={meeting} backend={backend} onConnectFailed={(m) => exit({ kind: 'error', message: m })}
           onEnded={(endedBy) => exit({ kind: 'ended', endedBy, endedUtc: new Date().toISOString() })} />
@@ -271,6 +274,128 @@ function OneConnectionGuard({ claim, identityRef, onReplaced }: { claim: Claim; 
     }
   }, [room, claim, identityRef, onReplaced])
   return null
+}
+
+/**
+ * GoodDay #14227: keeps the phone's screen on during the call (Screen Wake Lock), so it does not lock by itself - a locked
+ * screen pauses the browser and drops the call just like minimising it. The lock is released by the browser when the page
+ * is hidden, so it is asked for again whenever the page is visible again. Unsupported browsers: nothing happens.
+ */
+function KeepScreenOn() {
+  useEffect(() => {
+    type Sentinel = { release: () => Promise<void> }
+    const wl = (navigator as Navigator & { wakeLock?: { request: (t: 'screen') => Promise<Sentinel> } }).wakeLock
+    if (!wl) return
+    let lock: Sentinel | null = null
+    let alive = true
+    const take = () => {
+      if (document.visibilityState !== 'visible') return
+      wl.request('screen').then((l) => (alive ? (lock = l) : void l.release().catch(() => undefined)), () => undefined)
+    }
+    take()
+    document.addEventListener('visibilitychange', take)
+    return () => {
+      alive = false
+      document.removeEventListener('visibilitychange', take)
+      void lock?.release().catch(() => undefined)
+    }
+  }, [])
+  return null
+}
+
+const IS_ANDROID = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent)
+const BG_HINT_KEY = 'oic.bgHintDismissed'
+
+/**
+ * GoodDay #14227 (reopened 14 Nov: "only happening for Nothing phones and its OS"). Nothing OS - like Xiaomi, OnePlus and
+ * other phones with strict battery saving - stops the browser's network soon after it is minimised, unless the browser's
+ * battery use is "Unrestricted". A web page cannot change that setting, so:
+ *  - the call is registered as an ongoing call (Media Session), which Chrome shows in the notification shade and which
+ *    makes Android less likely to stop it;
+ *  - a person whose connection dropped while the app was in the background gets, on return, the exact steps for their
+ *    phone (Android only; "Don't show again" is remembered on that phone).
+ */
+function BackgroundCallKeeper({ title }: { title: string }) {
+  const room = useRoomContext()
+  const [hint, setHint] = useState(false)
+  useEffect(() => {
+    const ms = (navigator as Navigator & { mediaSession?: MediaSession }).mediaSession
+    if (!ms) return
+    try {
+      ms.metadata = new MediaMetadata({ title, artist: 'OneInsure Connect - call in progress' })
+      ms.playbackState = 'playing'
+    } catch {
+      /* not supported */
+    }
+    return () => {
+      try {
+        ms.metadata = null
+        ms.playbackState = 'none'
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [title])
+  useEffect(() => {
+    if (!IS_ANDROID) return
+    const offer = () => {
+      try {
+        if (localStorage.getItem(BG_HINT_KEY)) return
+      } catch {
+        /* storage blocked: still offer the hint */
+      }
+      setHint(true)
+    }
+    let hiddenAt = document.visibilityState === 'hidden' ? Date.now() : 0
+    let dropped = false // the connection broke while in the background (or just after coming back)
+    let backAt = 0
+    const onDrop = () => {
+      if (hiddenAt || Date.now() - backAt < 15_000) dropped = true
+    }
+    const onBackOnline = () => {
+      if (dropped && document.visibilityState === 'visible') offer()
+    }
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now()
+        dropped = false
+      } else {
+        hiddenAt = 0
+        backAt = Date.now()
+        if (dropped && room.state === ConnectionState.Connected) offer()
+      }
+    }
+    room.on(RoomEvent.Reconnecting, onDrop).on(RoomEvent.SignalReconnecting, onDrop).on(RoomEvent.Reconnected, onBackOnline)
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      room.off(RoomEvent.Reconnecting, onDrop).off(RoomEvent.SignalReconnecting, onDrop).off(RoomEvent.Reconnected, onBackOnline)
+      document.removeEventListener('visibilitychange', onVis)
+    }
+  }, [room])
+  if (!hint) return null
+  const dontShow = () => {
+    try {
+      localStorage.setItem(BG_HINT_KEY, '1')
+    } catch {
+      /* ignore */
+    }
+    setHint(false)
+  }
+  return (
+    <div role="status" className="pointer-events-auto fixed inset-x-3 top-16 z-50 mx-auto max-w-md rounded-xl bg-[#0F2A44] p-4 text-[13px] leading-5 text-white shadow-[0_12px_32px_-8px_rgb(0_0_0/0.6)] ring-1 ring-white/15" data-testid="background-hint">
+      <p className="font-semibold">Your phone paused the call while the app was in the background</p>
+      <p className="mt-1 text-white/80">To stay in the meeting when you minimise the app (needed on Nothing, Xiaomi, OnePlus and some other phones):</p>
+      <ol className="mt-1.5 list-decimal space-y-0.5 pl-5 text-white/90">
+        <li>Open the phone's <strong>Settings</strong> → <strong>Apps</strong> → <strong>Chrome</strong> (or the browser you use).</li>
+        <li>Tap <strong>Battery</strong> (or App battery usage).</li>
+        <li>Choose <strong>Unrestricted</strong>.</li>
+      </ol>
+      <div className="mt-3 flex justify-end gap-2">
+        <button type="button" className="rounded-full px-3 py-1.5 text-[12.5px] font-semibold text-white/80 hover:bg-white/10" onClick={dontShow} data-testid="background-hint-never">Don't show again</button>
+        <button type="button" className="rounded-full bg-white/15 px-3 py-1.5 text-[12.5px] font-semibold hover:bg-white/25" onClick={() => setHint(false)} data-testid="background-hint-ok">OK</button>
+      </div>
+    </div>
+  )
 }
 
 /** Leaves the room when the page is really closed or navigated away (not when a mailto: link opens the mail app). */
@@ -777,6 +902,7 @@ function RoomShell({
         }
       />
       <ConnectionBanner />
+      <AwayNotice />
       <EndTimeBanner ends={ends} setEnds={setEnds} tz={meeting.timeZoneId || 'Asia/Kolkata'} extend={effectiveBackend.host?.extend} onEndNow={effectiveBackend.host ? () => setEnding(true) : undefined} />
       {recording.banner}
       <div className="flex min-h-0 flex-1 gap-3 px-3 pb-1 sm:px-4">
@@ -929,6 +1055,54 @@ function RoomHeader({ meeting, extra }: { meeting: RoomMeetingInfo; extra?: Reac
 }
 
 /** "Reconnecting…" while LiveKit restores the media path on its own; a hint when the uplink is weak. */
+/**
+ * GoodDay #14227: a phone that minimises the browser is paused by Android/iOS after a few seconds and its connection times
+ * out, so the person simply vanished from everyone's screen. Now, when someone drops without leaving (connection timeout,
+ * signal lost - not "left", "removed" or "meeting ended"), the others see "<name> is away" until they are back (they
+ * rejoin by themselves when they return to the meeting) or for at most 3 minutes.
+ */
+const AWAY_REASONS = new Set<DisconnectReason | undefined>([
+  undefined, DisconnectReason.UNKNOWN_REASON, DisconnectReason.CONNECTION_TIMEOUT, DisconnectReason.SIGNAL_CLOSE,
+  DisconnectReason.STATE_MISMATCH, DisconnectReason.JOIN_FAILURE, DisconnectReason.MEDIA_FAILURE, DisconnectReason.MIGRATION,
+])
+const AWAY_MAX_MS = 3 * 60_000
+
+function AwayNotice() {
+  const room = useRoomContext()
+  const [away, setAway] = useState<Map<string, { name: string; since: number }>>(() => new Map())
+  useEffect(() => {
+    const onLeft = (p: RemoteParticipant, reason?: DisconnectReason) => {
+      if (p.identity.startsWith('oic-recorder') || !AWAY_REASONS.has(reason)) return
+      setAway((m) => new Map(m).set(p.identity, { name: p.name || 'A participant', since: Date.now() }))
+    }
+    const onBack = (p: RemoteParticipant) => setAway((m) => (m.has(p.identity) ? (m.delete(p.identity), new Map(m)) : m))
+    room.on(RoomEvent.ParticipantDisconnected, onLeft).on(RoomEvent.ParticipantConnected, onBack)
+    return () => {
+      room.off(RoomEvent.ParticipantDisconnected, onLeft).off(RoomEvent.ParticipantConnected, onBack)
+    }
+  }, [room])
+  useEffect(() => {
+    if (!away.size) return
+    const t = window.setInterval(() => setAway((m) => {
+      const now = Date.now()
+      const kept = [...m].filter(([, v]) => now - v.since < AWAY_MAX_MS)
+      return kept.length === m.size ? m : new Map(kept)
+    }), 5000)
+    return () => window.clearInterval(t)
+  }, [away.size])
+  if (!away.size) return null
+  const names = [...away.values()].map((v) => v.name)
+  const who = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+  return (
+    <div role="status" className="mx-3 mb-2 flex items-center justify-center gap-2 rounded-lg bg-white/10 px-4 py-2 text-center text-[13px] text-white sm:mx-4" data-testid="away-notice">
+      <WifiOff className="size-4 shrink-0 text-amber-300" aria-hidden />
+      <span>
+        <strong>{who}</strong> {names.length === 1 ? 'is' : 'are'} away - the connection paused (for example, the app was minimised on a phone). They come back automatically when they return to the meeting.
+      </span>
+    </div>
+  )
+}
+
 function ConnectionBanner() {
   const state = useConnectionState()
   const room = useRoomContext()
@@ -1034,6 +1208,10 @@ function EndTimeBanner({ ends, setEnds, extend, onEndNow, tz }: {
   const toast = useToast()
   const [now, setNow] = useState(() => Date.now())
   const [busy, setBusy] = useState(false)
+  // GoodDay #14208 (reopened 14 Nov: "popup to extend meeting is not coming for host"): the strip alone was easy to miss, so
+  // when the time is up a host also gets a popup. Shown once per end time: "Keep going" closes it; an extension that runs
+  // out brings it back.
+  const [promptedFor, setPromptedFor] = useState<string | null>(null)
   const end = parseUtc(ends.endUtc).getTime()
   const auto = ends.autoEndUtc ? parseUtc(ends.autoEndUtc).getTime() : null
   const show = now >= end - END_WARNING_MS
@@ -1050,12 +1228,15 @@ function EndTimeBanner({ ends, setEnds, extend, onEndNow, tz }: {
     setBusy(true)
     try {
       setEnds(await extend(minutes)) // everyone, the host included, also gets the "end-changed" notice (one toast)
+      setPromptedFor(ends.endUtc)
     } catch (e) {
       toast.error(errorMessage(e, 'The meeting could not be extended.'))
     } finally {
       setBusy(false)
     }
   }
+  const prompt = !!extend && over && promptedFor !== ends.endUtc
+  const closePrompt = () => setPromptedFor(ends.endUtc)
   const text = !over
     ? `This meeting is scheduled to end at ${formatTime(ends.endUtc, tz)} (in ${mmss(end - now)}).`
     : auto
@@ -1071,6 +1252,28 @@ function EndTimeBanner({ ends, setEnds, extend, onEndNow, tz }: {
           {over && onEndNow && <button type="button" className="rounded-full bg-[#DC2626] px-3 py-1 text-[12.5px] font-semibold hover:brightness-110" onClick={onEndNow} data-testid="end-now">End now</button>}
         </span>
       )}
+      <Dialog
+        open={prompt}
+        onClose={closePrompt}
+        title="The scheduled time is up"
+        size="sm"
+        dismissible={!busy}
+        footer={
+          <div className="grid w-full grid-cols-2 gap-2" data-testid="extend-prompt">
+            <Button variant="primary" onClick={() => void doExtend(15)} loading={busy} data-testid="extend-prompt-15" data-autofocus>Extend 15 min</Button>
+            <Button variant="secondary" onClick={() => void doExtend(30)} disabled={busy} data-testid="extend-prompt-30">Extend 30 min</Button>
+            {onEndNow && <Button variant="danger" onClick={() => (closePrompt(), onEndNow())} disabled={busy} data-testid="extend-prompt-end">End now</Button>}
+            <Button variant="secondary" onClick={closePrompt} disabled={busy} data-testid="extend-prompt-later">Keep going</Button>
+          </div>
+        }
+      >
+        <p className="text-[13.5px] leading-[22px] text-ink-secondary">
+          This meeting was scheduled to end at <strong className="text-ink">{formatTime(ends.endUtc, tz)}</strong>.{' '}
+          {auto
+            ? <>It ends automatically for everyone in <strong className="tabular-nums text-ink">{mmss(auto - now)}</strong> unless you extend it.</>
+            : 'Extend it, or end it for everyone.'}
+        </p>
+      </Dialog>
     </div>
   )
 }
