@@ -25,7 +25,7 @@ export type ChatMessage = {
   state: 'sent' | 'saving' | 'failed'
 }
 
-function PanelHeader({ title, subtitle, action, onClose }: { title: string; subtitle?: ReactNode; action?: ReactNode; onClose: () => void }) {
+export function PanelHeader({ title, subtitle, action, onClose }: { title: string; subtitle?: ReactNode; action?: ReactNode; onClose: () => void }) {
   return (
     <div className="flex items-start justify-between gap-3 border-b border-white/[0.07] px-4 py-3.5">
       <div className="min-w-0">
@@ -323,16 +323,7 @@ export function PeoplePanel({
             </ul>
           </section>
         )}
-        {canTransferHost && (
-          // GoodDay #14219: tell the host where the hand-over is - and why a customer/guest is not offered (the server and the
-          // database refuse a non-employee host: hosts control recording, admission and ending the meeting).
-          <p className="mx-4 mt-3 flex items-start gap-2 rounded-lg bg-cyan-400/10 px-3 py-2 text-[12px] leading-4 text-cyan-100" data-testid="host-transfer-hint">
-            <Crown className="mt-px size-3.5 shrink-0" aria-hidden />
-            {sorted.some((p) => !p.isLocal && participantRole(p).type === 'EMPLOYEE')
-              ? 'To hand over hosting, use "Make host" next to a colleague. You stay in the meeting as a participant.'
-              : 'To hand over hosting, a OneInsure colleague must be in the meeting. Customers and guests cannot be host.'}
-          </p>
-        )}
+        {/* GoodDay #14226: no hand-over note here any more - "Make host" next to each colleague is self-explanatory. */}
         <ul className="flex flex-col py-2" data-testid="participant-list">
           {sorted.map((p) => (
             <PersonRow
@@ -366,7 +357,10 @@ export function PeoplePanel({
           toast.success(`${removing.name || 'The participant'} was removed${block ? ' and cannot come back' : ''}.`)
         }}
       >
-        <p>They are disconnected now. Customers and guests must wait in the waiting room again if they rejoin.</p>
+        {/* GoodDay #14225: says what will happen (it used to read "They are disconnected now" before anything had happened). */}
+        <p data-testid="remove-explainer">
+          {removing?.name || 'They'} will be removed from the call straight away. If a customer or guest opens their link again, they wait in the waiting room until a host lets them in.
+        </p>
         <label className="mt-3 flex items-start gap-2 text-[13px]">
           <input type="checkbox" className="mt-0.5" checked={block} onChange={(e) => setBlock(e.target.checked)} data-testid="remove-block" />
           <span>Do not allow them to rejoin this meeting (their personal link stops working).</span>
@@ -588,7 +582,7 @@ function TestSpeakerButton({ deviceId }: { deviceId: string }) {
   )
 }
 
-export function SettingsPanel({ onClose }: { onClose: () => void }) {
+export function SettingsPanel({ onClose, extra }: { onClose: () => void; /** Optional meeting features (background, noise, camera switch) - only when switched on. */ extra?: ReactNode }) {
   const { localParticipant } = useLocalParticipant()
   const outputSelectable = supportsAudioOutputSelection()
   return (
@@ -597,6 +591,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       <div className="oic-scroll flex flex-col gap-4 overflow-y-auto px-4 py-4">
         <DeviceList kind="videoinput" label="Camera" />
         <DeviceList kind="audioinput" label="Microphone" />
+        {extra}
         {outputSelectable ? (
           <DeviceList kind="audiooutput" label="Speaker / audio output" trailing={(id) => <TestSpeakerButton deviceId={id} />} />
         ) : (

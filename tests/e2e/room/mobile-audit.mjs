@@ -91,7 +91,7 @@ for (const vp of PHONES) {
   for (const p of Object.values(sessions)) await p.context().browser().close().catch(() => {})
 }
 
-for (const [name, width, height] of [['portrait-360', 360, 740], ['portrait-390', 390, 844], ['landscape-844', 844, 390]]) {
+for (const [name, width, height] of [['portrait-320', 320, 568], ['portrait-360', 360, 740], ['portrait-390', 390, 844], ['landscape-844', 844, 390]]) {
   await tc(`MOB-room-${name}`, `Pre-join and meeting room, ${width}×${height}`, 'Pre-join fits; toolbar fits without scrolling; controls ≥ 40 px; panels usable', async () => {
     const p = await newPage({ width, height, mobile: true })
     await loginUI(p, HOST.email)
@@ -121,7 +121,7 @@ for (const [name, width, height] of [['portrait-360', 360, 740], ['portrait-390'
     await p.screenshot({ path: path.join(SHOTS, `m-room-${name}-people.png`) })
     await p.getByTestId('ctl-people').click()
     let sheet = 'n/a'
-    if (width < 640) {
+    if (await p.getByTestId('ctl-more').count()) { // phones in portrait and landscape
       await p.getByTestId('ctl-more').click()
       await p.getByTestId('more-sheet').waitFor()
       await p.screenshot({ path: path.join(SHOTS, `m-room-${name}-more.png`) })

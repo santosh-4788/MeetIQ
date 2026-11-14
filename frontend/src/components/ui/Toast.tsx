@@ -26,7 +26,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div role="status" aria-live="polite" className="pointer-events-none fixed inset-x-4 bottom-[calc(5rem+env(safe-area-inset-bottom))] z-[70] flex flex-col items-center gap-2 sm:inset-x-auto sm:right-6 sm:items-end md:bottom-6">
+      <div role="status" aria-live="polite" className="pointer-events-none fixed inset-x-4 bottom-[calc(5rem+var(--sab))] z-[70] flex flex-col items-center gap-2 sm:inset-x-auto sm:right-6 sm:items-end md:bottom-6">
         <AnimatePresence>
           {toasts.map((t) => (
             <motion.div

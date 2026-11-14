@@ -5,6 +5,7 @@ import { authApi } from '../../api'
 import { meetingsApi, type MeetingDetail } from '../../api/meetings'
 import { roomRecordingApi } from '../../api/recordings'
 import { roomApi, type JoinResponse } from '../../api/room'
+import { employeeFeatureCalls } from '../../api/roomFeatures'
 import { ApiError, errorMessage } from '../../api/types'
 import { useAuth } from '../../auth/AuthContext'
 import { formatDayDate, formatRange, formatTime, zoneLabel } from '../../lib/format'
@@ -52,6 +53,7 @@ function Flow({ m, back, reload }: { m: MeetingDetail; back: ReactNode; reload: 
       loadChat: () => roomApi.chat(m.id),
       postChat: (body) => roomApi.postChat(m.id, body),
       keepAlive: () => authApi.me(),
+      features: employeeFeatureCalls(m.id),
       hasEnded: () => meetingsApi.get(m.id).then((d) => d.status === 'COMPLETED' || d.status === 'CANCELLED'),
       recording: {
         state: () => roomRecordingApi.state(m.id),

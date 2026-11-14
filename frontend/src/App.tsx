@@ -15,6 +15,7 @@ import { PlannedModulePage } from './pages/PlannedModulePage'
 import { AdminPage } from './pages/admin/AdminPage'
 import { AuditLogPage } from './pages/admin/AuditLogPage'
 import { ApiDocsPage } from './pages/admin/ApiDocsPage'
+import { MeetingFeaturesPage } from './pages/admin/MeetingFeaturesPage'
 import { RecordingsRoutes } from './pages/recordings/RecordingsPage'
 import { EmployeesPage } from './pages/employees/EmployeesPage'
 import { OrganisationPage } from './pages/org/OrganisationPage'
@@ -50,6 +51,7 @@ const builtPages: Record<string, ReactNode> = {
   '/admin': <AdminPage />,
   '/audit-log': <AuditLogPage />,
   '/api-docs': <ApiDocsPage />,
+  '/meeting-features': <MeetingFeaturesPage />,
   '/recordings': <RecordingsRoutes />,
   '/reports': <ReportsPage />,
   '/settings': <SettingsPage />,

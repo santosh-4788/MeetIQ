@@ -182,6 +182,8 @@ api.MapMeetingEndpoints();
 api.MapCalendarEndpoints();
 api.MapNotificationEndpoints();
 api.MapRoomEndpoints();
+api.MapRoomFeatureEndpoints();
+api.MapMeetingMinutesEndpoints();
 api.MapMeetingLinkEndpoints();
 api.MapLiveKitWebhook();
 api.MapRecordingPolicyEndpoints();

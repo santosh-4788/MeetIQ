@@ -107,7 +107,8 @@ await tc('G4-02', '#14217 Repeat → After N occurrences: the "between 2 and 52"
     check(v === expect, `typed "${typed}" became "${v}" (expected ${expect})`)
     check((await form.getByText(/Choose between 2 and \d+ occurrences/).count()) === 0, `red message shown after typing "${typed}"`)
   }
-  check((await form.getByText('Between 2 and 52').count()) === 1, 'range hint missing')
+  // GoodDay #14217 reopened again (14 Nov): the grey hint was removed too - nothing under the field.
+  check((await form.getByText('Between 2 and 52').count()) === 0, 'range hint still shown')
   // "On date" keeps its choice (two updates in a row used to overwrite each other).
   await host.getByTestId('ends-on').check()
   check(await host.getByTestId('ends-on').isChecked(), '"On date" not kept')
@@ -121,10 +122,10 @@ await tc('G4-02', '#14217 Repeat → After N occurrences: the "between 2 and 52"
   await host.waitForURL(/\/meetings\/[0-9a-f-]{36}$/, { timeout: 25_000 })
   const n = sqlcmd(`SELECT COUNT(*) FROM mtg.Meetings WHERE Title = N'G4 repeat ${tag}'`)
   check(n === '3', `${n} occurrences created (expected 3)`)
-  return `${seen.join(', ')}; no red message at any point; hint "Between 2 and 52"; scheduled 3 occurrences`
+  return `${seen.join(', ')}; no red message or hint at any point; scheduled 3 occurrences`
 })
 
-await tc('G4-03', '#14219 In a call: the host sees a hint and a labelled "Make host" next to a colleague (not next to customers/guests); hand-over works', async () => {
+await tc('G4-03', '#14219 In a call: the host sees a labelled "Make host" next to a colleague (not next to customers/guests); hand-over works', async () => {
   // G4-01/02 left the host booked "now": finish those so this booking is not (correctly) refused as a clash.
   sqlcmd(`UPDATE mtg.Meetings SET [Status] = 'COMPLETED', ActualEndUtc = COALESCE(ActualEndUtc, SYSUTCDATETIME()) WHERE [Status] IN ('SCHEDULED', 'LIVE')`)
   const start = new Date(Date.now() + 60_000)
@@ -137,10 +138,9 @@ await tc('G4-03', '#14219 In a call: the host sees a hint and a labelled "Make h
   await host.getByRole('button', { name: 'Start meeting' }).click()
   await host.locator('[data-testid="meeting-room"]').waitFor({ timeout: 30_000 })
   await host.getByTestId('ctl-people').click()
-  const hint = host.getByTestId('host-transfer-hint')
-  await hint.waitFor()
-  const alone = await hint.innerText()
-  check(/colleague must be in the meeting/.test(alone), `hint while alone: ${alone}`)
+  // GoodDay #14226 (14 Nov): the hand-over note was removed at the tester's request - no note at all.
+  await host.getByTestId('participant-list').waitFor()
+  check((await host.getByTestId('host-transfer-hint').count()) === 0, 'hand-over note still shown')
   const r = await signedIn(RAVI)
   await r.goto(`/meetings/${id}/room`)
   await r.getByRole('button', { name: 'Join now' }).click()
@@ -149,14 +149,14 @@ await tc('G4-03', '#14219 In a call: the host sees a hint and a labelled "Make h
   await btn.waitFor({ timeout: 20_000 })
   const label = (await btn.innerText()).trim()
   check(label === 'Make host', `button label "${label}"`)
-  check(/use "Make host" next to a colleague/.test(await hint.innerText()), 'hint not updated when a colleague joined')
+  check((await host.getByTestId('host-transfer-hint').count()) === 0, 'hand-over note shown once a colleague joined')
   await host.screenshot({ path: path.join(SHOTS, 'g4-03-make-host.png') })
   await btn.click()
   await host.getByRole('dialog').getByRole('button', { name: 'Make host' }).click()
   await until(() => sqlcmd(`SELECT COUNT(*) FROM mtg.HostTransfers t JOIN mtg.Meetings m ON m.MeetingId = t.MeetingId WHERE m.PublicId = '${id}'`) === '1', 'no host transfer recorded', 15_000)
   await r.getByText('You are now the host.').waitFor({ timeout: 15_000 })
   await api(r, 'POST', `/meetings/${id}/room/end`)
-  return `hint alone: "${alone.slice(0, 60)}…"; "${label}" next to Ravi; hand-over recorded and Ravi told "You are now the host."`
+  return `no hand-over note; "${label}" next to Ravi; hand-over recorded and Ravi told "You are now the host."`
 })
 
 await tc('G4-04', '#14220 Microphone blocked by the browser: ONE clear message with the steps to allow it (was 3 identical "could not be started")', async () => {
@@ -180,13 +180,17 @@ await tc('G4-04', '#14220 Microphone blocked by the browser: ONE clear message w
   await sleep(2500)
   await p.getByTestId('ctl-mic').click().catch(async () => p.locator('[aria-label*="microphone" i]').first().click())
   await sleep(2500)
+  // GoodDay #14222 (14 Nov): a blocked device now opens ONE "Allow your microphone" dialog with the steps (no toast).
   const texts = await p.locator('[role="status"][aria-live="polite"] > *').allInnerTexts() // one entry per toast
   const mic = texts.filter((t) => /microphone/i.test(t))
   await p.screenshot({ path: path.join(SHOTS, 'g4-04-mic-blocked.png') })
-  check(mic.length === 1, `${mic.length} microphone messages: ${JSON.stringify(mic)}`)
-  check(/blocked for this site/.test(mic[0]) && /Permissions/.test(mic[0]), `message: ${mic[0]}`)
+  check(mic.length === 0, `microphone toast(s): ${JSON.stringify(mic)}`)
+  const dialogs = p.getByTestId('device-help')
+  check((await dialogs.count()) === 1, `${await dialogs.count()} device dialogs`)
+  const text = await dialogs.innerText()
+  check(/blocked the microphone/.test(text) && /Permissions/.test(text), `dialog: ${text}`)
   await api(p, 'POST', `/meetings/${created.body.id}/room/end`)
-  return `one message: "${mic[0].replace(/\s+/g, ' ').slice(0, 140)}…"`
+  return `one dialog: "${text.replace(/\s+/g, ' ').slice(0, 140)}…"`
 })
 
 for (const b of browsers) await b.close().catch(() => {})

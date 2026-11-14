@@ -108,7 +108,7 @@ ok.block = ok.admit && await tc('IL-05', 'Host removes the guest and blocks re-e
   await guest.getByTestId('link-join').click()
   await guest.getByText('Ready to join?').waitFor({ timeout: 15_000 })
   await guest.getByRole('button', { name: 'Ask to join' }).click()
-  await until(async () => /no longer works|invalid|withdrawn|expired/i.test(await guest.locator('body').innerText()), 'blocked guest was not refused', 15_000)
+  await until(async () => /You can no longer join this meeting/.test(await guest.locator('body').innerText()), 'blocked guest was not refused', 15_000)
   await view(guest, 'il-guest-blocked')
   check(Number(scalar(`SELECT COUNT(*) AS v FROM mtg.MeetingParticipants WHERE MeetingId = ${mid} AND GuestName = N'${GUEST_NAME}' AND IsBlocked = 1`)) === 1, 'not blocked in SQL')
   return 'removed, blocked in SQL, rejoin refused'

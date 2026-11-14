@@ -10,11 +10,11 @@ import { Badge } from '../components/ui/Feedback'
 /** One centered card over an ambient animated backdrop, shared by every authentication screen. */
 export function AuthLayout() {
   return (
-    // body has padding-top: env(safe-area-inset-top) globally (theme.css) so page content clears the notch/status
+    // body has padding-top: var(--sat) (the top safe-area inset, installed app only) globally (theme.css) so page content clears the notch/status
     // bar - fine for every other (light) page, but it leaves a sliver of body's own light background above this
     // dark gradient. Pull up by that same inset and pad it back on the inside, so this layout paints its own
     // background all the way to the top of the screen instead of leaving that strip to body's canvas colour.
-    <div className="relative flex min-h-dvh flex-col overflow-hidden bg-gradient-brand bg-[length:220%_220%] text-white animate-gradient -mt-[env(safe-area-inset-top)] pt-[env(safe-area-inset-top)]">
+    <div className="relative flex min-h-dvh flex-col overflow-hidden bg-gradient-brand bg-[length:220%_220%] text-white animate-gradient -mt-[var(--sat)] pt-[var(--sat)]">
       <AuthAmbience />
       <div className="relative z-10 flex items-center justify-end px-5 pt-5 sm:px-8">
         {DEMO_MODE && (

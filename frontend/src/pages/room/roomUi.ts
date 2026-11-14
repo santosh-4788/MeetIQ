@@ -3,6 +3,7 @@ import type { Participant } from 'livekit-client'
 import type { CustomerJoinLink } from '../../api/meetings'
 import type { ChatItem, EndTimes, MuteSource, RoomConnection, WaitingEntry } from '../../api/room'
 import type { RecordingBackend } from './RecordingControls'
+import type { FeatureCalls } from '../../api/roomFeatures'
 
 /** Server calls the room needs. Employees use their session; guests their invitation token. Hosts also get `host`. */
 export type RoomBackend = {
@@ -16,6 +17,8 @@ export type RoomBackend = {
       connection drops, so an ended meeting shows "Meeting ended" instead of "Reconnecting…"/"Connection lost". */
   hasEnded?: () => Promise<boolean>
   /** Hosts/organiser: the meeting's shareable link (Invite button). `openOnStart` for a meeting just started. */
+  /** Optional meeting features (polls, private messages, whiteboard). Used only for the features an administrator switched on. */
+  features?: FeatureCalls
   share?: { meetingId: string; openOnStart?: boolean; customer?: CustomerJoinLink | null; customerMeeting?: boolean; /** PLVC instant: the other participants' personal links. */ guests?: CustomerJoinLink[]; /** Unidentified PLVC: no customer to send a link to. */ noCustomer?: boolean }
   host?: {
     waiting: () => Promise<WaitingEntry[]>

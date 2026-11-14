@@ -122,7 +122,7 @@ public static class RoomEndpoints
     static IResult InvalidLink() => Problems.Create(404, "NOT_FOUND", "This invitation link is invalid, has expired or was withdrawn.");
     static IResult HostOnly() => Problems.Create(403, "FORBIDDEN", "Only the host or a co-host can do this.");
 
-    static bool IsHostRole(string role) => role is "HOST" or "COHOST";
+    internal static bool IsHostRole(string role) => role is "HOST" or "COHOST";
 
     static async Task<RoomMeeting?> FindVisibleAsync(IDbConnection c, Guid id, Actor me) =>
         await c.QuerySingleOrDefaultAsync<RoomMeeting>($"""
@@ -139,9 +139,9 @@ public static class RoomEndpoints
             WHERE p.MeetingId = @meetingId AND p.EmployeeId = @employeeId AND p.IsBlocked = 0
             """, new { meetingId, employeeId });
 
-    sealed record Caller(Actor Me, RoomMeeting Meeting, RoomParticipant? Participant);
+    internal sealed record Caller(Actor Me, RoomMeeting Meeting, RoomParticipant? Participant);
 
-    static async Task<(Caller? Caller, IResult? Error)> CallerAsync(IDbConnection c, Guid id, HttpContext ctx, bool hostOnly)
+    internal static async Task<(Caller? Caller, IResult? Error)> CallerAsync(IDbConnection c, Guid id, HttpContext ctx, bool hostOnly)
     {
         var me = await Actor.LoadAsync(c, ctx.User);
         var m = await FindVisibleAsync(c, id, me);
@@ -200,7 +200,7 @@ public static class RoomEndpoints
         catch (LiveKitUnavailableException e) { return Unavailable(e.Message); }
     }
 
-    static async Task<List<string>> HostIdentitiesAsync(IDbConnection c, long meetingId) =>
+    internal static async Task<List<string>> HostIdentitiesAsync(IDbConnection c, long meetingId) =>
         (await c.QueryAsync<string>("SELECT LiveKitIdentity FROM mtg.MeetingParticipants WHERE MeetingId = @meetingId AND [Role] IN ('HOST', 'COHOST')", new { meetingId })).ToList();
 
     /// <summary>Tells the hosts in the room to refresh their waiting list (event-driven, no polling of the database).</summary>
@@ -724,7 +724,7 @@ public static class RoomEndpoints
     }
 
     /// <summary>Guests may read and write the chat only once they are in the meeting (admitted, or no waiting room).</summary>
-    static async Task<(RoomMeeting M, RoomParticipant P)?> AdmittedGuestAsync(IDbConnection c, RoomServices s, string token)
+    internal static async Task<(RoomMeeting M, RoomParticipant P)?> AdmittedGuestAsync(IDbConnection c, RoomServices s, string token)
     {
         var g = await GuestAsync(c, token, s.Clock.UtcNow, countUse: false);
         if (g is null) return null;

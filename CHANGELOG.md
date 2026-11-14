@@ -1,5 +1,180 @@
 # Changelog
 
+## 14 Nov 2026, 07:27–07:32 IST — DEPLOYED: optional meeting features + minutes of meeting
+
+Deployed with your approval to `https://www.oneinsure.com/meet` and database `Oneinsure_v`. Covers the two sections below.
+
+**Pre-checks and backups:**
+- No live meeting and no recording in progress (`LIVE=0;REC=0`), checked before the database change and again before the API swap.
+- Database backup: `Oneinsure_v_preMeetingFeatures_20261114.bak` (copy-only, CHECKSUM, `RESTORE VERIFYONLY` passed, 38.1 MB) in the SQL Server Backup folder.
+- Files backup: `deploy\_backup-20261114-072753` (`api`, `frontend-dist`, `git-diff.patch`).
+
+**Database:**
+- Dry run first, then V026 and V027 applied: 2 migrations, 8 new tables.
+- Every switch is **off**.
+- Permissions: `features.manage` → SuperAdmin, Admin; `minutes.approve` → SuperAdmin, Admin, DepartmentHead, TeamLeader.
+
+**API:** `MeetIQApi` stopped, files copied (`appsettings*.json` untouched), started; health `Healthy`.
+
+**Website:** `npm run build`. MediaPipe files (`.wasm` served as `application/wasm`, `.tflite`) and the background pictures are served from our own server.
+
+**Live checks without sign-in:**
+- `/room-features` returns all `false`;
+- every new endpoint returns 401 without a session;
+- guest calls return 403 while the features are off;
+- the sign-in page loads in Edge without script errors.
+
+**Live tests with sign-in: pending.** The QA accounts' password file no longer exists, and `qa.bugfix.admin` has no role.
+
+## 14 Nov 2026 — Minutes of meeting without AI (branch `feature/ai-collab-1113`)
+
+The host or organiser writes the minutes of meeting on the meeting page. **No AI**: nothing is generated, summarised or guessed. Local only, awaiting your approval. **Off** until an administrator switches on "Minutes of meeting".
+
+**Added:**
+- **Minutes of meeting page** (`/meetings/:id/minutes`), opened from a new card on the meeting page:
+  - meeting facts **from the meeting record**: meeting ID, title, category, date, scheduled and actual times, actual duration, host, organiser, participants with "Attended / Did not join", and for customer meetings the customer and Prarambh Main ID;
+  - typed by people: discussion summary, customer requirements (customer meetings), decisions, pending activities, follow-up date;
+  - action items: description, assigned employee, due date, priority (Low/Medium/High), status (Open/In progress/Done).
+- **Workflow:**
+  - written once the meeting has started;
+  - draft (seen only by the writers and approvers);
+  - every save is a new version;
+  - **approve** (permission `minutes.approve`: Super Admin, Admin, Department Head, Team Leader) makes the minutes read-only and visible to every participant;
+  - **reopen** needs a reason and a new approval.
+- **Version history:** every version stays readable.
+- **Print / Save as PDF:** the browser prints, so Hindi and every other language prints correctly. Empty sections print "Not specified".
+- **Rules:**
+  - a save based on an older version is refused (two people cannot overwrite each other);
+  - audited (`MINUTES_CREATED`, `MINUTES_SAVED`, `MINUTES_APPROVED`, `MINUTES_REOPENED`);
+  - nothing is sent to anyone automatically.
+- **Who can write:** the host, the organiser, co-hosts, and users who can see all meetings. Minutes of a customer meeting also need `customer.meetings.view`.
+
+**Database V027 (additive only):**
+- tables `mtg.MeetingMinutes`, `mtg.MeetingMinutesActionItems`, `mtg.MeetingMinutesVersions`;
+- feature switch `MEETING_MINUTES` (off);
+- permission `minutes.approve`;
+- rollback script `database/rollback/V027__meeting_minutes.rollback.sql`.
+- V027 needs V026.
+
+**Existing code touched:**
+- `RoomFeatureEndpoints.cs`: one more switch key, and `meetingMinutes` added to `/room-features`;
+- `Program.cs`: one line;
+- `MeetingDetailPage.tsx`: one card, shown only when the switch is on;
+- `MeetingsPages.tsx`: one route.
+
+**Bug found by the tests and fixed:** dates moved back by one day on every save. The API's global date converter treats every date as an instant in time and converts it to UTC. The minutes API now takes follow-up and due dates as plain `yyyy-MM-dd` text.
+
+**Tests:** `tests/e2e/room/meeting-minutes.mjs`, MM-01 to MM-16: 16 passed. In the tests, the meetings are marked as held directly in the test database rather than by running a video meeting.
+
+## 13 Nov 2026 — Optional meeting features (branch `feature/ai-collab-1113`, NOT deployed)
+
+"Advanced AI & collaboration" request: we built the parts that are **free and feasible now**. Everything is **local only**, awaiting your approval. Every feature is **off** until an administrator switches it on.
+
+**Added:**
+- **Meeting features admin page** (Organisation → System, permission `features.manage`): one switch per feature, plus an **emergency switch**. Audited.
+- **Reactions:** 👍 👏 ❤️ 🎉 🤔 👎, temporary bubbles, not stored.
+- **Yes/No polls:**
+  - host creates and closes; one answer per participant (database-enforced);
+  - live results for hosts; results for everyone after closing;
+  - stored and audited.
+- **Private 1:1 messages:**
+  - "Private" tab in Chat, with an unread count;
+  - recipient checked by the server; live delivery to exactly two people;
+  - the host cannot read others' messages; reloaded after a reconnect.
+- **Whiteboard:**
+  - own canvas code (pen, highlighter, eraser, line, arrow, rectangle, circle, text, sticky note; colours; undo/redo; clear);
+  - host controls who may draw; strokes synced live; saved for late joiners;
+  - PNG/PDF download.
+- **Background blur / four own backgrounds / your own picture:**
+  - processed in the browser;
+  - MediaPipe files self-hosted (no CDN).
+- **Noise-suppression switch:** browser WebRTC suppression and auto-gain off/on; echo cancellation always on.
+- **Switch camera button** on devices with 2 or more cameras.
+
+**Database V026 (additive only):**
+- tables `app.FeatureSettings`, `mtg.MeetingPolls`, `mtg.MeetingPollVotes`, `mtg.PrivateMessages`, `mtg.MeetingWhiteboards`;
+- permission `features.manage`;
+- rollback script `database/rollback/V026__meeting_features.rollback.sql` (tested).
+
+**Dependencies (exact versions, `npm audit`: 0 vulnerabilities):**
+- `@livekit/track-processors` 0.8.2 (Apache-2.0);
+- `jspdf` 4.2.1 (MIT).
+- Excalidraw was tried and removed: its dependencies carried 12 known vulnerabilities.
+
+**Existing code touched:**
+- room endpoints: 4 helpers made `internal`;
+- `MeetingRoom.tsx`: optional controls rendered only when switched on;
+- Settings panel: optional slot;
+- `web.config`: `.wasm`/`.tflite` MIME types.
+
+**Tests (local):**
+- new browser suite `meeting-features.mjs`: 12 passed, 1 not tested (two-camera device), 0 failed;
+- regression `room.mjs` 11/11 with features off and 11/11 with features on;
+- API 93/93; domain 18/18.
+
+**Bugs found and fixed during testing:**
+- the host's private-message receiver read an empty identity before connecting;
+- placing a sticky note lost focus at once;
+- the whiteboard PDF was 4.3 MB (now about 30 KB, using JPEG).
+
+**Not built (decision needed):**
+- AI assistant, transcription, summaries/minutes and live captions: the server benchmark needs approval; no approved AI notice or retention rule;
+- gesture recognition: planned after acceptance.
+
+**Docs:** `AI_MEETING_ASSISTANT.md`, `AI_PRIVACY_AND_PROCESSING.md`, `TRANSCRIPTION_AND_MOM.md`, `VIRTUAL_BACKGROUND_AND_AUDIO.md`, `WHITEBOARD_FEATURE.md`, `PRIVATE_CHAT_SECURITY.md`, `GESTURE_RECOGNITION.md`, `RESOURCE_BENCHMARK.md`, `OPEN_SOURCE_LICENCE_REVIEW.md`, `FEATURE_CONFIGURATION.md`, `ROLLBACK_PLAN.md`.
+
+## 14 Nov 2026 — Blocked guest message (IL-05) and remaining test runs
+
+- A person removed with "Do not allow them to rejoin" now sees "You can no longer join this meeting. The host removed you from this meeting and turned off rejoining." This replaces "This link needs to be refreshed. Please try joining again." (`GuestRoom.tsx`). The page asks the existing `GET /join/{token}` for the reason ("Removed by the host"), and the token is kept, so trying again gets the same answer. No API change.
+- Tests: `room/instant-link.mjs` 8/8 (IL-05 now expects the new text). On the second local test setup (`_Rec`, 7192/5176): `recording/goodday-fixes-4.mjs` 4/4 and `room/end-and-late-share.mjs` 10/10.
+- Deployed 14 Nov 2026 ~15:30 IST (website only; backup `deploy/_backup-20261114-152804`).
+
+## 14 Nov 2026 — GoodDay #14224, #14225 and #14226
+
+Deployed 14 Nov 2026 ~13:58 IST (website only; backup `deploy/_backup-20261114-135646`). All three marked Resolved in GoodDay with comments.
+
+- **#14224** "If meeting time is over and I extend it, customer is automatically removed from the meet".
+  - Evidence (meeting OIC-261114-3LAL; audit, attendance and LiveKit log):
+    - the guest (iPhone, Mobile Safari, iOS 18.7) lost its signalling connection at 12:41:24 IST, from the phone's side;
+    - the host extended 18 s later, at 12:41:42, so the extension did not cause the drop;
+    - every rejoin from 12:42:38 to 12:47 was then knocked out by an older tab of the same guest resuming in the background ("unable to resume due to missing published tracks", "could not restart participant").
+  - Fix: one live connection per person per browser (`frontend/src/pages/room/oneConnection.ts`, `OneConnectionGuard` in `MeetingRoom.tsx`).
+    - The newest tab claims the identity (in localStorage, announced over a BroadcastChannel).
+    - An older tab stops retrying at once and shows "You joined from another window". LiveKit's retry policy also checks the claim before every retry.
+  - Not changed: an iPhone that locks or leaves Safari can still drop its connection; the customer can rejoin with their link.
+- **#14225** "If I try to remove customer from the meet invalid message is shown". The confirmation said "They are disconnected now" before anything had happened. It now reads "<name> will be removed from the call straight away. If a customer or guest opens their link again, they wait in the waiting room until a host lets them in." Removing itself already worked (audit 12:36:02 IST).
+- **#14226** "Remove this message from the host": the "To hand over hosting…" note in the host's Participants panel is removed. "Make host" next to each colleague is unchanged.
+- Tests: `tests/e2e/room/goodday-14224-14226.mjs` (new; the two-tab case fails with the guard switched off and passes with it on). `recording/goodday-fixes-4.mjs` G4-03 now expects no note.
+
+## 14 Nov 2026 — GoodDay #14223, #14222 and #14217 (reopened again)
+
+Deployed 14 Nov 2026 ~13:15 IST (website only; backup `deploy/_backup-20261114-131433`). All three marked Resolved in GoodDay with comments.
+
+- **#14223** "In mobile web access the schedule now call option not visible properly": on phones the header's "Schedule meeting" button was an empty blue square.
+  - Cause: `cn()` does not merge Tailwind classes, so the button's own `px-4` beat the `px-0` override, leaving 8 px for the + icon.
+  - Fix: `px-0!` and a non-shrinking icon (20 px).
+- **#14222** "if the customer has not given permission to camera and microphone, clicking the icons should redirect to settings":
+  - A web page cannot open the browser's or the phone's settings (browsers do not allow it). The closest safe behaviour is now in place.
+  - Tapping a blocked camera / microphone opens an **"Allow your microphone / camera"** dialog (instead of a toast that disappears). It gives numbered steps for the phone and browser (Android Chrome, iPhone Safari / Chrome, desktop), plus the phone-settings fallback.
+  - **Try again** asks the browser again; if it is still blocked, it says so.
+  - While the dialog is open, the browser's permission is watched: once the user allows it, the dialog closes and the device turns on by itself.
+  - New `pages/room/DeviceHelp.tsx`. The other device messages (in use by another app, not found) stay as toasts.
+- **#14217** "Remove this", reopened a second time without a comment. The red message was already gone; the only text left under Occurrences was the grey hint "Between 2 and 52". The hint is removed too, so nothing is shown under the field. The limit stays in the sentence under the repeat editor, and values are still corrected to 2–52.
+- **Tests:** new `room/goodday-14222-14223.mjs` 5/5 (header icon 20×20 and opens Schedule; nothing under Occurrences and 2 occurrences schedule; blocked mic → dialog with Android steps and no toast; Try again → "still blocked"; camera dialog; allowing the mic → dialog closes and mic on by itself). `recording/goodday-fixes-4.mjs` G4-02 / G4-04 updated to the new behaviour (not rerun: that suite needs the separate `_Rec` test stack).
+
+## 14 Nov 2026 — GoodDay #14221: extra space on phones; room toolbar with the optional features
+
+**Deployed 14 Nov 2026 ~10:00 IST** with approval ("go ahead"). Website only. No live meeting at the time. Backup `deploy\_backup-20261114-095828`. Checked live: the new CSS is served (main and room), API Healthy, the sign-in page at iPhone size has no band (top 0 px), no script errors, no garbled characters. GoodDay #14221 is Resolved, with a comment.
+
+- **#14221** "While login through phone some extra space is coming" (iPhone Safari):
+  - Cause: the page added the iPhone safe-area insets (notch / home indicator) in an ordinary browser tab too. Newer iOS Safari reports those insets even though its own address bar and toolbar already cover that space, so an empty band appeared above the header and below the tab bar.
+  - Fix: the top and bottom insets now apply only in the installed app (display-mode standalone/fullscreen), through the CSS variables `--sat` / `--sab`. Left/right insets (landscape notch) are unchanged.
+  - In the meeting room, the top inset was counted twice (container padding plus header margin). It is now counted once.
+- **Room toolbar with the optional features on** (found while testing): the extra Tools button pushed Leave / End off screen on 360 px phones and in phone landscape.
+  - Phones in landscape (touch screens up to 500 px tall) use the compact toolbar (essentials plus More).
+  - With 7 controls, phones under 390 px tighten the gaps (44 px targets; 40 px under 360 px).
+- **Tests:** `goodday-14221` 5/5; `mobile-audit` 8/8 with the features off and on (new 320 px case; the More sheet is now also tested in landscape); `room.mjs` regression. No API or database change.
+
 ## 13 Nov 2026 — GoodDay #14217 (reopened) and #14220
 
 **Deployed 13 Nov 2026 18:40 IST** with approval ("yes deploy and mark"). Website only. Backup `deploy\_backup-20261113-184030`. Checked live: both changes are served, 0 garbled characters, API Healthy. Both tasks are Resolved in GoodDay, each with a comment.

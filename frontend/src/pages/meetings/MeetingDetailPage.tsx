@@ -23,6 +23,7 @@ import { useLoader } from '../../lib/useLoader'
 import { MeetingRecordingsCard } from '../recordings/MeetingRecordingsCard'
 import { ConflictDialog } from './Conflicts'
 import { MeetingLinkCard, SendToCustomer } from './MeetingLinkShare'
+import { MinutesCard } from './MinutesPage'
 import { CategoryBadge, ResponseBadge, StatusBadge, categoryMeta, combineMeetingDetails, dbCategoryLabel, recordingLabel, useTimeZone } from './meta'
 
 /** /meetings/:id — everything about one meeting, RSVP and host actions. "Join" opens the video room (/meetings/:id/room). */
@@ -119,6 +120,7 @@ function Detail({ m, tz, reload, reloading }: { m: MeetingDetail; tz: string; re
             </Card>
           )}
           <ParticipantsCard m={m} tz={tz} reload={reload} />
+          {m.status !== 'DRAFT' && <MinutesCard meetingId={m.id} tz={tz} />}
         </div>
         <div className="flex min-w-0 flex-col gap-5">
           {m.my.canRespond && <RsvpCard m={m} reload={reload} />}

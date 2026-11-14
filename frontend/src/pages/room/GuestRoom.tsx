@@ -4,6 +4,7 @@ import { ArrowLeft, CircleAlert, DoorOpen, RotateCw, ShieldX } from 'lucide-reac
 import { joinApi, type JoinInfo } from '../../api/meetings'
 import { guestRecordingApi } from '../../api/recordings'
 import { guestRoomApi, type RoomConnection, type RoomMeetingInfo } from '../../api/room'
+import { guestFeatureCalls } from '../../api/roomFeatures'
 import { ApiError, errorMessage } from '../../api/types'
 import { formatRange, zoneLabel } from '../../lib/format'
 import { MeetingRoom, type RoomExit } from './MeetingRoom'
@@ -61,6 +62,7 @@ export default function GuestRoom({
       loadChat: () => guestRoomApi.chat(token),
       postChat: (body) => guestRoomApi.postChat(token, body, isGuest ? name.trim() : undefined),
       hasEnded: () => joinApi.get(token).then((j) => j.status === 'ENDED' || j.status === 'CANCELLED'),
+      features: guestFeatureCalls(token),
       recording: {
         state: () => guestRecordingApi.state(token),
         consent: (decision, version) => guestRecordingApi.consent(token, decision, version),
@@ -105,6 +107,19 @@ export default function GuestRoom({
         return true
       }
       if (e instanceof ApiError && e.status === 404 && token) {
+        // IL-05 (14 Nov 2026): a person the host removed with "Do not allow them to rejoin" is told so plainly - not "this link
+        // needs to be refreshed". The token is kept, so trying again in this browser gets the same answer.
+        const reason = await joinApi.get(token).then(() => '', (x: unknown) => (x instanceof ApiError ? String(x.details.reason ?? '') : ''))
+        if (/removed by the host/i.test(reason)) {
+          setPhase({
+            name: 'refused',
+            title: 'You can no longer join this meeting',
+            message: 'The host removed you from this meeting and turned off rejoining. Contact the organiser if you think this was a mistake.',
+          })
+          tracksRef.current = previews
+          releaseTracks()
+          return true
+        }
         // A remembered personal token (from an earlier visit) no longer works - forget it and let a retry ask the
         // server for a fresh one, rather than silently failing the same way every time.
         onInvalidToken?.()

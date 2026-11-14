@@ -60,6 +60,15 @@ import { ChatPanel, PeoplePanel, SettingsPanel, SupportLine, type ChatMessage } 
 import { useRoomRecording } from './RecordingControls'
 import { ShareLinkDialog } from '../meetings/MeetingLinkShare'
 import { RoomUiContext, participantRole, useRoomUi, type RoomBackend, type RoomUi } from './roomUi'
+import { NO_FEATURES, roomFeaturesApi, type RoomFeatures } from '../../api/roomFeatures'
+import { ReactionOverlay, useReactions } from './features/Reactions'
+import { PollsPanel, usePolls } from './features/Polls'
+import { PrivateChatPanel, usePrivateChat } from './features/PrivateChat'
+import { EffectsSettings, useMediaEffects } from './features/MediaEffects'
+import { WhiteboardStage, useWhiteboardState } from './features/Whiteboard'
+import { ToolsButton } from './features/ToolsMenu'
+import { CHANNEL, guardedReconnectPolicy, newClaim, releaseClaim, supersededBy, writeClaim, type Claim } from './oneConnection'
+import { DeviceHelpDialog, openDeviceHelp, permissionState, type DeviceKind } from './DeviceHelp'
 
 export type { RoomBackend } from './roomUi'
 
@@ -143,8 +152,22 @@ export function MeetingRoom({
   backend: RoomBackend
   onExit: (exit: RoomExit) => void
 }) {
+  // GoodDay #14224: this tab's claim on the person's identity; a newer tab of the same person replaces this one.
+  const claim = useMemo(newClaim, [])
+  const identityRef = useRef<string | undefined>(undefined)
+  const replacedRef = useRef<() => void>(() => undefined)
   // Fixed for the lifetime of the room: changing them would reconnect.
-  const options = useMemo(roomOptions, [])
+  const options = useMemo<RoomOptions>(
+    () => ({
+      ...roomOptions(),
+      reconnectPolicy: guardedReconnectPolicy(() => {
+        const replaced = supersededBy(identityRef.current, claim)
+        if (replaced) replacedRef.current()
+        return replaced
+      }),
+    }),
+    [claim],
+  )
   const toast = useToast()
   const exited = useRef(false)
   const exit = useCallback(
@@ -159,6 +182,8 @@ export function MeetingRoom({
     },
     [onExit, tracks],
   )
+  const onReplaced = useCallback(() => exit({ kind: 'duplicate' }), [exit])
+  replacedRef.current = onReplaced
 
   return (
     <LiveKitRoom
@@ -187,13 +212,65 @@ export function MeetingRoom({
     >
       <LayoutContextProvider>
         <LeaveOnPageHide />
+        <OneConnectionGuard claim={claim} identityRef={identityRef} onReplaced={onReplaced} />
         <RoomShell connection={connection} meeting={meeting} backend={backend} onConnectFailed={(m) => exit({ kind: 'error', message: m })}
           onEnded={(endedBy) => exit({ kind: 'ended', endedBy, endedUtc: new Date().toISOString() })} />
         {connection.canPublish && <PublishOnConnect media={connection.canPublishVideo === false ? { ...media, videoEnabled: false } : media} tracks={connection.canPublishVideo === false ? { audio: tracks.audio } : tracks} />}
       </LayoutContextProvider>
       <RoomAudioRenderer />
+      <DeviceHelpDialog />
     </LiveKitRoom>
   )
+}
+
+/**
+ * GoodDay #14224: the newest tab of a person owns the connection. On joining it announces itself; an older tab of the same
+ * person (same LiveKit identity) leaves at once and shows "You joined from another window" instead of retrying in the
+ * background and knocking the new connection out. Also checked whenever this tab starts reconnecting or becomes visible.
+ */
+function OneConnectionGuard({ claim, identityRef, onReplaced }: { claim: Claim; identityRef: React.MutableRefObject<string | undefined>; onReplaced: () => void }) {
+  const room = useRoomContext()
+  useEffect(() => {
+    let channel: BroadcastChannel | null = null
+    try {
+      channel = new BroadcastChannel(CHANNEL)
+    } catch {
+      /* very old browser: the localStorage check before every retry still applies */
+    }
+    const replaced = () => {
+      onReplaced()
+      void room.disconnect()
+    }
+    const announce = () => {
+      const identity = room.localParticipant?.identity
+      if (!identity) return
+      identityRef.current = identity
+      if (supersededBy(identity, claim)) return replaced()
+      writeClaim(identity, claim)
+      channel?.postMessage({ identity, ...claim })
+    }
+    const check = () => {
+      if (supersededBy(identityRef.current, claim)) replaced()
+    }
+    const onMessage = (e: MessageEvent<Partial<Claim> & { identity?: string }>) => {
+      const d = e.data
+      if (!d || !identityRef.current || d.identity !== identityRef.current || d.id === claim.id) return
+      if ((d.startedAt ?? 0) > claim.startedAt) replaced()
+      else announce() // an older tab came back: tell it that this one is newer
+    }
+    channel?.addEventListener('message', onMessage)
+    room.on(RoomEvent.Connected, announce).on(RoomEvent.Reconnected, announce).on(RoomEvent.Reconnecting, check).on(RoomEvent.SignalReconnecting, check)
+    document.addEventListener('visibilitychange', check)
+    if (room.state === ConnectionState.Connected) announce()
+    return () => {
+      channel?.removeEventListener('message', onMessage)
+      channel?.close()
+      room.off(RoomEvent.Connected, announce).off(RoomEvent.Reconnected, announce).off(RoomEvent.Reconnecting, check).off(RoomEvent.SignalReconnecting, check)
+      document.removeEventListener('visibilitychange', check)
+      if (identityRef.current) releaseClaim(identityRef.current, claim)
+    }
+  }, [room, claim, identityRef, onReplaced])
+  return null
 }
 
 /** Leaves the room when the page is really closed or navigated away (not when a mailto: link opens the mail app). */
@@ -413,7 +490,20 @@ function useWaiting(host: RoomBackend['host']) {
 
 // ---- Shell ----------------------------------------------------------------------------------------------------------
 
-type Panel = 'chat' | 'people' | 'settings' | null
+type Panel = 'chat' | 'people' | 'settings' | 'polls' | 'private' | null
+
+/** Optional meeting features (all off unless an administrator switched them on). Asked once when the room opens. */
+function useRoomFeatures() {
+  const [features, setFeatures] = useState<RoomFeatures>(NO_FEATURES)
+  useEffect(() => {
+    let alive = true
+    void roomFeaturesApi.get().then((f) => alive && setFeatures(f))
+    return () => {
+      alive = false
+    }
+  }, [])
+  return features
+}
 
 function RoomShell({
   connection,
@@ -571,6 +661,65 @@ function RoomShell({
   const hands = useHands()
   const waiting = useWaiting(effectiveBackend.host)
   const recording = useRoomRecording(effectiveBackend.recording)
+
+  // ---- Optional features (13 Nov 2026). With every feature off (the default) none of this renders anything. ----
+  const features = useRoomFeatures()
+  const fcalls = effectiveBackend.features
+  const reactions = useReactions(features.reactions)
+  const polls = usePolls(fcalls?.polls, features.polls && !!fcalls, panel === 'polls')
+  const [privateWith, setPrivateWith] = useState<string | null>(null)
+  const pchat = usePrivateChat(fcalls?.private, features.privateChat && !!fcalls, panel === 'private' ? privateWith : null)
+  const board = useWhiteboardState(fcalls?.whiteboard, features.whiteboard && !!fcalls)
+  const [boardHidden, setBoardHidden] = useState(false)
+  useEffect(() => {
+    if (board.state.isOpen) setBoardHidden(false)
+  }, [board.state.isOpen])
+  const fx = useMediaEffects(features)
+  const showBoard = features.whiteboard && !!fcalls && board.state.isOpen && !boardHidden
+  const canManageBoard = !!effectiveBackend.host && !!fcalls?.whiteboard.setState
+  const openBoard = async () => {
+    try {
+      await fcalls!.whiteboard.setState!({ open: true })
+      board.refresh()
+    } catch (e) {
+      toast.error(errorMessage(e, 'The whiteboard could not be opened.'))
+    }
+  }
+  const boardAction = !features.whiteboard || !fcalls
+    ? undefined
+    : board.state.isOpen
+      ? boardHidden ? { label: 'Show whiteboard', onClick: () => setBoardHidden(false) } : { label: 'Hide whiteboard (show video)', onClick: () => setBoardHidden(true) }
+      : canManageBoard ? { label: 'Open whiteboard', onClick: () => void openBoard() } : undefined
+  const anyEffects = features.backgroundEffects || features.noiseSuppression || fx.canFlip
+  const toolsButton = (features.reactions || (features.polls && fcalls) || boardAction || anyEffects) ? (
+    <ToolsButton
+      reactions={features.reactions}
+      onReact={reactions.send}
+      polls={features.polls && fcalls ? () => setPanel('polls') : undefined}
+      pollsAttention={polls.attention}
+      whiteboard={boardAction}
+      effects={anyEffects ? () => setPanel('settings') : undefined}
+    />
+  ) : null
+  const chatTabs = features.privateChat && !!fcalls && (panel === 'chat' || panel === 'private') && (
+    <div className="flex gap-1 border-b border-white/[0.07] px-3 pt-3" role="tablist" aria-label="Chat type">
+      {(['chat', 'private'] as const).map((t) => (
+        <button
+          key={t}
+          type="button"
+          role="tab"
+          aria-selected={panel === t}
+          onClick={() => setPanel(t)}
+          className={cn('relative -mb-px rounded-t-lg px-3 py-2 text-[13px] font-semibold', panel === t ? 'border-b-2 border-cyan-400 text-white' : 'text-white/55 hover:text-white')}
+          data-testid={`chat-tab-${t}`}
+        >
+          {t === 'chat' ? 'Everyone' : 'Private'}
+          {t === 'private' && pchat.unread > 0 && <span className="ml-1.5 rounded-full bg-violet-500 px-1.5 text-[11px] text-white">{pchat.unread}</span>}
+        </button>
+      ))}
+    </div>
+  )
+
   const everConnected = useRef(false)
 
   if (state === ConnectionState.Connected) everConnected.current = true
@@ -637,9 +786,17 @@ function RoomShell({
               <LoaderCircle className="size-8 animate-spin text-cyan-400" aria-hidden />
               Connecting to the meeting…
             </div>
+          ) : showBoard ? (
+            <WhiteboardStage calls={fcalls!.whiteboard} state={board.state} meetingCode={meeting.meetingCode} onHide={() => setBoardHidden(true)} />
           ) : (
             <Stage layout={layout} />
           )}
+          {features.whiteboard && board.state.isOpen && boardHidden && (
+            <button type="button" onClick={() => setBoardHidden(false)} className="absolute left-3 top-3 z-10 inline-flex h-9 items-center gap-2 rounded-full bg-cyan-500/90 px-3.5 text-[12.5px] font-semibold text-white shadow-lg hover:bg-cyan-500" data-testid="wb-show">
+              Whiteboard is open - show it
+            </button>
+          )}
+          {features.reactions && <ReactionOverlay items={reactions.items} />}
           <StartAudio label="Click to turn on meeting audio" className="oic-start-audio" />
         </main>
         <AnimatePresence>
@@ -647,13 +804,16 @@ function RoomShell({
             <motion.aside
               key={panel}
               className="oic-panel fixed inset-x-2 top-16 bottom-24 z-20 flex flex-col overflow-hidden rounded-xl sm:static sm:inset-auto sm:z-auto sm:w-[360px] sm:shrink-0"
-              aria-label={panel === 'chat' ? 'Chat' : panel === 'people' ? 'Participants' : 'Settings'}
+              aria-label={panel === 'chat' ? 'Chat' : panel === 'people' ? 'Participants' : panel === 'polls' ? 'Polls' : panel === 'private' ? 'Private messages' : 'Settings'}
               initial={{ opacity: 0, y: 10, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 10, scale: 0.98 }}
               transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
             >
+              {chatTabs}
               {panel === 'chat' && <ChatPanel messages={chat.messages} onSend={chat.send} onRetry={chat.retry} historyError={chat.historyError} onClose={() => setPanel(null)} />}
+              {panel === 'private' && fcalls && <PrivateChatPanel chat={pchat} withIdentity={privateWith} onWith={setPrivateWith} onClose={() => setPanel(null)} />}
+              {panel === 'polls' && fcalls && <PollsPanel calls={fcalls.polls} polls={polls} onClose={() => setPanel(null)} />}
               {panel === 'people' && (
                 <PeoplePanel
                   waiting={waiting.items}
@@ -671,7 +831,7 @@ function RoomShell({
                   }
                 />
               )}
-              {panel === 'settings' && <SettingsPanel onClose={() => setPanel(null)} />}
+              {panel === 'settings' && <SettingsPanel onClose={() => setPanel(null)} extra={anyEffects ? <EffectsSettings fx={fx} /> : undefined} />}
             </motion.aside>
           )}
         </AnimatePresence>
@@ -681,8 +841,10 @@ function RoomShell({
         onLayout={() => setLayout((l) => (l === 'grid' ? 'speaker' : 'grid'))}
         panel={panel}
         onPanel={toggle}
-        unread={chat.unread}
+        unread={chat.unread + pchat.unread}
         waitingCount={waiting.items.length}
+        tools={toolsButton}
+        chatActive={panel === 'chat' || panel === 'private'}
         handRaised={hands.mine}
         onHand={hands.toggle}
         onLeave={() => void room.disconnect()}
@@ -1051,7 +1213,7 @@ function useScreenShareRecovery(pub: TrackPublication | undefined, el: React.Ref
  * with the steps to fix it; the same message is not repeated within 8 s (the toggle and LiveKit both report one failure).
  */
 const lastDeviceNotice = new Map<string, number>()
-type DeviceKind = 'microphone' | 'camera'
+
 function deviceReason(e: unknown): 'denied' | 'busy' | 'missing' | 'other' {
   const name = (e as { name?: string } | null)?.name ?? String(e ?? '')
   if (/NotAllowed|PermissionDenied|Security/i.test(name)) return 'denied'
@@ -1069,6 +1231,8 @@ export function deviceMessage(kind: DeviceKind, reason: ReturnType<typeof device
 }
 function notifyDevice(toast: { error: (t: string) => void }, kind: DeviceKind, e: unknown) {
   const reason = deviceReason(e)
+  // GoodDay #14222: blocked by the browser -> the "Allow your camera/microphone" dialog with the steps (not a toast).
+  if (reason === 'denied') return openDeviceHelp(kind)
   const key = `${kind}:${reason}`
   const now = Date.now()
   if (now - (lastDeviceNotice.get(key) ?? 0) < 8000) return
@@ -1080,12 +1244,18 @@ function notifyDevice(toast: { error: (t: string) => void }, kind: DeviceKind, e
 
 function MediaToggle({ source, labelOn, labelOff, iconOn, iconOff, testId }: { source: Track.Source.Microphone | Track.Source.Camera; labelOn: string; labelOff: string; iconOn: ReactNode; iconOff: ReactNode; testId: string }) {
   const toast = useToast()
+  const kind: DeviceKind = source === Track.Source.Camera ? 'camera' : 'microphone'
   const { enabled, pending, toggle } = useTrackToggle({
     source,
-    onDeviceError: (e) => notifyDevice(toast, source === Track.Source.Camera ? 'camera' : 'microphone', e),
+    onDeviceError: (e) => notifyDevice(toast, kind, e),
   })
+  // GoodDay #14222: when the browser already reports the device as blocked, tapping it opens the steps straight away.
+  const onClick = async () => {
+    if (!enabled && (await permissionState(kind)) === 'denied') return openDeviceHelp(kind)
+    void toggle()
+  }
   return (
-    <button type="button" className="oic-ctl" data-off={!enabled || undefined} aria-pressed={enabled} disabled={pending} onClick={() => void toggle()} aria-label={enabled ? labelOn : labelOff} title={enabled ? labelOn : labelOff} data-testid={testId}>
+    <button type="button" className="oic-ctl" data-off={!enabled || undefined} aria-pressed={enabled} disabled={pending} onClick={() => void onClick()} aria-label={enabled ? labelOn : labelOff} title={enabled ? labelOn : labelOff} data-testid={testId}>
       {enabled ? iconOn : iconOff}
     </button>
   )
@@ -1094,9 +1264,10 @@ function MediaToggle({ source, labelOn, labelOff, iconOn, iconOff, testId }: { s
 /** Phones and tablets: Android and iOS browsers cannot share the screen (no getDisplayMedia), so the control is not offered. */
 const canShareScreen = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function'
 
-/** Narrow screens (phones): the toolbar keeps the essentials and moves the rest into "More". */
+/** Narrow screens (phones), and phones in landscape (short touch screens): the toolbar keeps the essentials and moves
+ *  the rest into "More". In landscape the full toolbar did not fit once the optional Tools button was added. */
 function useCompact() {
-  const query = '(max-width: 639px)'
+  const query = '(max-width: 639px), (max-height: 500px) and (pointer: coarse)'
   const [compact, setCompact] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches)
   useEffect(() => {
     const m = window.matchMedia(query)
@@ -1136,6 +1307,8 @@ function ControlBar({
   onLeave,
   onEndForAll,
   extra,
+  tools,
+  chatActive,
 }: {
   layout: 'grid' | 'speaker'
   onLayout: () => void
@@ -1148,6 +1321,10 @@ function ControlBar({
   onLeave: () => void
   onEndForAll?: () => void
   extra?: ReactNode
+  /** Optional features button (reactions, polls, whiteboard, effects) - null unless one of them is switched on. */
+  tools?: ReactNode
+  /** The chat panel is open on either tab (Everyone / Private). */
+  chatActive?: boolean
 }) {
   const { connection } = useRoomUi()
   const compact = useCompact()
@@ -1190,7 +1367,7 @@ function ControlBar({
     </button>
   )
   return (
-    <nav aria-label="Meeting controls" className="oic-controls flex shrink-0 items-center justify-between gap-2 px-2 sm:h-[68px] sm:px-5 [@media(max-height:500px)]:h-14" data-compact={compact || undefined}>
+    <nav aria-label="Meeting controls" className="oic-controls flex shrink-0 items-center justify-between gap-2 px-2 sm:h-[68px] sm:px-5 [@media(max-height:500px)]:h-14" data-compact={compact || undefined} data-dense={(compact && !!tools) || undefined}>
       {!compact && <div className="hidden w-48 lg:block" />}
       <div className="flex flex-1 items-center justify-center gap-1.5 sm:gap-2.5">
         {connection.canPublish && (
@@ -1203,7 +1380,8 @@ function ControlBar({
         {!compact && connection.canScreenShare && canShareScreen && <ScreenShareToggle />}
         {!compact && presentUnsupported}
         {!compact && hand}
-        <button type="button" className="oic-ctl" data-on={panel === 'chat' || undefined} aria-pressed={panel === 'chat'} onClick={() => onPanel('chat')} title="Chat" data-testid="ctl-chat">
+        {tools}
+        <button type="button" className="oic-ctl" data-on={(chatActive ?? panel === 'chat') || undefined} aria-pressed={chatActive ?? panel === 'chat'} onClick={() => onPanel(panel === 'private' ? 'private' : 'chat')} title="Chat" data-testid="ctl-chat">
           <MessageSquare className="size-5" />
           {unread > 0 && <span className="oic-ctl-badge">{unread > 9 ? '9+' : unread}</span>}
         </button>

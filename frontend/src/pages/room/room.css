@@ -113,7 +113,8 @@
 
 .oic-room header {
   position: relative;
-  margin: max(8px, env(safe-area-inset-top)) 10px 10px;
+  /* 8px only: the room container already pads the top safe-area inset (counting it twice left a band - GoodDay #14221). */
+  margin: 8px 10px 10px;
   border-radius: 24px;
   background: linear-gradient(180deg, rgb(31 45 63 / 0.72), rgb(18 28 42 / 0.62));
   backdrop-filter: blur(20px) saturate(160%);
@@ -470,11 +471,11 @@
    viewport-fit=cover (index.html) lets the room use the whole screen; the safe-area insets keep the header and the
    toolbar clear of the notch, the rounded corners and the iOS home indicator. */
 .oic-room[data-lk-theme].lk-room-container {
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  padding: var(--sat) env(safe-area-inset-right) 0 env(safe-area-inset-left);
 }
 /* A floating glass "island" toolbar (iOS Control Center-style) rather than a bar flush with the screen edge. */
 .oic-controls {
-  margin: 0 10px max(10px, env(safe-area-inset-bottom));
+  margin: 0 10px max(10px, var(--sab));
   border-radius: 24px;
   background: linear-gradient(180deg, rgb(31 45 63 / 0.78), rgb(18 28 42 / 0.78));
   backdrop-filter: blur(20px) saturate(160%);
@@ -485,7 +486,7 @@
 }
 @media (min-width: 640px) {
   .oic-controls {
-    margin: 0 16px max(14px, env(safe-area-inset-bottom));
+    margin: 0 16px max(14px, var(--sab));
     padding-top: 0;
     padding-bottom: 0;
   }
@@ -502,8 +503,19 @@
   .oic-controls[data-compact] > div { gap: 4px; }
   .oic-controls[data-compact] .oic-ctl { height: 44px; min-width: 44px; padding: 0 10px; }
 }
+/* Seven controls (the optional Tools button is on): 360-389 px phones keep 44 px targets with tighter gaps; below
+   360 px the targets go to 40 px so Leave stays on screen. */
+@media (max-width: 389px) {
+  .oic-controls[data-dense] { margin-left: 6px; margin-right: 6px; padding-left: 4px; padding-right: 4px; }
+  .oic-controls[data-dense] > div { gap: 4px; }
+  .oic-controls[data-dense] .oic-ctl { height: 44px; min-width: 44px; padding: 0; }
+}
+@media (max-width: 359px) {
+  .oic-controls[data-dense] > div { gap: 2px; }
+  .oic-controls[data-dense] .oic-ctl { height: 40px; min-width: 40px; }
+}
 .oic-sheet {
-  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  padding-bottom: calc(16px + var(--sab));
 }
 /* Touch devices: no hover-only affordances, no grey tap flash, no double-tap zoom delay on controls. */
 .oic-ctl {
@@ -517,7 +529,7 @@
   position: fixed;
   z-index: 35;
   left: 50%;
-  top: calc(env(safe-area-inset-top, 0px) + 72px);
+  top: calc(var(--sat) + 72px);
   translate: -50% 0;
   width: min(420px, calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
   max-height: min(46vh, 380px);
@@ -542,5 +554,5 @@
   .oic-rec-notice { top: 80px; padding: 18px 18px 16px; }
 }
 @media (max-height: 500px) {
-  .oic-rec-notice { top: calc(env(safe-area-inset-top, 0px) + 52px); max-height: 70vh; }
+  .oic-rec-notice { top: calc(var(--sat) + 52px); max-height: 70vh; }
 }

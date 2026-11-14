@@ -257,8 +257,7 @@ function MeetingForm({ existing }: { existing?: MeetingDetail }) {
     const r = form.recurrence
     if (r) {
       if (r.pattern === 'WEEKLY' && r.byWeekdays.length === 0) v['recurrence.byWeekdays'] = 'Choose at least one day of the week.'
-      if (r.endType === 'COUNT' && (!r.endCount || r.endCount < 2 || r.endCount > MAX_RECURRENCE_OCCURRENCES))
-        v['recurrence.endCount'] = `Choose between 2 and ${MAX_RECURRENCE_OCCURRENCES} occurrences.`
+      // GoodDay #14217: no occurrences message - the editor only ever holds 2-52 (clamped on leaving the field).
       if (r.endType === 'UNTIL' && (!r.endUntilDate || (times && zonedToUtc(r.endUntilDate, '23:59', tz).getTime() <= parseUtc(times.startUtc).getTime())))
         v['recurrence.endUntilDate'] = 'The end date must be after the first occurrence.'
     }
@@ -757,8 +756,8 @@ function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft;
               min={2}
               max={MAX_RECURRENCE_OCCURRENCES}
               value={countText}
-              // GoodDay #14217 (reopened: "not removed"): no red "Choose between 2 and 52" message any more. Type freely; the number is
-              // kept within 2-52 automatically (on leaving the field, and on Schedule), and the range is shown as a plain hint.
+              // GoodDay #14217 (reopened twice): nothing is shown under this field any more - no red message, no hint. Type freely;
+              // the number is kept within 2-52 automatically (on leaving the field); the limit is in the sentence under the editor.
               onChange={(e) => {
                 const raw = e.target.value.replace(/[^0-9]/g, '').slice(0, 3)
                 setCountText(raw)
@@ -770,7 +769,6 @@ function RecurrenceEditor({ value, onChange, errors }: { value: RecurrenceDraft;
                 setCountText(String(n))
                 onChange({ ...value, endCount: n })
               }}
-              hint={`Between 2 and ${MAX_RECURRENCE_OCCURRENCES}`}
               data-testid="occurrences"
               className="w-28"
             />

@@ -360,12 +360,15 @@ ok.reconnect = ok.emp && await tc('ROOM-09', 'Connection loss shows "Reconnectin
   return saw ? 'banner shown while offline; reconnected with media' : 'offline window too short for the banner, but the room recovered with media'
 })
 
-ok.end = ok.host && await tc('ROOM-10', 'Host ends the meeting for everyone', '"End for all" with confirmation; host and employee see "The meeting has ended"; status COMPLETED', async () => {
+ok.end = ok.host && await tc('ROOM-10', 'Host ends the meeting for everyone', '"End for all" with confirmation; host and employee see the "Meeting Ended" screen (13 Nov 2026 wording); status COMPLETED', async () => {
   await host.getByTestId('ctl-end').click()
   await host.getByRole('dialog').getByRole('button', { name: 'End for all' }).click()
-  await host.getByText('The meeting has ended').waitFor({ timeout: 20_000 })
+  await host.getByRole('heading', { name: 'Meeting Ended' }).waitFor({ timeout: 20_000 })
   await view(host, 'ended-host')
-  if (ok.emp) await emp.getByText('The meeting has ended').waitFor({ timeout: 20_000 })
+  if (ok.emp) {
+    await emp.getByRole('heading', { name: 'Meeting Ended' }).waitFor({ timeout: 20_000 })
+    await view(emp, 'ended-employee')
+  }
   const st = sql(`SELECT [Status], ActualStartUtc, ActualEndUtc FROM mtg.Meetings WHERE MeetingId = ${m.MeetingId}`)[0]
   check(st.Status === 'COMPLETED' && st.ActualStartUtc && st.ActualEndUtc, `meeting row ${JSON.stringify(st)}`)
   return `COMPLETED (${st.ActualStartUtc} → ${st.ActualEndUtc})`

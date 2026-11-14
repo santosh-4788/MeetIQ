@@ -186,3 +186,26 @@ Every step below is **implemented, tested and deployed** (13 Nov 2026 00:01 IST;
 | 6 | Retention DELETE disabled (Module 4) | No | Compliance sign-off |
 | 7 | External API: integrations, keys, create/read/complete/download, webhooks, OpenAPI + docs page (Modules 8–12) | V023+ | Auth-method choice |
 | 8 | Full E2E per Module 14 + docs (API guide, endpoint reference, OpenAPI file, storage, sessions) | — | — |
+
+---
+
+# Advanced AI & collaboration request (13 Nov 2026)
+
+**Phase 1 inspection:** branch `feature/ai-collab-1113`, created from `feature/doc-bugs-1113` @ `cee5cdb`, with no uncommitted user changes apart from one updated test.
+
+| Feature | Exists today? | Impact on existing modules | Decision |
+|---|---|---|---|
+| Raise hand | **Exists** (`useHands`, `oic.hand`) | None | Reused; gestures would trigger it later |
+| Camera switching | **Exists** (Settings → Camera list) | None | Added only a one-tap "Switch camera" button (`CAMERA_FLIP`) |
+| Noise suppression / echo cancellation / AGC | **Exists** (browser WebRTC, always on) | None | Added an off/on switch (`NOISE_SUPPRESSION`); RNNoise not added |
+| Group chat | **Exists** (persisted) | None | Unchanged; private messages are a separate tab and table |
+| Reactions, Yes/No polls | Greenfield | Room toolbar: one optional button | **Built** (V026) |
+| Private 1:1 messages | Greenfield | Chat panel: one optional tab | **Built** (V026; server-enforced) |
+| Whiteboard | Greenfield | Room stage shows the board instead of video while it is open | **Built** (own code; V026) |
+| Background blur / images | Greenfield | Camera track gets a browser-side processor (the recording shows the same picture) | **Built** (browser-only) |
+| Admin configuration + emergency switch | Greenfield | New admin page + permission | **Built** (V026) |
+| Minutes of meeting written by people (no AI) — added 14 Nov 2026 | Greenfield | Meeting page: one optional card; one new route; no change to meetings, recordings or the room | **Built** (V027: 3 new tables, switch `MEETING_MINUTES`, permission `minutes.approve`) |
+| AI assistant, transcription, AI-drafted summaries/minutes, live captions | Greenfield | Recording pipeline (input), new job worker, new tables | **Not built:** needs a measured server benchmark (approval) and approved notice/retention wording |
+| Gesture recognition | Greenfield | Browser only | Planned after acceptance |
+
+**Rollback:** `ROLLBACK_PLAN.md`. **Licences:** `OPEN_SOURCE_LICENCE_REVIEW.md`. **Hardware:** `RESOURCE_BENCHMARK.md`.

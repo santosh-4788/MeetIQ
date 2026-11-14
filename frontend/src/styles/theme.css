@@ -133,9 +133,16 @@
   }
   :focus-visible { outline: none; box-shadow: var(--shadow-focus); border-radius: 6px; }
   ::selection { background: #D9E8FC; }
-  /* Notched phones (viewport-fit=cover, and the installed app): keep content out of the notch / home-indicator areas. */
+  /* Notched phones (viewport-fit=cover): keep content out of the notch / home-indicator areas.
+     The top/bottom insets go through --sat / --sab: 0 in a browser tab, the real inset only in the installed app.
+     In a browser tab the browser's own address bar and toolbar already cover those areas, and newer iOS Safari still
+     reports non-zero insets there, which left an empty band above the header and below the tab bar (GoodDay #14221). */
+  :root { --sat: 0px; --sab: 0px; }
+  @media (display-mode: standalone), (display-mode: fullscreen) {
+    :root { --sat: env(safe-area-inset-top, 0px); --sab: env(safe-area-inset-bottom, 0px); }
+  }
   body {
-    padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+    padding: var(--sat) env(safe-area-inset-right) 0 env(safe-area-inset-left);
     -webkit-tap-highlight-color: transparent;
   }
   /* iOS Safari zooms the page when a field under 16 px gets focus: fields are 16 px there (iOS only). */
@@ -170,9 +177,9 @@
 }
 
 /* Phones: the bottom tab bar (layouts/MobileTabBar.tsx) sits above the iOS home indicator; page content clears it. */
-.oic-tabbar { padding-bottom: env(safe-area-inset-bottom); }
+.oic-tabbar { padding-bottom: var(--sab); }
 @media (max-width: 767px) {
-  .oic-main { padding-bottom: calc(5.5rem + env(safe-area-inset-bottom)); }
+  .oic-main { padding-bottom: calc(5.5rem + var(--sab)); }
 }
 
 /* Accessibility: honour the OS "reduce motion" preference everywhere. */

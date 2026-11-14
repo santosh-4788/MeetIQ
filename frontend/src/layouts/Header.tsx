@@ -74,8 +74,10 @@ export function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
                 Schedule meeting
               </ButtonLink>
             </span>
-            <ButtonLink to="/schedule" aria-label="Schedule meeting" title="Schedule meeting" className="size-10 px-0 sm:hidden">
-              <Plus className="size-5" />
+            {/* GoodDay #14223: px-0! - cn() does not merge classes, so the button's own px-4 won over px-0 and squeezed the
+                icon to 8 px (an empty blue square on phones). shrink-0 keeps the icon at its full 20 px. */}
+            <ButtonLink to="/schedule" aria-label="Schedule meeting" title="Schedule meeting" className="size-10 px-0! sm:hidden" data-testid="header-schedule-mobile">
+              <Plus className="size-5 shrink-0" />
             </ButtonLink>
           </>
         )}

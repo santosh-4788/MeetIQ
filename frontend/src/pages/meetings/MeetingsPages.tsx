@@ -9,6 +9,7 @@ import { PlannedModulePage } from '../PlannedModulePage'
 import { MeetingDetailPage } from './MeetingDetailPage'
 import { EditMeetingPage } from './MeetingForm'
 import { MeetingsList } from './MeetingsList'
+import { MinutesPage } from './MinutesPage'
 
 function Actions({ schedule = '/schedule' }: { schedule?: string }) {
   const { can } = useAuth()
@@ -35,6 +36,7 @@ export function MeetingsRoutes() {
       <Route index element={<MyMeetingsPage />} />
       <Route path=":id" element={<MeetingDetailPage />} />
       <Route path=":id/edit" element={<EditMeetingPage />} />
+      <Route path=":id/minutes" element={<MinutesPage />} />
       <Route path="*" element={<PlannedModulePage />} />
     </Routes>
   )
