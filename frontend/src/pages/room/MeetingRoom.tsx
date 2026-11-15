@@ -1467,6 +1467,20 @@ function MediaToggle({ source, labelOn, labelOff, iconOn, iconOff, testId }: { s
 /** Phones and tablets: Android and iOS browsers cannot share the screen (no getDisplayMedia), so the control is not offered. */
 const canShareScreen = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function'
 
+/**
+ * GoodDay #14229 ("Screen Present Feature Not Working in iOS Chrome"): every browser on iPhone/iPad (Chrome, Safari,
+ * Edge, Firefox) runs on Apple's WebKit, and Apple gives web pages no screen capture at all; phone browsers on Android
+ * do not offer it either. The old text told an iOS Chrome user to "try Chrome", so the reason is now given per device.
+ */
+function screenShareUnsupportedMessage(nav: { userAgent: string; maxTouchPoints?: number } = navigator) {
+  const ua = nav.userAgent || ''
+  // iPadOS 13+ reports itself as a Mac; a "Mac" with a touch screen is an iPad.
+  const ios = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && (nav.maxTouchPoints ?? 0) > 1)
+  if (ios) return 'Apple does not let websites share the screen on iPhone or iPad, in Chrome, Safari or any other browser. You can still see screens others present. To present, join from a computer.'
+  if (/Android/i.test(ua)) return 'Phone browsers on Android cannot share the screen. You can still see screens others present. To present, join from a computer.'
+  return 'This browser cannot share the screen. Please update it, or use the latest Chrome, Edge, Firefox or Safari on a computer.'
+}
+
 /** Narrow screens (phones), and phones in landscape (short touch screens): the toolbar keeps the essentials and moves
  *  the rest into "More". In landscape the full toolbar did not fit once the optional Tools button was added. */
 function useCompact() {
@@ -1540,9 +1554,9 @@ function ControlBar({
     <button
       type="button"
       className="oic-ctl opacity-60"
-      onClick={() => toast.error('Screen sharing is not supported on this browser or device. Try a desktop browser such as Chrome or Edge.')}
-      title="Screen sharing is not supported on this browser or device"
-      aria-label="Screen sharing is not supported on this browser or device"
+      onClick={() => toast.error(screenShareUnsupportedMessage())}
+      title="Presenting is not available on this device"
+      aria-label="Presenting is not available on this device"
       data-testid="ctl-present-unsupported"
     >
       <MonitorX className="size-5" />

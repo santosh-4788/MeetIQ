@@ -1,5 +1,22 @@
 # Changelog
 
+## 15 Nov 2026 — GoodDay #14229 "Screen Present Feature Not Working in iOS Chrome, Check for iOS, Android and for all device"
+
+Deployed with approval on 15 Nov 2026 ~10:05 IST (website only; backup `deploy/_backup-20261115-100526`). In GoodDay (project Meet), this was the only new bug. It is marked Resolved there with a comment.
+
+- **Cause (platform limit):** every browser on iPhone/iPad (Chrome, Safari, Edge, Firefox) uses Apple's WebKit, which gives web pages no screen capture (`getDisplayMedia` is missing). Android phone browsers lack it too. A website cannot add it; only an installed native app could.
+- **What was wrong on our side:** the message told an iOS Chrome user to "try a desktop browser such as Chrome or Edge".
+- **Change (`MeetingRoom.tsx`, `screenShareUnsupportedMessage`):** tapping Present on such a device now explains why, per device:
+  - iPhone/iPad (an iPad reports itself as a touch-screen Mac): Apple restriction, in all browsers;
+  - Android: phone browsers cannot share;
+  - other: update the browser.
+  - Each message also says you can still see screens others present, and that you present by joining from a computer.
+- **Before the deploy:** 0 LIVE meetings in the database; last LiveKit activity 09:46 IST.
+- **Checked live:** `index.html` is new (Last-Modified 04:35 UTC); the room chunk has the new text; MediaPipe `.wasm` is served as `application/wasm`; the sign-in page loads.
+- **Tests:**
+  - new `room/goodday-14229.mjs`: 5/5 (iPhone Chrome, Android Chrome, iPad messages; desktop gets the working Present button; an iPhone page receives a screen presented from a desktop);
+  - the frontend type check is clean.
+
 ## 14 Nov 2026, 07:27–07:32 IST — DEPLOYED: optional meeting features + minutes of meeting
 
 Deployed with your approval to `https://www.oneinsure.com/meet` and database `Oneinsure_v`. Covers the two sections below.
