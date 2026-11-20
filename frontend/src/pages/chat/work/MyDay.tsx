@@ -41,7 +41,7 @@ function Line({ children }: { children: ReactNode }) {
 
 function QuickAction({ label, icon, tint, onClick, testId }: { label: string; icon: ReactNode; tint: string; onClick: () => void; testId?: string }) {
   return (
-    <button type="button" onClick={onClick} className="flex w-[74px] shrink-0 flex-col items-center gap-1.5 active:opacity-60" data-testid={testId}>
+    <button type="button" onClick={onClick} className="flex flex-col items-center gap-1.5 active:opacity-60" data-testid={testId}>
       <span className="flex size-[52px] items-center justify-center rounded-[14px] text-white shadow-[0_2px_6px_rgb(0_0_0/0.12)]" style={{ background: tint }}>{icon}</span>
       <span className="text-center text-[12px] leading-[14px] text-[var(--ios-label)]">{label}</span>
     </button>
@@ -156,7 +156,7 @@ export function MyDay({ onSection, onOpenChat, onNewChat, onNewGroup }: {
         {new Intl.DateTimeFormat('en-IN', { weekday: 'long', day: 'numeric', month: 'long' }).format(now)} · {greeting}{first ? `, ${first}` : ''}
       </p>
 
-      <div className="scrollbar-none -mx-4 mt-3 flex gap-1 overflow-x-auto px-4 pb-1 sm:-mx-6 sm:px-6" role="toolbar" aria-label="Quick actions">
+      <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(74px,1fr))] gap-y-3 pb-1" role="toolbar" aria-label="Quick actions">
         <QuickAction label="Add task" icon={<ListPlus className="size-6" />} tint="var(--ios-blue)" onClick={() => setNewTask({})} testId="qa-task" />
         <QuickAction label="Add note" icon={<StickyNote className="size-6" />} tint="var(--ios-yellow)" onClick={() => setNewNote(true)} testId="qa-note" />
         <QuickAction label="Reminder" icon={<Bell className="size-6" />} tint="var(--ios-orange)" onClick={() => setNewTask({ title: '', reminderUtc: new Date(Date.now() + 60 * 60_000).toISOString() })} testId="qa-reminder" />

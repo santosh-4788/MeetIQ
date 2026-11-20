@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { AtSign, BellOff, Check, ChevronRight, Clock3, ListChecks, MessagesSquare, Moon, Pin, Search, ShieldCheck, SlidersHorizontal, SquarePen, Star, Users, X } from 'lucide-react'
 import { advApi, chatApi, type Availability, type ChatMessage, type ChatPerson, type Conversation, type Favourite, type Presence } from '../../api/chat'
 import { errorMessage } from '../../api/types'
@@ -13,6 +13,7 @@ import { CallHistory } from './CallHistory'
 import { useCalls } from './CallProvider'
 import { fullTime, listTime, presenceColor, presenceLabel, previewOf } from './chatUtils'
 import { IosSegmented } from './IosSegmented'
+import { ScrollChips } from './ScrollChips'
 import { MentionsList, NO_FILTER, SavedList, SearchFiltersSheet, filterCount, type SearchFilter } from './advanced/Lists'
 import { FollowUpPanel, QuietHoursSheet } from './advanced/Settings'
 import { ScheduledListSheet } from './advanced/Scheduled'
@@ -57,6 +58,8 @@ export default function ChatPage() {
   const chat = useChat()
   const toast = useToast()
   const [params, setParams] = useSearchParams()
+  const { pathname } = useLocation()
+  const navigate = useNavigate()
   const activeId = params.get('c')
   const jumpSeq = params.get('seq') ? Number(params.get('seq')) : null
   const [conversations, setConversations] = useState<Conversation[] | null>(null)
@@ -83,15 +86,12 @@ export default function ChatPage() {
     () => ['chats', ...(calls.enabled ? (['calls'] as const) : []), ...(tasksOn ? (['myday', 'notes', 'tasks'] as const) : [])],
     [calls.enabled, tasksOn],
   )
-  const tab = params.get('tab') as Section | null
+  const fromPath: Section | null = pathname.endsWith('/my-day') ? 'myday' : pathname.endsWith('/tasks') ? 'tasks' : pathname.endsWith('/notes') ? 'notes' : null
+  const tab = (fromPath ?? params.get('tab')) as Section | null
   const section: Section = activeId ? 'chats' : tab && sections.includes(tab) ? tab : 'chats'
   const setSection = useCallback(
-    (s: Section) => {
-      const next = new URLSearchParams()
-      if (s !== 'chats') next.set('tab', s)
-      setParams(next)
-    },
-    [setParams],
+    (s: Section) => navigate(s === 'myday' ? '/my-day' : s === 'tasks' ? '/tasks' : s === 'notes' ? '/notes' : s === 'calls' ? '/chat?tab=calls' : '/chat'),
+    [navigate],
   )
   const activeIdRef = useRef(activeId)
   activeIdRef.current = activeId
@@ -119,9 +119,10 @@ export default function ChatPage() {
       const next = new URLSearchParams()
       if (id) next.set('c', id)
       if (id && seq) next.set('seq', String(seq))
-      setParams(next, { replace: !!activeId && !!id })
+      if (fromPath) navigate(`/chat${next.size ? `?${next}` : ''}`) // from My Day / Tasks / Notes
+      else setParams(next, { replace: !!activeId && !!id })
     },
-    [setParams, activeId],
+    [setParams, activeId, fromPath, navigate],
   )
 
   const openDirect = useCallback(
@@ -255,10 +256,7 @@ export default function ChatPage() {
   }, [conversations, filter, query])
 
   const active = conversations?.find((c) => c.id === activeId) ?? null
-  const online = useMemo(
-    () => (conversations ?? []).filter((c) => c.type === 'DIRECT' && c.other?.presence && c.other.presence.state !== 'OFFLINE').slice(0, 12),
-    [conversations],
-  )
+
 
   // Opened by id but not in my list yet (e.g. just created elsewhere): load it once.
   useEffect(() => {
@@ -285,7 +283,7 @@ export default function ChatPage() {
     return <div className="oic-chat animate-pulse rounded-xl border border-line bg-surface" aria-busy="true" aria-label="Loading Chat" />
 
   const limits = status.limits
-  const tabs = <SectionTabs sections={sections} value={section} onChange={setSection} />
+  const tabs = <SectionTabs sections={sections.filter((s) => s === 'chats' || s === 'calls')} value={section} onChange={setSection} />
 
   if (section === 'myday' || section === 'notes' || section === 'tasks')
     return (
@@ -293,7 +291,7 @@ export default function ChatPage() {
         <Suspense fallback={<div className="m-auto size-6 animate-spin rounded-full border-2 border-[var(--ios-gray4)] border-t-[var(--ios-blue)]" aria-label="Loading" />}>
           <WorkSpace
             section={section}
-            tabs={tabs}
+            tabs={null}
             params={params}
             setParams={setParams}
             conversations={conversations ?? []}
@@ -331,7 +329,7 @@ export default function ChatPage() {
             </div>
           </div>
           <h1 className="ios-large-title mt-0.5">{SECTION_LABEL[section]}</h1>
-          {sections.length > 1 && <div className="mt-2.5">{tabs}</div>}
+          {calls.enabled && <div className="mt-2.5">{tabs}</div>}
         </div>
         {section === 'calls' && calls.enabled ? (
           <div className="ios-fade flex min-h-0 flex-1 flex-col"><CallHistory onOpenChat={(id) => open(id)} /></div>
@@ -356,7 +354,7 @@ export default function ChatPage() {
             )}
           </div>
           {!searching && (
-            <div className="scrollbar-none -mx-4 mt-2.5 flex gap-1.5 overflow-x-auto px-4 pb-2" role="tablist" aria-label="Filter chats">
+            <ScrollChips label="Filter chats" className="mt-2.5 mb-2" testId="chat-filters">
               {FILTERS.map((f) => {
                 const count = f.key === 'unread' ? (conversations ?? []).filter((c) => !c.archived && (c.unread > 0 || c.markedUnread)).length : 0
                 return (
@@ -373,7 +371,7 @@ export default function ChatPage() {
                   </button>
                 )
               })}
-            </div>
+            </ScrollChips>
           )}
         </div>
 
@@ -393,22 +391,6 @@ export default function ChatPage() {
             </div>
           </div>
         )}
-        {!searching && filter === 'all' && online.length > 0 && (
-          <div className="shrink-0 px-4 pb-2">
-            <div className="scrollbar-none -mx-4 flex gap-3.5 overflow-x-auto px-4 py-1">
-              {online.map((c) => (
-                <button key={c.id} type="button" onClick={() => open(c.id)} className="flex w-[58px] shrink-0 flex-col items-center gap-1" title={`${c.name} · ${presenceLabel[c.other!.presence!.state]}`}>
-                  <span className="relative">
-                    <Avatar name={c.name} size={52} />
-                    <PresenceDot presence={c.other?.presence} className="absolute right-0 bottom-0.5 size-3.5 ring-[2.5px] ring-white" />
-                  </span>
-                  <span className="w-full truncate text-center text-[12px] text-[var(--ios-label2)]">{c.name.split(' ')[0]}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
         <div className="flex-1 overflow-y-auto scrollbar-thin" data-testid="chat-list">
           {error && (
             <div className="p-6 text-center">

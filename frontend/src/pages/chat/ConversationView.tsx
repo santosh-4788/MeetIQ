@@ -588,6 +588,21 @@ export function ConversationView({
         ? members.map((m) => (m.me ? 'You' : m.name.split(' ')[0])).join(', ')
         : `${conversation.memberCount} members`)
 
+  // Read receipt under my newest message.
+  const receipt = useMemo(() => {
+    const last = [...messages].reverse().find((m) => m.senderId === meId && !m.local && m.kind !== 'SYSTEM' && !m.deleted)
+    if (!last) return null
+    const others = members.filter((x) => !x.me && x.visibleFromSeq < last.seq)
+    if (others.length === 0) return null
+    const readers = others.filter((x) => x.readSeq >= last.seq).length
+    const delivered = others.filter((x) => x.deliveredSeq >= last.seq || x.readSeq >= last.seq).length
+    const group = conversation.type === 'GROUP'
+    if (readers === others.length) return { id: last.id, tone: 'read' as const, text: group ? 'Read by everyone' : 'Read' }
+    if (group && readers > 0) return { id: last.id, tone: 'read' as const, text: `Read by ${readers} of ${others.length}` }
+    if (delivered === others.length) return { id: last.id, tone: 'delivered' as const, text: 'Delivered' }
+    return { id: last.id, tone: 'sent' as const, text: 'Sent' }
+  }, [messages, members, meId, conversation.type])
+
   const grouped = useMemo(() => {
     const out: { day: string; label: string; items: ViewMessage[] }[] = []
     for (const m of messages) {
@@ -708,6 +723,7 @@ export function ConversationView({
                       isGroup={conversation.type === 'GROUP'}
                       groupedWithPrev={grouped}
                       groupedWithNext={groupedNext}
+                      receipt={receipt?.id === m.id ? receipt : null}
                       fresh={parseUtc(m.createdUtc).getTime() > openedAt.current}
                       phone={touch}
                       tick={m.local === 'pending' ? 'pending' : m.local === 'failed' ? 'failed' : m.senderId === meId ? tickFor(m, members) : null}
@@ -1022,11 +1038,11 @@ function TickIcon({ tick }: { tick: Tick }) {
     case 'failed':
       return <MailWarning className="size-3.5 text-[#ffd0cc]" aria-label="Not sent" />
     case 'sent':
-      return <Check className="size-3.5" aria-label="Sent" />
+      return <Check className="size-3.5 opacity-80" aria-label="Sent" />
     case 'delivered':
-      return <CheckCheck className="size-3.5" aria-label="Delivered" />
+      return <CheckCheck className="size-3.5 opacity-80" aria-label="Delivered" />
     case 'read':
-      return <CheckCheck className="size-3.5 text-white" strokeWidth={3} aria-label="Read" />
+      return <CheckCheck className="size-[15px] text-[#86f7b5] drop-shadow-[0_0_1px_rgb(0_60_30/0.5)]" strokeWidth={2.8} aria-label="Read" />
   }
 }
 
@@ -1050,7 +1066,7 @@ function fileIcon(category: string) {
 
 function MessageRow({
   m, mine, isGroup, groupedWithPrev, groupedWithNext, phone, fresh, tick, highlighted, selected, reacting, meId,
-  onSelect, onReact, onOpenReactions, onCloseReactions, onReply, onCopy, onForward, onEdit, onDelete, onRetry, onDiscard, onJumpToReply, onOpenImage, onFollowUp, onSave, onPin, meName,
+  onSelect, onReact, onOpenReactions, onCloseReactions, onReply, onCopy, onForward, onEdit, onDelete, onRetry, onDiscard, onJumpToReply, onOpenImage, onFollowUp, onSave, onPin, meName, receipt,
 }: {
   m: ViewMessage
   mine: boolean
@@ -1081,6 +1097,7 @@ function MessageRow({
   onSave?: () => void
   onPin?: () => void
   meName?: string | null
+  receipt?: { tone: 'read' | 'delivered' | 'sent'; text: string } | null
 }) {
   const [morePicker, setMorePicker] = useState(false)
   if (m.kind === 'SYSTEM')
@@ -1196,6 +1213,12 @@ function MessageRow({
           </div>
         )}
 
+        {receipt && mine && (
+          <p className={cn('ios-fade mt-0.5 mr-1 flex items-center justify-end gap-1 text-[11.5px] font-medium', receipt.tone === 'read' ? 'text-[var(--ios-blue)]' : 'text-[var(--ios-gray)]')} data-testid="chat-receipt" aria-live="polite">
+            {receipt.tone === 'read' ? <CheckCheck className="size-3.5" strokeWidth={2.6} aria-hidden /> : receipt.tone === 'delivered' ? <CheckCheck className="size-3.5" aria-hidden /> : <Check className="size-3.5" aria-hidden />}
+            {receipt.text}
+          </p>
+        )}
         {m.local === 'failed' && (
           <p className="mt-0.5 flex items-center justify-end gap-2 text-[12px] text-[var(--ios-red)]" role="alert">
             {m.localError ?? 'Not Delivered'}

@@ -95,15 +95,17 @@ export function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
 function GlobalSearch() {
   const navigate = useNavigate()
   const { can } = useAuth()
-  const chatOn = useChat().enabled
+  const chatCtx = useChat()
+  const chatOn = chatCtx.enabled
+  const tasksOn = chatOn && !!(chatCtx.status?.enabled && chatCtx.status.tasks)
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
   const ref = useOutsideClose<HTMLDivElement>(open, () => setOpen(false))
   const inputRef = useRef<HTMLInputElement>(null)
   // Phase 1: searches pages/modules. Phase 3 extends this to meetings, employees and customers via /api/v1/search.
   const results = useMemo(
-    () => allNavItems.filter((i) => (!i.permission || can(i.permission)) && (!i.feature || chatOn) && i.label.toLowerCase().includes(q.trim().toLowerCase())).slice(0, 6),
-    [q, can, chatOn],
+    () => allNavItems.filter((i) => (!i.permission || can(i.permission)) && (!i.feature || (i.feature === 'tasks' ? tasksOn : chatOn)) && i.label.toLowerCase().includes(q.trim().toLowerCase())).slice(0, 6),
+    [q, can, chatOn, tasksOn],
   )
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

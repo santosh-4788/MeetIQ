@@ -7,6 +7,7 @@ import { cn } from '../../../lib/cn'
 import { parseUtc } from '../../../lib/format'
 import { NoteEditor } from './Editors'
 import FollowUpSheet, { type FollowUpSource } from './FollowUp'
+import { ScrollChips } from '../ScrollChips'
 import { Empty, Pill, whenText } from './ui'
 
 const FILTERS: { key: NoteFilter | 'date'; label: string }[] = [
@@ -144,7 +145,7 @@ export function NotesView({ params, setParams }: { params: URLSearchParams; setP
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search notes" aria-label="Search notes" data-testid="note-search" />
         {search && <button type="button" onClick={() => setSearch('')} aria-label="Clear search" className="flex size-[18px] items-center justify-center rounded-full bg-[var(--ios-gray2)] text-white"><X className="size-3" strokeWidth={3} /></button>}
       </label>
-      <div className="scrollbar-none -mx-4 mt-2.5 flex gap-1.5 overflow-x-auto px-4 sm:-mx-6 sm:px-6" role="tablist" aria-label="Filter notes">
+      <ScrollChips label="Filter notes" className="mt-2.5">
         {FILTERS.map((f) => (
           <button
             key={f.key}
@@ -159,7 +160,7 @@ export function NotesView({ params, setParams }: { params: URLSearchParams; setP
             {f.label}
           </button>
         ))}
-      </div>
+      </ScrollChips>
       {filter === 'date' && <WeekStrip day={day} onDay={setDay} />}
 
       {error && (

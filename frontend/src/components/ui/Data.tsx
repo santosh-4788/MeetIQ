@@ -37,7 +37,7 @@ export function Tabs<T extends string>({ tabs, value, onChange, label, idPrefix 
     refs.current[j]?.focus()
   }
   return (
-    <div role="tablist" aria-label={label} className="scrollbar-thin flex gap-1 overflow-x-auto rounded-md border border-line bg-surface p-1 shadow-card">
+    <div role="tablist" aria-label={label} className="flex flex-wrap gap-1 rounded-md border border-line bg-surface p-1 shadow-card">
       {tabs.map((t, i) => (
         <button
           key={t.id}

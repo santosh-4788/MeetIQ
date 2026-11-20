@@ -39,7 +39,7 @@ export default function WorkSpace({
         </div>
         <div className="mx-auto max-w-[1100px]">
           <h1 className="ios-large-title">{TITLE[section]}</h1>
-          <div className="mt-2.5 max-w-[620px]">{tabs}</div>
+          {tabs && <div className="mt-2.5 max-w-[620px]">{tabs}</div>}
         </div>
       </header>
       <div className="ios-fade flex-1 overflow-y-auto px-4 pt-4 pb-8 scrollbar-thin sm:px-6" key={section + refresh}>

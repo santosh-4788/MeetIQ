@@ -42,8 +42,8 @@ export function ApiDocsPage() {
           </>
         }
       />
-      <p className="-mt-2 inline-flex items-center gap-1.5 text-[12px] text-ink-secondary" data-testid="api-docs-access">
-        <Lock className="size-3.5" aria-hidden />
+      <p className="-mt-2 text-[12px] text-ink-secondary" data-testid="api-docs-access">
+        <Lock className="mr-1.5 inline size-3.5 align-[-2px]" aria-hidden />
         Visible only to administrators and to people given the <strong className="text-ink">API Documentation Viewer</strong> role (Administration → Users &amp; roles).
         {!canManageKeys && ' API keys are issued by an administrator.'}
       </p>

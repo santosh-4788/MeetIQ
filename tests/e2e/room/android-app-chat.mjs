@@ -36,7 +36,7 @@ ok.screens = await tc('AC-01', 'Chat, My Day, Notes and Tasks inside the app', '
   await app.getByTestId('mobile-tabbar').getByTestId('tab-chat').click()
   await app.getByTestId('chat-page').waitFor()
   for (const [tab, testId] of [['chats', 'chat-list'], ['myday', 'myday-view'], ['notes', 'notes-view'], ['tasks', 'tasks-view'], ['calls', 'call-history']]) {
-    await app.getByTestId('chat-section-' + tab).click()
+    await app.goto(tab === 'chats' ? '/chat' : tab === 'calls' ? '/chat?tab=calls' : tab === 'myday' ? '/my-day' : '/' + tab)
     await app.getByTestId(testId).waitFor()
     check(await overflowX(app) <= 0, `${tab} scrolls sideways in the app`)
     await view(app, `ac01-app-${tab}`)

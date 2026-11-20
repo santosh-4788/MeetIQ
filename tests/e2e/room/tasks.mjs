@@ -23,8 +23,8 @@ const localTime = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`
 
 ok.tabs = await tc('W-01', 'Chat shows My Day, Notes and Tasks when the switch is on', 'segmented control Chats · Calls · My Day · Notes · Tasks; My Day sections load on the phone', async () => {
   await esha.goto('/chat')
-  for (const k of ['chats', 'calls', 'myday', 'notes', 'tasks']) await esha.getByTestId('chat-section-' + k).waitFor()
-  await esha.getByTestId('chat-section-myday').click()
+  for (const k of ['chats', 'calls']) await esha.getByTestId('chat-section-' + k).waitFor()
+  await esha.goto('/my-day')
   await esha.getByTestId('myday-view').waitFor()
   for (const s of ['myday-today', 'myday-meetings', 'myday-upcoming', 'myday-followups', 'myday-notes', 'myday-chats']) await esha.getByTestId(s).waitFor()
   check(await overflowX(esha) <= 0, 'My Day scrolls sideways on the phone')
@@ -166,7 +166,9 @@ ok.off = await tc('W-07', 'Switch CHAT_TASKS off: the sections and popups disapp
   check(r.status === 403 && r.data?.code === 'FEATURE_DISABLED', `API not switched off: ${r.status} ${JSON.stringify(r.data)}`)
   await esha.goto('/chat')
   await esha.getByTestId('chat-section-calls').waitFor()
-  check(await esha.getByTestId('chat-section-tasks').count() === 0, 'Tasks tab still shown')
+  await esha.goto('/tasks')
+  await esha.getByText(/switched off|not available/i).first().waitFor({ timeout: 10_000 }).catch(() => {})
+  check(await esha.getByTestId('tasks-view').count() === 0, 'Tasks still shown while off')
   exec("UPDATE app.FeatureSettings SET IsEnabled = 1 WHERE FeatureKey = 'CHAT_TASKS'")
   return 'hidden and refused while off; switched back on'
 })

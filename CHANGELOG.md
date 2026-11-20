@@ -1,5 +1,41 @@
 # Changelog
 
+## 20 Nov 2026, 13:11 IST — DEPLOYED: chat switcher shows Chats | Calls only; filter chips on one scrolling line (website only)
+
+Requested by the administrator. No API or database change. 0 live meetings. Website backup `deploy\_backup-20261120-131057`.
+
+- **Chat list switcher:** only **Chats | Calls**. My Day, Notes and Tasks are opened from the left menu (`/my-day`, `/tasks`, `/notes`) and no longer repeat the switcher.
+- **Filter chips** (All, Unread, @ Mentions, ★ Saved, Groups, Pinned, Archived) are on **one line that scrolls sideways**, with **‹ ›** buttons and a soft fade on the side where more chips are hidden. Swipe, trackpad and mouse wheel also work. The Notes filters work the same way (new `pages/chat/ScrollChips.tsx`).
+- **Tests:**
+  - `sidebar-sections` 5/5, including the new S-05: chips on one line, › scrolls, "Archived" can be reached and selected, on a computer and a phone.
+  - Tests that used the removed segments now open the sections from the menu or by address.
+  - The full regression was still running at deploy time.
+- **Rollback:** copy `frontend-dist\*` from `_backup-20261120-131057`.
+
+## 20 Nov 2026, 12:53 IST — DEPLOYED: portal UI fixes, read receipts, My Day / Tasks / Notes in the menu (website only)
+
+Deployed with approval. No API or database change. 0 live meetings. Website backup `deploy\_backup-20261120-125347` (`frontend-dist` 55 files).
+
+**Fixes and changes:**
+- **Chat filter chips** (All, Unread, @ Mentions, ★ Saved, Groups, Pinned, Archived) wrap onto a second line instead of running off the edge ("Gr…"). The Notes filters do the same.
+- **Tab bars across the portal** (shared `Tabs` component: Department Management, API Documentation and 4 more) wrap on narrow screens instead of cutting the last tab.
+- **API Documentation:** the "Visible only to administrators…" line is a normal sentence again (on phones it had split into three columns).
+- **My Day quick actions** are a wrapping grid on phones and tablets, so no button is half hidden.
+- **Chat list:** the "online" avatar strip above the list is removed. It repeated names already in the list; the green dot on each row shows presence.
+- **Read receipts:**
+  - In the bubble: sent ✓, delivered ✓✓ (white), read ✓✓ (green).
+  - Under the latest message I sent: "Sent", "Delivered", or a blue "✓✓ Read".
+  - In groups: "Read by N of M", then "Read by everyone".
+- **Menu:** My Day, Tasks and Notes below Chat (`/my-day`, `/tasks`, `/notes`). They are shown only while "Notes, tasks and My Day" (CHAT_TASKS) is on, and they open the Chat workspace on that section, kept in step with the section control.
+
+**Tests (test environment):**
+- **Whole-portal layout audit** in Google Chrome (`tests/e2e/room/portal-audit.mjs`): every menu page and the chat sections at 1920, 1366, 1280, 768, 390 (iPhone size) and 360 (Android) px. All 132 page views are clean: no sideways scrolling, nothing cut off or outside the screen, no half-hidden rows, no script errors.
+- **New tests:** `receipts` 2/2, `sidebar-sections` 4/4.
+- **Suites:** `chat` 10/10, `calls` 7/7, `browsers` (Chrome, Android, iPhone) 39/39.
+- One earlier run failed because leftover test processes from a stopped run were running at the same time. They were stopped, and every suite was then re-run clean.
+
+**Rollback:** copy `frontend-dist\*` from `_backup-20261120-125347` over `frontend\dist`.
+
 ## 20 Nov 2026, 11:15–11:25 IST — DEPLOYED: Chat Phase 5 (advanced chat, switched off) + Android app 1.1.0
 
 Deployed with approval. Delivery note: `documentation/CHAT_MODULE_PHASE5.md`. How it works for staff: `documentation/CHAT_HOW_IT_WORKS.md`.

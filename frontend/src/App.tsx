@@ -42,6 +42,15 @@ function LegacyRoomRedirect() {
 }
 
 // Phase 2 and 3 modules. Every other navigation item still renders the honest PlannedModulePage.
+// The Chat workspace; /my-day, /tasks and /notes open it on that section (menu items below Chat).
+const chatWorkspace = (
+  <ErrorBoundary fallback={() => <PageErrorCard onRetry={() => window.location.reload()} />}>
+    <Suspense fallback={<div className="oic-chat animate-pulse rounded-xl border border-line bg-surface" aria-busy="true" aria-label="Loading Chat" />}>
+      <ChatPage />
+    </Suspense>
+  </ErrorBoundary>
+)
+
 const builtPages: Record<string, ReactNode> = {
   '/meetings': <MeetingsRoutes />,
   '/calendar': <CalendarPage />,
@@ -58,13 +67,10 @@ const builtPages: Record<string, ReactNode> = {
   '/recordings': <RecordingsRoutes />,
   '/reports': <ReportsPage />,
   '/settings': <SettingsPage />,
-  '/chat': (
-    <ErrorBoundary fallback={() => <PageErrorCard onRetry={() => window.location.reload()} />}>
-      <Suspense fallback={<div className="oic-chat animate-pulse rounded-xl border border-line bg-surface" aria-busy="true" aria-label="Loading Chat" />}>
-        <ChatPage />
-      </Suspense>
-    </ErrorBoundary>
-  ),
+  '/chat': chatWorkspace,
+  '/my-day': chatWorkspace,
+  '/tasks': chatWorkspace,
+  '/notes': chatWorkspace,
 }
 
 export default function App() {

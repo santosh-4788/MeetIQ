@@ -27,7 +27,8 @@ export function Sidebar({ collapsed, onToggle, mobile, onClose }: Props) {
 
       <nav aria-label="Main" className="scrollbar-thin flex-1 overflow-x-hidden overflow-y-auto px-3 py-3 [scrollbar-color:rgb(255_255_255/0.15)_transparent]">
         {navigation.map((section) => {
-          const items = section.items.filter((i) => (!i.permission || can(i.permission)) && (!i.feature || chat.enabled))
+          const tasksOn = chat.enabled && !!(chat.status?.enabled && chat.status.tasks)
+          const items = section.items.filter((i) => (!i.permission || can(i.permission)) && (!i.feature || (i.feature === 'tasks' ? tasksOn : chat.enabled)))
           if (!items.length) return null
           return (
             <div key={section.title} className="mb-3">

@@ -102,7 +102,8 @@ for (const name of chosen) {
       else await page.goto('/chat') // tablets: the menu is behind the menu button
     }
     await page.getByTestId('chat-page').waitFor()
-    for (const k of ['chats', 'calls', 'myday', 'notes', 'tasks']) await page.getByTestId('chat-section-' + k).waitFor()
+    for (const k of ['chats', 'calls']) await page.getByTestId('chat-section-' + k).waitFor()
+    check(await page.getByTestId('chat-section-tasks').count() === 0, 'My Day / Notes / Tasks still in the chat switcher')
     await noOverflow(page, 'chat list')
     await shot(page, `${name}-1-list`)
   })
@@ -261,7 +262,7 @@ for (const name of chosen) {
     await noOverflow(page, 'tasks')
   })
   await scenario(name, 'B11', 'Notes: new pinned note, listed under Pinned', async () => {
-    await page.getByTestId('chat-section-notes').click()
+    await page.goto('/notes')
     await page.getByTestId('notes-view').waitFor()
     await page.getByTestId('note-new').click()
     const ed = page.getByTestId('note-editor')
@@ -275,7 +276,7 @@ for (const name of chosen) {
     await shot(page, `${name}-9-notes`)
   })
   await scenario(name, 'B12', 'My Day', async () => {
-    await page.getByTestId('chat-section-myday').click()
+    await page.goto('/my-day')
     await page.getByTestId('myday-view').waitFor()
     await page.getByTestId('myday-followups').getByText(`report tomorrow ${t}`).first().waitFor({ timeout: 10_000 })
     await noOverflow(page, 'My Day')
