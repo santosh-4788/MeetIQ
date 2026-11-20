@@ -1,5 +1,13 @@
 # Changelog
 
+## 20 Nov 2026, 13:25 IST — Android app 1.1.1 published
+
+Requested by the administrator. versionCode 3. Same signing key, so it updates in place, and the app offers the update itself.
+- No change to the app's own behaviour since 1.1.0. All chat features (read receipts, menu, scrolling chips, Chats | Calls) come from the live website and were already in 1.1.0.
+- Build: unit tests and lint passed; signature checked by `publish-apk.ps1`.
+- `/meet/app/OneInsureConnect.apk`, 26.3 MB, SHA-256 `69e070df0fc8457c6e4131c243ca664e34fedc02c6c5df7ea4ff9af212c24904`.
+- Website backup before publishing: `deploy\_backup-20261120-132407` (contains APK 1.1.0).
+
 ## 20 Nov 2026, 13:11 IST — DEPLOYED: chat switcher shows Chats | Calls only; filter chips on one scrolling line (website only)
 
 Requested by the administrator. No API or database change. 0 live meetings. Website backup `deploy\_backup-20261120-131057`.

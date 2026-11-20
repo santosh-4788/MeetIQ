@@ -18,8 +18,8 @@ android {
         applicationId = "com.oneinsure.connect"
         minSdk = 26          // Android 8.0+
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.1.1"
         // The portal the app opens. Only this host + path prefix is loaded inside the app; everything else opens outside.
         buildConfigField("String", "PORTAL_URL", "\"https://www.oneinsure.com/meet/\"")
         buildConfigField("String", "PORTAL_HOST", "\"www.oneinsure.com\"")
