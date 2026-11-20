@@ -348,7 +348,9 @@ public sealed class ChatTests(ApiFixture fx)
         var dl = await ben.Http.GetAsync($"/api/v1/chat/files/{fileId}");
         Assert.Equal(HttpStatusCode.OK, dl.StatusCode);
         Assert.Equal("attachment", dl.Content.Headers.ContentDisposition?.DispositionType);
-        Assert.Equal("application/octet-stream", dl.Content.Headers.ContentType?.MediaType);
+        // Real type (from our file-type list) and a plain quoted name first, so Android saves "x.png", not "<id>.bin".
+        Assert.Equal("image/png", dl.Content.Headers.ContentType?.MediaType);
+        Assert.Matches("^attachment; filename=\"[^\"]+\\.png\"$",string.Join(",", dl.Content.Headers.GetValues("Content-Disposition")));
         Assert.Equal(Png, await dl.Content.ReadAsByteArrayAsync());
         var inline = await ben.Http.GetAsync($"/api/v1/chat/files/{fileId}?inline=1");
         Assert.Equal("image/png", inline.Content.Headers.ContentType?.MediaType);
@@ -385,5 +387,18 @@ public sealed class ChatTests(ApiFixture fx)
         Assert.False(ChatAccess.IsEmoji("a"));
         Assert.False(ChatAccess.IsEmoji("<"));
         Assert.False(ChatAccess.IsEmoji(""));
+    }
+
+    [Fact]
+    public void Download_headers_work_for_phone_download_managers()
+    {
+        // Android WebView (URLUtil.guessFileName) reads only a plain `attachment; filename="..."`.
+        Assert.Equal("attachment; filename=\"Sales Report (Nov).xlsx\"", ChatFileEndpoints.AttachmentDisposition("Sales Report (Nov).xlsx"));
+        Assert.Equal("attachment; filename=\"a_b.txt\"", ChatFileEndpoints.AttachmentDisposition("a\"b.txt").Replace("; filename*=UTF-8''a%22b.txt", ""));
+        Assert.Equal("attachment; filename=\"_____.pdf\"; filename*=UTF-8''%E0%A4%B0%E0%A4%BF%E0%A4%AA%E0%A5%8B%E0%A4%B0.pdf", ChatFileEndpoints.AttachmentDisposition("रिपोर.pdf"));
+        Assert.Equal("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ChatFileEndpoints.DownloadContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+        Assert.Equal("application/octet-stream", ChatFileEndpoints.DownloadContentType("text/html"));
+        Assert.Equal("application/octet-stream", ChatFileEndpoints.DownloadContentType("image/svg+xml"));
+        Assert.Equal("application/octet-stream", ChatFileEndpoints.DownloadContentType(null));
     }
 }

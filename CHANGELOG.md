@@ -1,5 +1,92 @@
 # Changelog
 
+## 20 Nov 2026, 17:00–17:05 IST — DEPLOYED: chat file downloads on phones; chat list on laptop screens
+
+- **Downloads (Android app, Android Chrome):** `GET /chat/files/{id}` now sends `attachment; filename="<name>"` first, with `filename*` only for non-ASCII names. It also sends the real type from `chat.MST_ChatFileType` instead of `application/octet-stream`; HTML, SVG, XML and JS types stay octet-stream, and the site-wide nosniff still applies.
+  - Before: Android's WebView download parser saved names with spaces or brackets as `<id>.bin`, and phones could not open the file in Excel.
+  - The installed APK benefits without an update. Non-ASCII names still need the next APK.
+- **Downloads (iPhone/iPad):** the download button fetches the file and opens the iOS share sheet ("Save to Files", "Open in Excel"); if sharing is unavailable it saves through a link. It works from the Home Screen app, where plain attachment links save nothing. New file: `pages/chat/saveFile.ts`.
+- **Chat list on short laptop screens (1366×657, 1280×600):**
+  - the Favourites row now scrolls with the list;
+  - the title is smaller when the window height is 760 px or less;
+  - the floating date label has a light shadow.
+  - Before, only 1–2 chats showed.
+- **Tests:**
+  - New `tests/e2e/room/chat-downloads.mjs`: 6/6, covering a real .xlsx named `Sales Report (Nov) ….xlsx` in Chrome, Android Chrome, iPhone and the iOS share sheet, plus Android's URLUtil file-name rule.
+  - Regression:
+    - chat 10/10, calls 7/7, tasks 7/7, advanced 8/8, sidebar 5/5, receipts 2/2, ios-look 9/9, user-access 3/3;
+    - all 8 browsers 104/104;
+    - portal audit 96 pages × sizes with 0 problems.
+  - Backend: new unit test; ChatTests 7/7.
+  - Full backend run: 132/132 with the required test settings (`OIC_TEST_DATA_PATH`, `OIC_FFMPEG_DIR`). An earlier run without `OIC_FFMPEG_DIR` showed 16 recording-related failures, and the last commit failed them the same way, so they were not real.
+- **Backups:**
+  - files in `deploy\_backup-20261120-162056`;
+  - database `Oneinsure_v_pre-downloads-20261120-162056.bak`, 58.1 MB, verified.
+  - Pre-check: no live meetings, recordings or jobs.
+  - No database change.
+- **Incident during the deploy:** the first copy was a framework-dependent build. The live API is **self-contained** (`-r win-x64 --self-contained`), so the service would not start: "No frameworks were found". The API was down for about 3½ minutes, 17:00:40 to 17:04:12. It was fixed by publishing self-contained and copying again; health returned 200.
+
+## 20 Nov 2026 — One more IT user: Mukta Bansal (data only, production)
+
+- Ran a script on production `Oneinsure_v` built the same way as the two earlier IT users. It added employee **Mukta Bansal**: department IT, placeholder code `IT-TEMP-03` (edit it on Employee Management), sign-in `mukta.bansal@oneinsure.com`, role Employee.
+- Password `Pass@123` is stored as a hash only. She must change it at first sign-in. She has full access: no module blocks, so meetings (including scheduling, `meetings.create`), chat, audio calls, and notes and tasks.
+- **Checked:** her permissions on production; a real sign-in on the live site returns 200 with the password change required. Audit rows: EMPLOYEE_CREATED and USER_CREATED.
+- No code or schema change.
+
+## 20 Nov 2026, 14:45 IST — APK link: every address form works (main website settings, approved)
+
+Administrator-approved change to the **main OneInsure website's** IIS settings (outside the portal).
+- **Backups:** IIS configuration backup `pre-oneinsure-http-20261120` (`appcmd restore backup` to undo), and the main website's `web.config` copied to `deploy\_backup-20261120-142243\main-website-web.config.bak`.
+- **Main website `web.config`** (`E:\Beeinsured.com\OneInsureWebSite_v2\one-insure-website`): one new first rule, "MeetIQ app links without /meet". It sends `/app/OneInsureConnect.apk`, `/app/android.json` and `/get-app` to the same addresses under `/meet` (302). These are the addresses the earlier broken redirect produced and browsers may have remembered.
+- **IIS site `v2.oneinsure.com`:** added the binding `http *:80:oneinsure.com`. Before, plain `http://oneinsure.com` had no live site and returned a bare 404. The stopped old site `v4.beeinsured.com` also lists this binding, as it already did for `www.oneinsure.com`.
+- **Checked afterwards:**
+  - The APK downloads from https and http, with or without www, with or without `/meet`.
+  - The download page opens; the main website home page is unchanged on https, http, www and no-www.
+
+## 20 Nov 2026, 14:22–14:30 IST — DEPLOYED: per-user module access; two IT users; http link fix
+
+Deployed with approval. 0 live meetings and 0 calls; the next meeting was 68 minutes later.
+
+**Backups:**
+- Database `Oneinsure_v_preAccess_20261120-142243.bak` (verified, 56.1 MB). The earlier `Oneinsure_v_preITusers_20261120-134147.bak` was taken before the users were created.
+- Files `deploy\_backup-20261120-142243`.
+
+**Per-user module access (V032):**
+- **What it does:** in Administration › Users & roles, "Create user" has an **Access** section, and each user has a new action **Edit access**.
+  - The four modules are **Meetings** (dashboard, meetings, calendar, recordings, reports), **Chat**, **Audio calls** and **Notes & tasks**. Calls and Notes & tasks need Chat.
+  - A module switched off removes its permissions from that user even if a role grants them.
+  - It applies on the user's next click; no sign-out is needed. Each change is audited as `USER_ACCESS_CHANGED`.
+- **Database:**
+  - New permissions `chat.calls` and `chat.tasks`, granted to every role that has `chat.use`.
+  - New `auth.ModulePermissions` (19 rows), `auth.UserModuleBlocks` and the function `auth.EffectivePermissions`, now used for every permission check.
+  - Verified on production: no user's permissions changed (0 users lost a permission; 0 blocks).
+- **API:**
+  - Calls need `chat.calls`; colleagues without it are not rung (409 `CALLS_NOT_AVAILABLE`, or skipped in a group).
+  - Notes, tasks and My Day need `chat.tasks`.
+  - `/chat/status` gains `calls`; `/chat/people` gains `canCall`.
+  - Admin: `access` on user rows, `PUT /admin/users/{id}/access`, `GET /admin/users/{id}`, and an optional `access` when creating a user.
+- **Website:**
+  - Access picker and Edit access dialog; "Access: …" shown in the user list.
+  - Sign-in and "/" go to the first page the person may use (dashboard, otherwise Chat, otherwise My Meetings, otherwise Settings).
+  - My Day, Tasks and Notes in the menu need `chat.tasks`.
+- **Tests:**
+  - Backend 131/131 (6 new).
+  - New `user-access` 3/3: Chat + calls only → lands on Chat, no meeting pages, dashboard refused; Meetings only → no Chat; restored; create form.
+  - Regression all passing: `chat` 10/10, `calls` 7/7, `tasks` 7/7, `advanced` 8/8, `sidebar-sections` 5/5, `browsers` (Chrome, Android, iPhone) 39/39, `room` 11/11, `instant-link` 8/8, `refresh-rejoin` 6/6, `meeting-features` 12 passed / 1 not testable headless, `android-app-present` 9/9.
+- **Rollback:**
+  - code: restore `api\*` and `frontend-dist\*` from `_backup-20261120-142243`;
+  - database: `database/rollback/V032__user_module_access.rollback.sql`.
+
+**Users created (script, 13:42 IST):**
+- **Ashit Shetty:** `ashit.shetty@oneinsure.com`, code `IT-TEMP-01`.
+- **Ramakrishna Rao:** `ramakrishna.rao@oneinsure.com`, code `IT-TEMP-02`.
+- **Both:** department IT, designation Sr. BA, role Employee, full access. Password Pass@123, which must be changed at first sign-in. Codes and designation can be edited on Employee Management › Edit employee.
+- Audited `EMPLOYEE_CREATED` and `USER_CREATED`.
+
+**Link fix (13:58 IST):**
+- The portal's http→https redirect now keeps the full address, including `/meet` and the query (`frontend/public/web.config`). `http://www.oneinsure.com/meet/...` links, including the APK, work again.
+- `http://oneinsure.com` (no www, no https) still gets a 404 from the server itself: the main website has no plain-http binding for that name, which is outside the portal.
+
 ## 20 Nov 2026, 13:25 IST — Android app 1.1.1 published
 
 Requested by the administrator. versionCode 3. Same signing key, so it updates in place, and the app offers the update itself.

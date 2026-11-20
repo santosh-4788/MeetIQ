@@ -25,6 +25,7 @@ import { highlightMentions, mentionOptions, mentionQuery, MentionPicker, type Me
 import { PinnedBar } from './advanced/PinnedBar'
 import { ScheduleSheet, ScheduledListSheet } from './advanced/Scheduled'
 import { usePhone } from './usePhone'
+import { iosDownload } from './saveFile'
 
 const FollowUpSheet = lazy(() => import('./work/FollowUp'))
 
@@ -701,7 +702,7 @@ export function ConversationView({
           {grouped.map((g) => (
             <Fragment key={g.day}>
               <div className="sticky top-0 z-[2] my-2 flex justify-center">
-                <span className="rounded-full bg-white/85 px-2.5 py-0.5 text-[12px] font-medium text-[var(--ios-gray)] backdrop-blur">{g.label}</span>
+                <span className="rounded-full bg-white/90 px-2.5 py-0.5 text-[12px] font-medium text-[var(--ios-gray)] shadow-sm ring-1 ring-black/5 backdrop-blur">{g.label}</span>
               </div>
               {g.items.map((m, i) => {
                 const prev = g.items[i - 1]
@@ -960,7 +961,7 @@ export function ConversationView({
         {lightbox?.file && (
           <div className="flex flex-col items-center gap-3">
             <img src={fileUrl(lightbox.file.id, true)} alt={lightbox.file.name} className="max-h-[70vh] max-w-full rounded-md object-contain" />
-            <a href={fileUrl(lightbox.file.id)} className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-brand-600 hover:underline">
+            <a href={fileUrl(lightbox.file.id)} onClick={iosDownload(lightbox.file.id, lightbox.file.name, toast)} data-testid="chat-image-download" className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-brand-600 hover:underline">
               <Download className="size-4" /> Download ({fileSize(lightbox.file.size)})
             </a>
           </div>
@@ -1340,6 +1341,7 @@ function ActionButton({ label, onClick, danger, children }: { label: string; onC
 }
 
 function FileBlock({ f, mine, onOpenImage, imageOnly }: { f: NonNullable<ChatMessage['file']>; mine: boolean; onOpenImage: () => void; imageOnly?: boolean }) {
+  const toast = useToast()
   if (f.status === 'PENDING')
     return (
       <div className={cn('mb-1 flex items-center gap-2.5 rounded-lg px-2.5 py-2', mine ? 'bg-white/20' : 'bg-white/70')} data-testid="chat-file-pending">
@@ -1380,7 +1382,7 @@ function FileBlock({ f, mine, onOpenImage, imageOnly }: { f: NonNullable<ChatMes
           <ExternalLink className="size-4" />
         </a>
       )}
-      <a href={fileUrl(f.id)} aria-label={`Download ${f.name}`} title="Download" className={cn('flex size-8 items-center justify-center rounded-full', mine ? 'hover:bg-white/20' : 'hover:bg-surface')} data-testid="chat-file-download">
+      <a href={fileUrl(f.id)} onClick={iosDownload(f.id, f.name, toast)} aria-label={`Download ${f.name}`} title="Download" className={cn('flex size-8 items-center justify-center rounded-full', mine ? 'hover:bg-white/20' : 'hover:bg-surface')} data-testid="chat-file-download">
         <Download className="size-4" />
       </a>
     </div>

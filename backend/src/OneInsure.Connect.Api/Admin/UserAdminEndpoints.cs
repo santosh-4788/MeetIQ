@@ -15,8 +15,10 @@ namespace OneInsure.Connect.Api.Admin;
 /// </summary>
 public static class UserAdminEndpoints
 {
-    public sealed record CreateUserInput(string? Email, Guid? EmployeeId, string[]? Roles);
+    public sealed record CreateUserInput(string? Email, Guid? EmployeeId, string[]? Roles, string[]? Access = null);
     public sealed record RolesInput(string[]? Roles);
+    /// <summary>The modules the user may use (MEETINGS, CHAT, CALLS, TASKS); the others are switched off for that user.</summary>
+    public sealed record AccessInput(string[]? Access);
     public sealed record PermissionsInput(string[]? Permissions);
     public sealed record LinkEmployeeInput(Guid? EmployeeId);
     const string SuperAdmin = "SuperAdmin";
@@ -40,24 +42,40 @@ public static class UserAdminEndpoints
             using var c = await db.OpenAsync();
             using var multi = await c.QueryMultipleAsync($"""
                 SELECT COUNT(*) FROM auth.Users u LEFT JOIN org.Employees e ON e.EmployeeId = u.EmployeeId {where};
-                SELECT u.PublicId AS id, u.Email AS email, COALESCE(e.DisplayName, u.Email) AS displayName, COALESCE(u.EmployeeCode, e.EmployeeCode) AS employeeCode,
-                       e.PublicId AS employeeId, d.Name AS department,
-                       (SELECT STRING_AGG(r.Code, ',') FROM auth.UserRoles ur JOIN auth.Roles r ON r.RoleId = ur.RoleId WHERE ur.UserId = u.UserId) AS roles,
-                       u.IsActive AS isActive, CAST(CASE WHEN u.IsLocked = 1 OR u.LockoutEndUtc > SYSUTCDATETIME() THEN 1 ELSE 0 END AS BIT) AS isLocked,
-                       u.MfaEnabled AS mfaEnabled, u.MustChangePassword AS mustChangePassword, u.LastLoginUtc AS lastLoginUtc
-                FROM auth.Users u LEFT JOIN org.Employees e ON e.EmployeeId = u.EmployeeId LEFT JOIN org.Departments d ON d.DepartmentId = e.DepartmentId
+                {UserRowSelect}
                 {where}
                 ORDER BY COALESCE(e.DisplayName, u.Email) OFFSET @skip ROWS FETCH NEXT @size ROWS ONLY;
                 """, new { term, status = status is "inactive" or "locked" or "all" ? status : "active", skip = (p - 1) * size, size });
             var total = await multi.ReadSingleAsync<int>();
-            var items = (await multi.ReadAsync()).Select(r => (object)new
-            {
-                r.id, r.email, r.displayName, r.employeeCode, r.employeeId, r.department,
-                roles = ((string?)r.roles ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries),
-                r.isActive, r.isLocked, r.mfaEnabled, r.mustChangePassword, r.lastLoginUtc,
-            }).ToList();
+            var items = (await multi.ReadAsync()).Select(UserRow).ToList();
             return new Page<object>(items, total, p, size);
         }).RequirePermission("users.manage");
+
+        // One user in the list's row shape (includes access: the modules the user may use).
+        g.MapGet("/users/{id:guid}", async (Guid id, Db db) =>
+        {
+            using var c = await db.OpenAsync();
+            var row = await LoadUserRowAsync(c, id);
+            return row is null ? Db_.NotFound("User") : Results.Ok(row);
+        }).RequirePermission("users.manage");
+
+        // Per-user module access: the modules listed are on, the others are switched off for this user (their permissions are
+        // removed even when the user's roles grant them). Applies on the user's next request.
+        g.MapPut("/users/{id:guid}/access", (Guid id, AccessInput input, Db db, HttpContext ctx) => Act(id, db, ctx, async (c, t, tx) =>
+        {
+            if (ModuleAccess.Validate(input.Access, out var enabled) is { } error)
+            {
+                var v = new Validator();
+                v.Add("access", error);
+                return v.Problem();
+            }
+            var before = await ModuleAccess.EnabledAsync(c, t.UserId, tx);
+            await ModuleAccess.SetAsync(c, t.UserId, enabled, ctx.User.UserId(), tx);
+            await Audit.WriteAsync(c, "USER", ctx.User.UserId(), "USER_ACCESS_CHANGED", "User", t.PublicId.ToString(),
+                $"Module access set to {(enabled.Length == 0 ? "none" : string.Join(", ", enabled))}", ClientInfo.From(ctx).Ip, tx, privileged: true,
+                newValues: new { access = enabled, previous = before });
+            return Results.Ok(await LoadUserRowAsync(c, id, tx));
+        })).RequirePermission("users.manage");
 
         g.MapPost("/users", async (CreateUserInput input, Db db, Passwords passwords, HttpContext ctx) =>
         {
@@ -75,6 +93,13 @@ public static class UserAdminEndpoints
             }
             var roles = (input.Roles ?? []).Distinct().ToArray();
             if (roles.Length == 0) v.Add("roles", "Choose at least one role.");
+            // Optional module access (null = every module the roles allow, the behaviour before V032).
+            string[]? access = null;
+            if (input.Access is not null)
+            {
+                if (ModuleAccess.Validate(input.Access, out var enabled) is { } accessError) v.Add("access", accessError);
+                else access = enabled;
+            }
             if (!v.IsValid) return v.Problem();
             // "E-mail only" for someone who IS in the employee master: link to that employee instead of creating an account that
             // can never schedule meetings or have a calendar (exactly one active employee with this official e-mail, no account yet).
@@ -108,6 +133,13 @@ public static class UserAdminEndpoints
                 await c.ExecuteAsync("INSERT auth.UserRoles (UserId, RoleId, AssignedByUserId) SELECT @userId, RoleId, @actor FROM auth.Roles WHERE Code IN @roles",
                     new { userId, roles, actor = ctx.User.UserId() }, tx);
                 await Audit.WriteUserAsync(c, "USER", ctx.User.UserId(), "USER_CREATED", userId, $"User account created with roles {string.Join(", ", roles)}", ClientInfo.From(ctx).Ip, tx, privileged: true);
+                if (access is not null && access.Length < ModuleAccess.All.Length)
+                {
+                    await ModuleAccess.SetAsync(c, userId, access, ctx.User.UserId(), tx);
+                    await Audit.WriteAsync(c, "USER", ctx.User.UserId(), "USER_ACCESS_CHANGED", "User", publicId.ToString(),
+                        $"Module access set to {(access.Length == 0 ? "none" : string.Join(", ", access))}", ClientInfo.From(ctx).Ip, tx, privileged: true,
+                        newValues: new { access });
+                }
                 tx.Commit();
                 return Results.Json(new { id = publicId, email, oneTimePassword = oneTime, linkedToEmployee = employeeId is not null }, statusCode: 201);
             }
@@ -284,6 +316,31 @@ public static class UserAdminEndpoints
         }).RequirePermission("roles.manage");
 
         return api;
+    }
+
+    /// <summary>The users list row (also GET /users/{id} and PUT /users/{id}/access). Append a WHERE clause.</summary>
+    const string UserRowSelect = """
+        SELECT u.PublicId AS id, u.Email AS email, COALESCE(e.DisplayName, u.Email) AS displayName, COALESCE(u.EmployeeCode, e.EmployeeCode) AS employeeCode,
+               e.PublicId AS employeeId, d.Name AS department,
+               (SELECT STRING_AGG(r.Code, ',') FROM auth.UserRoles ur JOIN auth.Roles r ON r.RoleId = ur.RoleId WHERE ur.UserId = u.UserId) AS roles,
+               u.IsActive AS isActive, CAST(CASE WHEN u.IsLocked = 1 OR u.LockoutEndUtc > SYSUTCDATETIME() THEN 1 ELSE 0 END AS BIT) AS isLocked,
+               u.MfaEnabled AS mfaEnabled, u.MustChangePassword AS mustChangePassword, u.LastLoginUtc AS lastLoginUtc,
+               (SELECT STRING_AGG(b.ModuleCode, ',') FROM auth.UserModuleBlocks b WHERE b.UserId = u.UserId) AS blockedModules
+        FROM auth.Users u LEFT JOIN org.Employees e ON e.EmployeeId = u.EmployeeId LEFT JOIN org.Departments d ON d.DepartmentId = e.DepartmentId
+        """;
+
+    static object UserRow(dynamic r) => new
+    {
+        r.id, r.email, r.displayName, r.employeeCode, r.employeeId, r.department,
+        roles = ((string?)r.roles ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries),
+        r.isActive, r.isLocked, r.mfaEnabled, r.mustChangePassword, r.lastLoginUtc,
+        access = ModuleAccess.EnabledFromBlocked((string?)r.blockedModules),
+    };
+
+    static async Task<object?> LoadUserRowAsync(IDbConnection c, Guid id, IDbTransaction? tx = null)
+    {
+        object? r = await c.QuerySingleOrDefaultAsync($"{UserRowSelect} WHERE u.PublicId = @id", new { id }, tx);
+        return r is null ? null : UserRow(r);
     }
 
     static bool CanManageRoles(HttpContext ctx) => ctx.User.HasClaim(SessionClaims.Permission, "roles.manage");

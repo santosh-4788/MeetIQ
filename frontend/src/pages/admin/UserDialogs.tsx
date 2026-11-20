@@ -1,6 +1,6 @@
 ﻿import { useEffect, useState, type FormEvent } from 'react'
-import { CircleAlert, Mail, UserPlus, UserRound } from 'lucide-react'
-import { adminApi, type AdminUser, type CreatedUser, type Role } from '../../api/admin'
+import { CircleAlert, ListTodo, Mail, MessagesSquare, Phone, UserPlus, UserRound, Video } from 'lucide-react'
+import { adminApi, type AdminUser, type CreatedUser, type Role, ALL_ACCESS, type AccessModule } from '../../api/admin'
 import { employeesApi } from '../../api/employees'
 import { orgApi } from '../../api/org'
 import { EmployeeFormDrawer } from '../employees/EmployeeForm'
@@ -131,8 +131,60 @@ function AddEmployee({ email, onAdded }: { email?: string; onAdded: (e: PickedEm
  * With `employee` the account is linked to that employee (Employee Management); otherwise the
  * administrator picks an employee or enters an e-mail address.
  */
+const MODULES: { key: AccessModule; label: string; hint: string; icon: typeof Video }[] = [
+  { key: 'MEETINGS', label: 'Meetings', hint: 'Dashboard, meetings, calendar, recordings, reports', icon: Video },
+  { key: 'CHAT', label: 'Chat', hint: 'Direct and group chats, files', icon: MessagesSquare },
+  { key: 'CALLS', label: 'Audio calls', hint: 'Make and receive calls in Chat', icon: Phone },
+  { key: 'TASKS', label: 'Notes & tasks', hint: 'Notes, tasks, reminders, My Day', icon: ListTodo },
+]
+
+/** Which modules this user may use. Audio calls and Notes & tasks need Chat. */
+export function AccessPicker({ value, onChange, disabled }: { value: AccessModule[]; onChange: (v: AccessModule[]) => void; disabled?: boolean }) {
+  const toggle = (k: AccessModule) => {
+    let next = value.includes(k) ? value.filter((x) => x !== k) : [...value, k]
+    if (k === 'CHAT' && !next.includes('CHAT')) next = next.filter((x) => x !== 'CALLS' && x !== 'TASKS')
+    onChange(ALL_ACCESS.filter((x) => next.includes(x)))
+  }
+  return (
+    <fieldset className="flex flex-col gap-2" data-testid="access-picker">
+      <legend className="mb-1 text-[13px] font-semibold text-ink">Access</legend>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {MODULES.map((m) => {
+          const on = value.includes(m.key)
+          const needsChat = (m.key === 'CALLS' || m.key === 'TASKS') && !value.includes('CHAT')
+          const Icon = m.icon
+          return (
+            <label
+              key={m.key}
+              className={cn(
+                'flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2.5 transition-colors',
+                on ? 'border-brand-500 bg-brand-50' : 'border-line bg-surface hover:bg-surface-muted',
+                (disabled || needsChat) && 'cursor-not-allowed opacity-55',
+              )}
+            >
+              <input type="checkbox" className="mt-0.5 size-4 accent-[var(--color-brand-500)]" checked={on} disabled={disabled || needsChat} onChange={() => toggle(m.key)} data-testid={'access-' + m.key.toLowerCase()} />
+              <Icon className={cn('mt-0.5 size-4 shrink-0', on ? 'text-brand-600' : 'text-ink-muted')} aria-hidden />
+              <span className="min-w-0">
+                <span className="block text-[13.5px] font-semibold text-ink">{m.label}</span>
+                <span className="block text-[12px] text-ink-secondary">{needsChat ? 'Needs Chat' : m.hint}</span>
+              </span>
+            </label>
+          )
+        })}
+      </div>
+      <p className="text-[12px] text-ink-secondary">The user only sees what is ticked: menu, pages and the Android app. Roles still decide what they can do inside each module.</p>
+    </fieldset>
+  )
+}
+
+export function accessLabel(access: AccessModule[] | undefined) {
+  const a = access ?? ALL_ACCESS
+  return a.length === 4 ? 'All' : a.length === 0 ? 'None' : MODULES.filter((m) => a.includes(m.key)).map((m) => m.label).join(', ')
+}
+
 export function CreateUserDialog({ open, onClose, employee }: { open: boolean; onClose: (created: boolean) => void; employee?: PickedEmployee }) {
   const [mode, setMode] = useState<'employee' | 'email'>('employee')
+  const [access, setAccess] = useState<AccessModule[]>(ALL_ACCESS)
   const [picked, setPicked] = useState<PickedEmployee | null>(null)
   const [email, setEmail] = useState('')
   const [roles, setRoles] = useState<string[]>(['Employee'])
@@ -149,6 +201,7 @@ export function CreateUserDialog({ open, onClose, employee }: { open: boolean; o
     setPicked(null)
     setEmail('')
     setRoles(['Employee'])
+    setAccess(ALL_ACCESS)
     setErrors({})
     setError(null)
     onClose(done)
@@ -168,7 +221,8 @@ export function CreateUserDialog({ open, onClose, employee }: { open: boolean; o
     setBusy(true)
     setError(null)
     try {
-      setCreated(await adminApi.createUser(target ? { employeeId: target.id, roles } : { email: email.trim(), roles }))
+      const a = access.length === 4 ? undefined : access
+      setCreated(await adminApi.createUser(target ? { employeeId: target.id, roles, access: a } : { email: email.trim(), roles, access: a }))
     } catch (err) {
       const fe = fieldErrors(err)
       setErrors(fe)
@@ -259,9 +313,56 @@ export function CreateUserDialog({ open, onClose, employee }: { open: boolean; o
           {employee && errors.employeeId && <Alert tone="danger">{errors.employeeId}</Alert>}
           {employee && errors.email && <Alert tone="danger">{errors.email}</Alert>}
           <RolePicker value={roles} onChange={(r) => (setRoles(r), setErrors((x) => ({ ...x, roles: '' })))} error={errors.roles || undefined} />
+          <AccessPicker value={access} onChange={setAccess} />
+          {errors.access && <Alert tone="danger">{errors.access}</Alert>}
           <p className="text-[12.5px] text-ink-secondary">A one-time password is generated. The user must change it at first sign-in.</p>
         </form>
       )}
+    </Dialog>
+  )
+}
+
+/** Per-user module access (PUT /admin/users/{id}/access). Takes effect on the user's next click; no sign-out needed. */
+export function EditAccessDialog({ user, onClose }: { user: AdminUser | null; onClose: (saved: boolean) => void }) {
+  const [access, setAccess] = useState<AccessModule[]>(ALL_ACCESS)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (user) {
+      setAccess(user.access ?? ALL_ACCESS)
+      setError(null)
+    }
+  }, [user])
+  async function save() {
+    if (!user) return
+    setBusy(true)
+    setError(null)
+    try {
+      await adminApi.setAccess(user.id, access)
+      onClose(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The access could not be saved.')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog
+      open={!!user}
+      onClose={() => onClose(false)}
+      title="Edit access"
+      description={user ? `${user.displayName} · ${user.email}` : undefined}
+      dismissible={!busy}
+      footer={
+        <>
+          <Button variant="secondary" onClick={() => onClose(false)} disabled={busy}>Cancel</Button>
+          <Button onClick={() => void save()} loading={busy} data-testid="access-save">Save access</Button>
+        </>
+      }
+    >
+      {error && <Alert tone="danger" className="mb-4">{error}</Alert>}
+      <AccessPicker value={access} onChange={setAccess} />
+      {access.length === 0 && <p className="mt-3 text-[12.5px] text-warning-ink">With nothing ticked the user can only open Settings and Notifications.</p>}
     </Dialog>
   )
 }

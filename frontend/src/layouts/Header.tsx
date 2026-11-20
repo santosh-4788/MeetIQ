@@ -48,7 +48,7 @@ export function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
       </IconButton>
       <div className="min-w-0">
         <nav aria-label="Breadcrumb" className="hidden items-center gap-1 text-[12px] text-ink-muted sm:flex">
-          <Link to="/dashboard" className="hover:text-ink">Home</Link>
+          <Link to="/" className="hover:text-ink">Home</Link>
           {current && current.to !== '/dashboard' && (
             <>
               <ChevronRight className="size-3" />

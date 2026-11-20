@@ -1,7 +1,7 @@
 ﻿import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'motion/react'
-import { Construction, EllipsisVertical, IdCard, KeyRound, LockOpen, Power, ShieldCheck, ShieldOff, ShieldX, UserCheck, UserCog, UserPlus, UsersRound } from 'lucide-react'
+import { Construction, EllipsisVertical, IdCard, KeyRound, LockOpen, Power, ShieldCheck, ShieldOff, ShieldX, SlidersHorizontal, UserCheck, UserCog, UserPlus, UsersRound } from 'lucide-react'
 import { adminApi, type AdminUser, type UserStatus } from '../../api/admin'
 import { useAuth } from '../../auth/AuthContext'
 import { Avatar } from '../../components/ui/Avatar'
@@ -18,7 +18,7 @@ import { formatDateTime } from '../../lib/format'
 import { useDebounced, useLoader } from '../../lib/useLoader'
 import { RecorderHealthCard, RecordingPoliciesCard } from './RecordingPolicies'
 import { RolesMatrix } from './RolesMatrix'
-import { CreateUserDialog, EditRolesDialog, LinkEmployeeDialog, ResetPasswordDialog, SUPER_ADMIN } from './UserDialogs'
+import { accessLabel, CreateUserDialog, EditAccessDialog, EditRolesDialog, LinkEmployeeDialog, ResetPasswordDialog, SUPER_ADMIN } from './UserDialogs'
 
 const PAGE_SIZE = 25
 
@@ -84,6 +84,7 @@ function UsersCard() {
 
   const [creating, setCreating] = useState(false)
   const [editingRoles, setEditingRoles] = useState<AdminUser | null>(null)
+  const [editingAccess, setEditingAccess] = useState<AdminUser | null>(null)
   const [resetting, setResetting] = useState<AdminUser | null>(null)
   const [linking, setLinking] = useState<AdminUser | null>(null)
   const [pending, setPending] = useState<Pending | null>(null)
@@ -96,6 +97,7 @@ function UsersCard() {
     const self = u.id === me?.id
     const acts: MenuAction[] = [
       { label: 'Edit roles', icon: <UserCog className="size-4" />, onSelect: () => setEditingRoles(u) },
+      { label: 'Edit access', icon: <SlidersHorizontal className="size-4" />, onSelect: () => setEditingAccess(u) },
       { label: 'Reset password', icon: <KeyRound className="size-4" />, onSelect: () => setResetting(u) },
       { label: u.employeeId ? 'Change linked employee' : 'Link to employee', icon: <IdCard className="size-4" />, onSelect: () => setLinking(u) },
     ]
@@ -191,6 +193,7 @@ function UsersCard() {
                       <div className="flex max-w-56 flex-wrap gap-1">
                         {u.roles.length ? u.roles.map((r) => <Badge key={r} tone="brand">{r}</Badge>) : <span className="text-ink-muted">None</span>}
                       </div>
+                      <p className="mt-1 text-[11.5px] text-ink-secondary" data-testid="user-access">Access: {accessLabel(u.access)}</p>
                     </td>
                     <td className={table.td}>{statusBadges(u)}</td>
                     <td className={cn(table.td, 'whitespace-nowrap text-ink-secondary')}>{u.lastLoginUtc ? formatDateTime(u.lastLoginUtc, tz) : 'Never'}</td>
@@ -218,6 +221,7 @@ function UsersCard() {
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {u.roles.map((r) => <Badge key={r} tone="brand">{r}</Badge>)}
                   </div>
+                  <p className="mt-1 text-[12px] text-ink-secondary">Access: {accessLabel(u.access)}</p>
                   <div className="mt-1">{statusBadges(u)}</div>
                 </div>
                 <UserActions user={u} actions={actionsFor(u)} />
@@ -234,6 +238,16 @@ function UsersCard() {
           setCreating(false)
           if (created) {
             toast.success('User account created.')
+            list.reload()
+          }
+        }}
+      />
+      <EditAccessDialog
+        user={editingAccess}
+        onClose={(saved) => {
+          setEditingAccess(null)
+          if (saved) {
+            toast.success('Access updated.')
             list.reload()
           }
         }}

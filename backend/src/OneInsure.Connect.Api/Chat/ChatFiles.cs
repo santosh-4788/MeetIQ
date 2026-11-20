@@ -312,7 +312,29 @@ public static class ChatFileEndpoints
         }
         await Audit.WriteAsync(c, "USER", me.UserId, "CHAT_FILE_DOWNLOADED", "ChatFile", id.ToString(), "Chat attachment downloaded", ClientInfo.From(ctx).Ip,
             newValues: new { extension = f.Extension, size = f.SizeBytes });
-        return Results.File(path, "application/octet-stream", f.OriginalName, enableRangeProcessing: true);
+        // Phones need two things to save and open the file (20 Nov 2026 fix):
+        //  - a plain quoted filename first. Android's WebView download parser (URLUtil.guessFileName) cannot read
+        //    `filename=x; filename*=...` and saved names with spaces or brackets as "<id>.bin";
+        //  - the real type (from our own file-type list, never from the uploader), so Excel/Word/PDF apps open it.
+        //    "attachment" plus the site-wide nosniff header keeps the browser from showing it in the page.
+        headers.ContentDisposition = AttachmentDisposition(f.OriginalName);
+        return Results.File(path, DownloadContentType(f.ContentType), enableRangeProcessing: true);
+    }
+
+    public static string AttachmentDisposition(string name)
+    {
+        var ascii = new string(name.Select(ch => ch is >= ' ' and <= '~' && ch != '"' && ch != '\\' ? ch : '_').ToArray());
+        return ascii == name
+            ? $"attachment; filename=\"{ascii}\""
+            : $"attachment; filename=\"{ascii}\"; filename*=UTF-8''{Uri.EscapeDataString(name)}";
+    }
+
+    public static string DownloadContentType(string? stored)
+    {
+        var t = (stored ?? "").Trim().ToLowerInvariant();
+        if (t.Length == 0 || t.Contains("html") || t.StartsWith("image/svg") || t is "text/xml" or "application/xml" || t.Contains("javascript"))
+            return "application/octet-stream";
+        return t;
     }
 }
 

@@ -372,10 +372,27 @@ export function RequirePermission({ permission, children }: { permission?: strin
   return <>{children}</>
 }
 
+/**
+ * The first page this person may use (20 Nov 2026: per-user module access): the dashboard, otherwise Chat, otherwise
+ * My Meetings, otherwise Settings. Used after sign-in and for "/".
+ */
+export function homeFor(can: (permission: string) => boolean) {
+  if (can('dashboard.view')) return '/dashboard'
+  if (can('chat.use')) return '/chat'
+  if (can('meetings.view.own')) return '/meetings'
+  return '/settings'
+}
+
+/** "/" → the person's home page. */
+export function HomeRedirect() {
+  const { can } = useAuth()
+  return <Navigate to={homeFor(can)} replace />
+}
+
 /** Keeps signed-in users away from the login screens. */
 export function RedirectIfAuthenticated() {
-  const { status } = useAuth()
+  const { status, can } = useAuth()
   if (status === 'loading') return <FullScreenLoader />
-  if (status === 'authenticated') return <Navigate to="/dashboard" replace />
+  if (status === 'authenticated') return <Navigate to={homeFor(can)} replace />
   return <Outlet />
 }

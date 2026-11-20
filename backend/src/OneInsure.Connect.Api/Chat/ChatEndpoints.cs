@@ -330,7 +330,9 @@ public static class ChatEndpoints
             unread = new { conversations = unread.Conversations, messages = unread.Messages },
             preferences = await PreferencesAsync(c, me.UserId, now),
             limits = new { bodyMax = BodyMax, maxUploadMb = s.Options.MaxUploadMb, editMinutes = s.Options.EditWindowMinutes, deleteMinutes = s.Options.DeleteWindowMinutes, maxGroupMembers = s.Options.MaxGroupMembers },
-            tasks = await ChatWorkEndpoints.TasksEnabledAsync(c, s.Cache),
+            // Switch on AND the person's own access (V032: chat.tasks / chat.calls after per-user module access).
+            tasks = ctx.User.Can(ModuleAccess.TasksPermission) && await ChatWorkEndpoints.TasksEnabledAsync(c, s.Cache),
+            calls = ctx.User.Can(ModuleAccess.CallsPermission) && await ChatCallEndpoints.CallsEnabledAsync(c, s.Cache),
             advanced = await ChatAdvancedEndpoints.AdvancedEnabledAsync(c, s.Cache),
         });
     }
@@ -370,7 +372,13 @@ public static class ChatEndpoints
             ORDER BY e.DisplayName
             """, new { me = me.UserId, term })).ToList();
         var presence = await s.Presence.LoadAsync(c, rows.Select(r => r.UserId).ToList(), me.UserId);
-        return Results.Ok(rows.Select(r => new PersonDto(r.Id, r.Name, r.Code, r.Department, r.Designation, presence[r.UserId])));
+        // canCall (V032): the colleague can receive audio calls (holds chat.calls after per-user module access).
+        var callable = await ModuleAccess.WhoHasAsync(c, rows.Select(r => r.UserId), ModuleAccess.CallsPermission);
+        return Results.Ok(rows.Select(r => new
+        {
+            id = r.Id, name = r.Name, code = r.Code, department = r.Department, designation = r.Designation, presence = presence[r.UserId],
+            canCall = callable.Contains(r.UserId),
+        }));
     }
 
     /// <summary>Presence of up to 100 people the caller shares a conversation with (the website refreshes visible people every minute).</summary>

@@ -67,9 +67,7 @@ public sealed class SessionAuthenticationHandler(
         using var c = await db.OpenAsync(Context.RequestAborted);
         var row = await c.QuerySingleOrDefaultAsync<Row>("""
             SELECT s.SessionId, s.UserId, s.CreatedUtc, s.ExpiresUtc, s.AbsoluteExpiryUtc, s.LastSeenUtc, u.MustChangePassword,
-                   (SELECT STRING_AGG(p.Code, ',') FROM (SELECT DISTINCT p.Code FROM auth.UserRoles ur
-                        JOIN auth.RolePermissions rp ON rp.RoleId = ur.RoleId
-                        JOIN auth.Permissions p ON p.PermissionId = rp.PermissionId WHERE ur.UserId = u.UserId) p) AS Permissions
+                   (SELECT STRING_AGG(p.Code, ',') FROM auth.EffectivePermissions(u.UserId) p) AS Permissions
             FROM auth.UserSessions s JOIN auth.Users u ON u.UserId = s.UserId
             WHERE s.TokenHash = @hash AND s.RevokedUtc IS NULL AND s.ExpiresUtc > @now AND s.AbsoluteExpiryUtc > @now
               AND u.IsActive = 1 AND u.IsLocked = 0

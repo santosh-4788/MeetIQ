@@ -117,8 +117,8 @@ public sealed class ChatHub(Db db, IMemoryCache cache, PresenceTracker tracker, 
 }
 
 /// <summary>
-/// Every 30 s: closes live connections whose session ended (sign-out, daily logout, disabled account) or when Chat is switched
-/// off, and records "last seen" for everyone online (so a server restart never leaves a stale time).
+/// Every 30 s: closes live connections whose session ended (sign-out, daily logout, disabled account), whose user no longer
+/// holds chat.use (roles or per-user module access, V032), or when Chat is switched off, and records "last seen" for everyone online (so a server restart never leaves a stale time).
 /// </summary>
 public sealed class ChatPresenceSweeper(Db db, IMemoryCache cache, PresenceTracker tracker, DailyLogoutService daily, IClock clock,
     ILogger<ChatPresenceSweeper> log) : BackgroundService
@@ -152,6 +152,7 @@ public sealed class ChatPresenceSweeper(Db db, IMemoryCache cache, PresenceTrack
             foreach (var s in await c.QueryAsync<SessionRow>("""
                 SELECT s.SessionId, s.UserId, s.CreatedUtc FROM auth.UserSessions s JOIN auth.Users u ON u.UserId = s.UserId
                 WHERE s.SessionId IN @ids AND s.RevokedUtc IS NULL AND s.ExpiresUtc > @now AND s.AbsoluteExpiryUtc > @now AND u.IsActive = 1 AND u.IsLocked = 0
+                  AND EXISTS (SELECT 1 FROM auth.EffectivePermissions(s.UserId) ep WHERE ep.Code = 'chat.use')
                 """, new { ids = chunk, now }))
                 live[s.SessionId] = s;
         foreach (var x in conns)

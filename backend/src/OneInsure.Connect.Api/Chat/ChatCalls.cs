@@ -43,7 +43,8 @@ public static class ChatCallEndpoints
 
     public static RouteGroupBuilder MapChatCallEndpoints(this RouteGroupBuilder api)
     {
-        var g = api.MapGroup("/chat/calls").RequirePermission(ChatAccess.Permission);
+        // chat.calls (V032): per-user module access can switch audio calls off for one person.
+        var g = api.MapGroup("/chat/calls").RequirePermission(ChatAccess.Permission).RequirePermission(ModuleAccess.CallsPermission);
         g.MapGet("", History);
         g.MapGet("/current", Current);
         g.MapPost("", Start).RequireRateLimiting(StartRateLimit);
@@ -166,6 +167,29 @@ public static class ChatCallEndpoints
 
     static IResult NotFound() => Db_.NotFound("Call");
 
+    sealed record Callee(long UserId, Guid Id, string Name);
+
+    static Task<IEnumerable<Callee>> CalleesAsync(IDbConnection c, IEnumerable<long> userIds) =>
+        c.QueryAsync<Callee>("""
+            SELECT u.UserId, u.PublicId AS Id, e.DisplayName AS Name FROM auth.Users u JOIN org.Employees e ON e.EmployeeId = u.EmployeeId WHERE u.UserId IN @ids
+            """, new { ids = userIds.Distinct().DefaultIfEmpty(0L).ToArray() });
+
+    /// <summary>
+    /// Splits invitees into people who can receive audio calls (chat.calls, effective) and people who cannot (never rung).
+    /// Error = 409 CALLS_NOT_AVAILABLE when nobody can.
+    /// </summary>
+    static async Task<(List<long> Callable, List<Callee> Skipped, IResult? Error)> CallableAsync(IDbConnection c, List<long> invitees)
+    {
+        var can = await ModuleAccess.WhoHasAsync(c, invitees, ModuleAccess.CallsPermission);
+        var callable = invitees.Where(can.Contains).ToList();
+        List<Callee> skipped = invitees.Count == callable.Count ? [] : (await CalleesAsync(c, invitees.Where(u => !can.Contains(u)))).OrderBy(x => x.Name).ToList();
+        if (callable.Count > 0) return (callable, skipped, null);
+        var detail = skipped.Count == 1 ? $"{skipped[0].Name} cannot receive audio calls." : "None of these colleagues can receive audio calls.";
+        return (callable, skipped, Problems.Create(409, "CALLS_NOT_AVAILABLE", detail));
+    }
+
+    static object SkippedDto(List<Callee> skipped) => skipped.Select(x => new { id = x.Id, name = x.Name }).ToArray();
+
     internal static async Task PushCallAsync(IDbConnection c, ChatPush push, IClock clock, long callId, string evt = "call.updated", IEnumerable<long>? onlyTo = null)
     {
         var call = await LoadCallAsync(c, callId);
@@ -202,6 +226,10 @@ public static class ChatCallEndpoints
             WHERE p.ConversationId = @cid AND p.LeftUtc IS NULL AND p.UserId <> @me
             """, new { cid = m.ConversationId, me = me.UserId })).ToList();
         if (members.Count == 0) return Db_.Conflict(m.IsGroup ? "There is nobody else in this group to call." : "This colleague is no longer active, so they cannot be called.");
+        // People without chat.calls (V032 per-user module access) are never rung.
+        var (callable, skipped, notAvailable) = await CallableAsync(c, members);
+        if (notAvailable is not null) return notAvailable;
+        members = callable;
 
         var busy = new HashSet<long>(await InCallAsync(c, members));
         busy.UnionWith(await InMeetingAsync(c, members));
@@ -233,7 +261,7 @@ public static class ChatCallEndpoints
         await s.Push.ToUsersAsync(parts.Where(p => p.State == "RINGING").Select(p => p.UserId), "call.incoming", dto);
         await s.Push.ToUsersAsync([me.UserId], "call.updated", dto);
         await PushPresenceAsync(c, s, [me.UserId]);
-        return Results.Ok(new { call = dto, connection = call.Status is "RINGING" or "ACTIVE" ? Connection(s, call, me) : null });
+        return Results.Ok(new { call = dto, connection = call.Status is "RINGING" or "ACTIVE" ? Connection(s, call, me) : null, skipped = SkippedDto(skipped) });
     }
 
     static async Task<IResult> Accept(Guid id, CallServices s, HttpContext ctx)
@@ -355,7 +383,11 @@ public static class ChatCallEndpoints
         var parts = await LoadPartsAsync(c, mine.CallId);
         var adding = users.Where(u => !parts.Any(p => p.UserId == u && p.State is "ACCEPTED" or "RINGING")).ToList();
         if (adding.Count == 0) return Db_.Conflict("They are already in the call or being called.");
-        var open = parts.Count(p => p.State is "ACCEPTED" or "RINGING");
+        // People without chat.calls (V032 per-user module access) are never rung.
+        var (callable, skipped, notAvailable) = await CallableAsync(c, adding);
+        if (notAvailable is not null) return notAvailable;
+        adding = callable;
+        var open =parts.Count(p => p.State is "ACCEPTED" or "RINGING");
         if (open + adding.Count > s.Options.MaxCallParticipants) return Db_.Conflict($"A call can have at most {s.Options.MaxCallParticipants} people.");
         var busy = new HashSet<long>(await InCallAsync(c, adding));
         busy.UnionWith(await InMeetingAsync(c, adding));
@@ -378,7 +410,10 @@ public static class ChatCallEndpoints
         var dto = Dto(call, all, s.Clock.UtcNow);
         await s.Push.ToUsersAsync(adding.Where(u => !busy.Contains(u)), "call.incoming", dto);
         await s.Push.ToUsersAsync(all.Select(p => p.UserId), "call.updated", dto);
-        return Results.Ok(dto);
+        // The call as before, plus skipped (V032): invitees who cannot receive audio calls and were not rung.
+        var result = dto.GetType().GetProperties().ToDictionary(p => p.Name, p => p.GetValue(dto));
+        result["skipped"] = SkippedDto(skipped);
+        return Results.Ok(result);
     }
 
     static async Task<IResult> Token(Guid id, CallServices s, HttpContext ctx)
@@ -537,13 +572,14 @@ public sealed class ChatCallWorker(Db db, IServiceScopeFactory scopes, ChatPush 
         }
     }
 
-    sealed record OpenPart(long CallId, string Room, long UserId, Guid UserPublicId, string State, DateTime InvitedUtc, DateTime? AnsweredUtc, DateTime? JoinedUtc, DateTime? LastConnectedUtc, DateTime CallCreatedUtc);
+    sealed record OpenPart(long CallId, string Room, long UserId, Guid UserPublicId, string State, DateTime InvitedUtc, DateTime? AnsweredUtc, DateTime? JoinedUtc, DateTime? LastConnectedUtc, DateTime CallCreatedUtc, bool CanCall);
 
     public async Task RunOnceAsync(CancellationToken ct = default)
     {
         using var c = await db.OpenAsync(ct);
         var open = (await c.QueryAsync<OpenPart>("""
-            SELECT cl.CallId, cl.LiveKitRoomName AS Room, p.UserId, u.PublicId AS UserPublicId, p.[State], p.InvitedUtc, p.AnsweredUtc, p.JoinedUtc, p.LastConnectedUtc, cl.CreatedUtc AS CallCreatedUtc
+            SELECT cl.CallId, cl.LiveKitRoomName AS Room, p.UserId, u.PublicId AS UserPublicId, p.[State], p.InvitedUtc, p.AnsweredUtc, p.JoinedUtc, p.LastConnectedUtc, cl.CreatedUtc AS CallCreatedUtc,
+                   CAST(CASE WHEN EXISTS (SELECT 1 FROM auth.EffectivePermissions(p.UserId) ep WHERE ep.Code = 'chat.calls') THEN 1 ELSE 0 END AS BIT) AS CanCall
             FROM chat.TRN_ChatCall cl JOIN chat.TRN_ChatCallParticipant p ON p.CallId = cl.CallId JOIN auth.Users u ON u.UserId = p.UserId
             WHERE cl.[Status] IN ('RINGING', 'ACTIVE') AND (p.[State] = 'RINGING' OR (p.[State] = 'ACCEPTED' AND p.LeftUtc IS NULL))
             """)).ToList();
@@ -568,7 +604,8 @@ public sealed class ChatCallWorker(Db db, IServiceScopeFactory scopes, ChatPush 
             catch (LiveKitUnavailableException) { continue; }
             foreach (var p in call)
             {
-                if (p.State == "RINGING" && now - p.InvitedUtc > TimeSpan.FromSeconds(o.RingSeconds))
+                // Also stop ringing at once for someone whose audio calls were switched off meanwhile (V032 module access).
+                if (p.State == "RINGING" && (now - p.InvitedUtc > TimeSpan.FromSeconds(o.RingSeconds) || !p.CanCall))
                 {
                     await c.ExecuteAsync("UPDATE chat.TRN_ChatCallParticipant SET [State] = 'MISSED' WHERE CallId = @callId AND UserId = @u AND [State] = 'RINGING'",
                         new { callId = p.CallId, u = p.UserId });

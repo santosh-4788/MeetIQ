@@ -1,7 +1,7 @@
 ﻿import { lazy, Suspense, type ReactNode } from 'react'
 import { Navigate, Route, Routes, useParams } from 'react-router-dom'
 import { MotionConfig } from 'motion/react'
-import { AuthProvider, RedirectIfAuthenticated, RequireAuth, RequirePermission } from './auth/AuthContext'
+import { AuthProvider, HomeRedirect, RedirectIfAuthenticated, RequireAuth, RequirePermission } from './auth/AuthContext'
 import { ToastProvider } from './components/ui/Toast'
 import { AuthLayout } from './layouts/AuthLayout'
 import { AppLayout } from './layouts/AppLayout'
@@ -121,7 +121,7 @@ export default function App() {
                 <Route path="*" element={<PlannedModulePage />} />
               </Route>
             </Route>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/" element={<HomeRedirect />} />
           </Routes>
         </ToastProvider>
       </AuthProvider>

@@ -217,9 +217,7 @@ public sealed class AuthService(Db db, Passwords passwords, IClock clock, IOptio
             SELECT u.PublicId, e.DisplayName, u.Email,
                    COALESCE(u.EmployeeCode, e.EmployeeCode) AS EmployeeCode, d.Name AS Department, g.Name AS Designation,
                    (SELECT STRING_AGG(r.Code, ',') FROM auth.UserRoles ur JOIN auth.Roles r ON r.RoleId = ur.RoleId WHERE ur.UserId = u.UserId) AS Roles,
-                   (SELECT STRING_AGG(x.Code, ',') FROM (SELECT DISTINCT p.Code FROM auth.UserRoles ur
-                        JOIN auth.RolePermissions rp ON rp.RoleId = ur.RoleId JOIN auth.Permissions p ON p.PermissionId = rp.PermissionId
-                        WHERE ur.UserId = u.UserId) x) AS Permissions,
+                   (SELECT STRING_AGG(x.Code, ',') FROM auth.EffectivePermissions(u.UserId) x) AS Permissions,
                    u.TimeZoneId, u.MustChangePassword, CAST(CASE WHEN e.EmployeeId IS NULL THEN 0 ELSE 1 END AS BIT) AS EmployeeLinked
             FROM auth.Users u
             LEFT JOIN org.Employees e ON e.EmployeeId = u.EmployeeId

@@ -43,7 +43,8 @@ public static partial class ChatWorkEndpoints
 
     public static RouteGroupBuilder MapChatWorkEndpoints(this RouteGroupBuilder api)
     {
-        var g = api.MapGroup("/chat").RequirePermission(ChatAccess.Permission);
+        // chat.tasks (V032): per-user module access can switch Notes & tasks off for one person.
+        var g = api.MapGroup("/chat").RequirePermission(ChatAccess.Permission).RequirePermission(ModuleAccess.TasksPermission);
         g.MapGet("/categories", Categories);
         g.MapPost("/categories", CreateCategory).RequireRateLimiting(WriteRateLimit);
         g.MapDelete("/categories/{id:guid}", DeleteCategory);
@@ -1286,6 +1287,7 @@ public sealed class ChatReminderWorker(Db db, ChatPush push, IClock clock, IOpti
                 SET [State] = 'FIRED', FiredUtc = @now, UpdatedUtc = @now
                 OUTPUT inserted.ReminderId
                 WHERE [State] = 'PENDING' AND DueUtc <= @now AND IsActive = 1
+                  AND EXISTS (SELECT 1 FROM auth.EffectivePermissions(OwnerUserId) ep WHERE ep.Code = 'chat.tasks')
                 """, new { now }, tx)).ToList();
             fired = ids.Count == 0 ? [] : (await c.QueryAsync<ChatWorkEndpoints.ReminderRow>($"{ChatWorkEndpoints.ReminderSelect} WHERE r.ReminderId IN @ids ORDER BY r.DueUtc",
                 new { ids }, tx)).ToList();

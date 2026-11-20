@@ -375,8 +375,8 @@ public static partial class ExternalApiEndpoints
     {
         const string Select = """
             SELECT TOP (1) e.EmployeeId, e.PublicId AS EmployeePublicId, e.DisplayName, u.UserId,
-                   CAST(CASE WHEN EXISTS (SELECT 1 FROM auth.UserRoles ur JOIN auth.RolePermissions rp ON rp.RoleId = ur.RoleId
-                        JOIN auth.Permissions p ON p.PermissionId = rp.PermissionId WHERE ur.UserId = u.UserId AND p.Code = 'customer.meetings.view') THEN 1 ELSE 0 END AS BIT) AS Customers
+                   CAST(CASE WHEN EXISTS (SELECT 1 FROM auth.EffectivePermissions(u.UserId) p
+                        WHERE p.Code = 'customer.meetings.view') THEN 1 ELSE 0 END AS BIT) AS Customers
             FROM org.Employees e JOIN auth.Users u ON u.EmployeeId = e.EmployeeId AND u.IsActive = 1 AND u.IsLocked = 0
             WHERE e.IsActive = 1
             """;

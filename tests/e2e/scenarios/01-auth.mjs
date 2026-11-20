@@ -102,7 +102,7 @@ export async function run(shared) {
     await s.page.getByLabel('Confirm new password').fill(PASSWORD)
     await s.page.getByRole('button', { name: 'Update password' }).click()
     await s.page.getByText('Password changed').first().waitFor()
-    await s.page.getByRole('button', { name: 'Continue to dashboard' }).click()
+    await s.page.getByRole('button', { name: 'Continue' }).click()
     await s.page.waitForURL(/dashboard/)
     await s.close()
     return 'Forced change page, navigation blocked, policy + mismatch messages, then dashboard.'

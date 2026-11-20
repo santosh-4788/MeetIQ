@@ -16,7 +16,13 @@ export type AdminUser = {
   mfaEnabled: boolean
   mustChangePassword: boolean
   lastLoginUtc: string | null
+  /** Modules this user may use (all four when nothing is switched off). 20 Nov 2026. */
+  access?: AccessModule[]
 }
+
+/** Per-user module access: switching one off removes its permissions from this user even if a role grants them. */
+export type AccessModule = 'MEETINGS' | 'CHAT' | 'CALLS' | 'TASKS'
+export const ALL_ACCESS: AccessModule[] = ['MEETINGS', 'CHAT', 'CALLS', 'TASKS']
 
 export type UserStatus = 'active' | 'inactive' | 'locked' | 'all'
 export type Role = { code: string; name: string; description: string | null; isSystem: boolean; userCount: number; permissions: string[] }
@@ -28,7 +34,8 @@ const user = (id: string) => `/admin/users/${encodeURIComponent(id)}`
 
 export const adminApi = {
   users: (q: { search?: string; status?: UserStatus; page?: number; pageSize?: number }) => http<Paged<AdminUser>>(`/admin/users${query(q)}`),
-  createUser: (body: { email?: string; employeeId?: string; roles: string[] }) => http<CreatedUser>('/admin/users', { method: 'POST', body }),
+  createUser: (body: { email?: string; employeeId?: string; roles: string[]; access?: AccessModule[] }) => http<CreatedUser>('/admin/users', { method: 'POST', body }),
+  setAccess: (id: string, access: AccessModule[]) => http<AdminUser>(`${user(id)}/access`, { method: 'PUT', body: { access } }),
   setRoles: (id: string, roles: string[]) => http<void>(`${user(id)}/roles`, { method: 'PUT', body: { roles } }),
   resetPassword: (id: string) => http<{ oneTimePassword: string }>(`${user(id)}/reset-password`, { method: 'POST' }),
   unlock: (id: string) => http<void>(`${user(id)}/unlock`, { method: 'POST' }),

@@ -232,8 +232,8 @@ export function ChangePasswordPage() {
     return (
       <AuthCard>
         <AuthHeading tone="success" icon={<Check className="size-6" />} title="Password changed" description="Your password was changed successfully. Other active sessions have been signed out." />
-        <Button fullWidth size="lg" onClick={() => navigate('/dashboard', { replace: true })}>
-          Continue to dashboard
+        <Button fullWidth size="lg" onClick={() => navigate('/', { replace: true })}>
+          Continue
         </Button>
       </AuthCard>
     )

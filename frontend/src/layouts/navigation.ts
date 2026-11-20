@@ -38,9 +38,9 @@ export const navigation: NavSection[] = [
     items: [
       { to: '/chat', label: 'Chat', icon: MessagesSquare, permission: 'chat.use', feature: 'chat' },
       // 20 Nov 2026: Phase 4 sections also in the menu (the same Chat workspace, opened on that section).
-      { to: '/my-day', label: 'My Day', icon: Sun, permission: 'chat.use', feature: 'tasks' },
-      { to: '/tasks', label: 'Tasks', icon: ListTodo, permission: 'chat.use', feature: 'tasks' },
-      { to: '/notes', label: 'Notes', icon: StickyNote, permission: 'chat.use', feature: 'tasks' },
+      { to: '/my-day', label: 'My Day', icon: Sun, permission: 'chat.tasks', feature: 'tasks' },
+      { to: '/tasks', label: 'Tasks', icon: ListTodo, permission: 'chat.tasks', feature: 'tasks' },
+      { to: '/notes', label: 'Notes', icon: StickyNote, permission: 'chat.tasks', feature: 'tasks' },
     ],
   },
   {

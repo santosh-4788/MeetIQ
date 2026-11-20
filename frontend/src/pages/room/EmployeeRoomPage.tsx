@@ -118,7 +118,7 @@ function Flow({ m, back, reload }: { m: MeetingDetail; back: ReactNode; reload: 
         title={m.title}
         meetingCode={m.meetingCode}
         timeZoneId={tz}
-        back={exit.kind === 'ended' ? <CanvasButton variant="secondary" leftIcon={<ArrowLeft className="size-4" />} onClick={() => navigate('/dashboard')}>Back to Home</CanvasButton> : back}
+        back={exit.kind === 'ended' ? <CanvasButton variant="secondary" leftIcon={<ArrowLeft className="size-4" />} onClick={() => navigate('/')}>Back to Home</CanvasButton> : back}
         rejoin={<CanvasButton leftIcon={<RotateCw className="size-4" />} onClick={() => (setError(null), setPhase('prejoin'), reload())}>Rejoin</CanvasButton>}
       />
     )
