@@ -1,5 +1,28 @@
 # Changelog
 
+## 20 Nov 2026, 18:16 IST — DEPLOYED: phone chat view (full screen, keyboard, long file names); website only
+
+Reported from an iPhone (Chrome): inside a chat, the portal header and the bottom tab bar took a third of the screen. With the keyboard open, the message box was hidden behind the tab bar. A long file name (`4. Undertaking - not holding ins license Rama.docx`) pushed the bubble off the left edge.
+- **Full-screen conversation on phones** (<768 px), new `pages/chat/useFullScreenChat.ts`:
+  - the open chat is drawn at the page root (portal) as a fixed layer (z-45), above the header and tab bar and below the drawer, sheets and call screens;
+  - it is sized to `visualViewport`, so it fits above the keyboard on iOS and Android;
+  - the page behind does not scroll; leaving the chat restores everything.
+- **Newest message stays in view** when the list gets shorter (keyboard): ResizeObserver keeps the bottom position.
+- **Bubbles never exceed the screen:**
+  - `min-w-0` / `max-w-full` on the bubble;
+  - file cards are 260 px wide, capped to the bubble;
+  - file names show on up to 2 lines;
+  - bubbles with a file may be 86% of the screen width.
+- **Tests:**
+  - New `tests/e2e/room/chat-phone-view.mjs`: 4/4 on iPhone 14, iPhone SE and Android Chrome. It checks full screen, the message box and newest message with a 55% "keyboard" viewport, the bubble inside the screen, and the tab bar back after leaving.
+  - Regression: chat-downloads 6/6, chat 10/10, calls 7/7, tasks 7/7, advanced 8/8, sidebar 5/5, receipts 2/2, ios-look 9/9, user-access 3/3, 8 browsers 104/104, android-app-chat 3/3, portal audit 96 with 0 problems.
+- **Backups:**
+  - website files in `deploy\_backup-20261120-174728`;
+  - database `Oneinsure_v_pre-phonechat-20261120-174728.bak` (verified).
+  - Pre-check: 0 live meetings, recordings or jobs.
+  - API not restarted; no database change.
+  - Undo: copy `frontend-dist` from the backup back to `frontend\dist`.
+
 ## 20 Nov 2026, 17:00–17:05 IST — DEPLOYED: chat file downloads on phones; chat list on laptop screens
 
 - **Downloads (Android app, Android Chrome):** `GET /chat/files/{id}` now sends `attachment; filename="<name>"` first, with `filename*` only for non-ASCII names. It also sends the real type from `chat.MST_ChatFileType` instead of `application/octet-stream`; HTML, SVG, XML and JS types stay octet-stream, and the site-wide nosniff still applies.

@@ -295,6 +295,17 @@ export function ConversationView({
     if (stickBottom.current) el.scrollTop = el.scrollHeight
   }, [messages, uploads.length, highlight, typing])
 
+  // The keyboard opening (or the window shrinking) makes the list shorter: stay on the newest message when we were there.
+  useEffect(() => {
+    const el = scroller.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      if (stickBottom.current) el.scrollTop = el.scrollHeight
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [id])
+
   const onScroll = () => {
     const el = scroller.current
     if (!el) return
@@ -1122,7 +1133,7 @@ function MessageRow({
       {!mine && isGroup && (
         <span className="mr-2 w-7 shrink-0 self-end">{!groupedWithNext && <Avatar name={m.senderName ?? '?'} size={28} />}</span>
       )}
-      <div className={cn('relative flex max-w-[min(76%,560px)] flex-col', mine ? 'items-end' : 'items-start')}>
+      <div className={cn('relative flex min-w-0 flex-col', f && !imageOnly ? 'max-w-[min(86%,560px)]' : 'max-w-[min(76%,560px)]', mine ? 'items-end' : 'items-start')}>
         {!mine && isGroup && !groupedWithPrev && <p className="mb-0.5 ml-3 text-[12px] text-[var(--ios-gray)]">{m.senderName}</p>}
         <div
           onClick={(e) => {
@@ -1130,7 +1141,7 @@ function MessageRow({
             onSelect()
           }}
           className={cn(
-            'ios-bubble transition-[box-shadow,transform] duration-200',
+            'ios-bubble max-w-full min-w-0 transition-[box-shadow,transform] duration-200',
             fresh && (mine ? 'ios-pop ios-pop-right' : 'ios-pop ios-pop-left'),
             mine ? 'ios-bubble-out' : 'ios-bubble-in',
             tail && 'ios-tail',
@@ -1371,10 +1382,10 @@ function FileBlock({ f, mine, onOpenImage, imageOnly }: { f: NonNullable<ChatMes
       </button>
     )
   return (
-    <div className={cn('mb-1 flex items-center gap-2.5 rounded-lg px-2.5 py-2', mine ? 'bg-white/20' : 'bg-white/70')} data-testid="chat-file">
+    <div className={cn('mb-1 flex w-[260px] max-w-full items-center gap-2.5 rounded-lg px-2.5 py-2', mine ? 'bg-white/20' : 'bg-white/70')} data-testid="chat-file">
       <span className={cn('flex size-10 shrink-0 items-center justify-center rounded-md', mine ? 'bg-white/25 text-white' : 'bg-[var(--ios-blue)]/10 text-[var(--ios-blue)]')}>{fileIcon(f.category)}</span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-semibold">{f.name}</span>
+        <span className="line-clamp-2 text-[13px] leading-[17px] font-semibold [overflow-wrap:anywhere]" title={f.name}>{f.name}</span>
         <span className={cn('block text-[11.5px]', mine ? 'text-white/75' : 'text-[var(--ios-gray)]')}>{f.extension.toUpperCase()} · {fileSize(f.size)}</span>
       </span>
       {f.inline && (

@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { AtSign, BellOff, Check, ChevronRight, Clock3, ListChecks, MessagesSquare, Moon, Pin, Search, ShieldCheck, SlidersHorizontal, SquarePen, Star, Users, X } from 'lucide-react'
 import { advApi, chatApi, type Availability, type ChatMessage, type ChatPerson, type Conversation, type Favourite, type Presence } from '../../api/chat'
@@ -10,6 +11,7 @@ import { useChat } from './ChatProvider'
 import { ConversationAvatar, NewChatDialog, NewGroupDialog, PresenceDot, usePeopleSearch } from './ChatParts'
 import { ConversationView } from './ConversationView'
 import { CallHistory } from './CallHistory'
+import { useFullScreenChat } from './useFullScreenChat'
 import { useCalls } from './CallProvider'
 import { fullTime, listTime, presenceColor, presenceLabel, previewOf } from './chatUtils'
 import { IosSegmented } from './IosSegmented'
@@ -256,6 +258,7 @@ export default function ChatPage() {
   }, [conversations, filter, query])
 
   const active = conversations?.find((c) => c.id === activeId) ?? null
+  const fullScreen = useFullScreenChat(!!activeId && section === 'chats')
 
 
   // Opened by id but not in my list yet (e.g. just created elsewhere): load it once.
@@ -307,8 +310,8 @@ export default function ChatPage() {
       </div>
     )
 
-  return (
-    <div className="oic-chat ios -mx-4 flex overflow-hidden bg-white sm:mx-0 sm:rounded-2xl sm:border sm:border-line sm:shadow-xs" data-testid="chat-page">
+  const page = (
+    <div className={cn('oic-chat ios -mx-4 flex overflow-hidden bg-white sm:mx-0 sm:rounded-2xl sm:border sm:border-line sm:shadow-xs', fullScreen && 'oic-chat-full')} data-testid="chat-page">
       {/* Conversation list */}
       <aside className={cn('flex h-full w-full flex-col bg-white md:w-[340px] md:shrink-0 md:shadow-[inset_-0.5px_0_0_var(--ios-sep)] lg:w-[370px]', active && 'max-md:hidden')} aria-label="Chats">
         <div className="shrink-0 px-4 pt-2.5">
@@ -508,6 +511,9 @@ export default function ChatPage() {
       {followUps && <FollowUpPanel onClose={() => setFollowUps(false)} />}
     </div>
   )
+  // Phones: the open conversation covers the header and tab bar, so it is drawn at the page root (the animated
+  // page wrapper would otherwise trap a fixed element inside it).
+  return fullScreen ? createPortal(page, document.body) : page
 }
 
 function ConversationItem({ c, active, meId, onOpen }: { c: Conversation; active: boolean; meId: string | null; onOpen: () => void }) {

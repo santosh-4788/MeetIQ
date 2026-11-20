@@ -15,6 +15,28 @@
     height: calc(100dvh - 4rem - 1.5rem - 5.5rem - var(--sab));
   }
 }
+/* Phones, conversation open (useFullScreenChat): full screen above the keyboard, over the header and tab bar.
+   Below the drawer (z-50), sheets (z-58) and call screens (z-66+). */
+.oic-chat.oic-chat-full {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: var(--vvt, 0px);
+  height: var(--vvh, 100dvh);
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  z-index: 45;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: var(--chat-sab, env(safe-area-inset-bottom));
+}
+html.oic-chat-locked,
+html.oic-chat-locked body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
 
 /* In the components layer so Tailwind utilities on the same element still win. */
 @layer components {
