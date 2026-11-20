@@ -6,11 +6,13 @@ import { OneInsureLogo } from '../components/brand/OneInsureLogo'
 import { useAuth } from '../auth/AuthContext'
 import { cn } from '../lib/cn'
 import { navigation } from './navigation'
+import { useChat } from '../pages/chat/ChatProvider'
 
 type Props = { collapsed: boolean; onToggle: () => void; mobile?: boolean; onClose?: () => void }
 
 export function Sidebar({ collapsed, onToggle, mobile, onClose }: Props) {
   const { can, signOut } = useAuth()
+  const chat = useChat()
   const narrow = collapsed && !mobile
   return (
     <div className="flex h-full flex-col bg-navy-900 text-white">
@@ -25,7 +27,7 @@ export function Sidebar({ collapsed, onToggle, mobile, onClose }: Props) {
 
       <nav aria-label="Main" className="scrollbar-thin flex-1 overflow-x-hidden overflow-y-auto px-3 py-3 [scrollbar-color:rgb(255_255_255/0.15)_transparent]">
         {navigation.map((section) => {
-          const items = section.items.filter((i) => !i.permission || can(i.permission))
+          const items = section.items.filter((i) => (!i.permission || can(i.permission)) && (!i.feature || chat.enabled))
           if (!items.length) return null
           return (
             <div key={section.title} className="mb-3">
@@ -60,6 +62,18 @@ export function Sidebar({ collapsed, onToggle, mobile, onClose }: Props) {
                           {isActive && <span className="absolute top-2 bottom-2 left-0 w-[3px] rounded-r-full bg-cyan-400" />}
                           <item.icon className={cn('relative size-[18px] shrink-0', isActive ? 'text-cyan-400' : '')} />
                           {!narrow && <span className="relative truncate">{item.label}</span>}
+                          {item.feature === 'chat' && chat.unread > 0 && (
+                            <span
+                              className={cn(
+                                'relative flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-cyan-400 px-1 text-[10.5px] font-bold text-navy-950',
+                                narrow ? 'absolute top-0.5 right-1.5 h-4 min-w-4 text-[9.5px]' : 'ml-auto',
+                              )}
+                              aria-label={`${chat.unread} unread chat${chat.unread === 1 ? '' : 's'}`}
+                              data-testid="nav-chat-badge"
+                            >
+                              {chat.unread > 99 ? '99+' : chat.unread}
+                            </span>
+                          )}
                           {narrow && <Tooltip label={item.label} />}
                         </>
                       )}

@@ -5,11 +5,12 @@ import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  ArrowRight, CalendarCheck, CalendarClock, CalendarDays, CalendarPlus, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CircleCheck, Clapperboard, Clock,
+  ArrowRight, CalendarCheck, CalendarClock, CalendarDays, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CircleCheck, Clapperboard, Clock,
   Handshake, Hourglass, LogIn, RefreshCw, UserCheck, Users, Video, Radio,
 } from 'lucide-react'
 import { dashboardApi } from '../api'
-import type { ActivityItem, DashboardSummary, MeetingSummary } from '../api/types'
+import type { ActivityItem, DashboardSummary, MeetingSummary, TeamMember } from '../api/types'
+import { Dialog } from '../components/ui/Overlay'
 import { useAuth } from '../auth/AuthContext'
 import { Card, CardHeader, StatCard } from '../components/ui/Card'
 import { AvatarStack } from '../components/ui/Avatar'
@@ -77,7 +78,10 @@ export function DashboardPage() {
           </p>
         </div>
         {/* Only links the user may open: a role without these permissions would land on Access denied. */}
-        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
+        {/* No "Schedule" button here, on any screen: the header's "Schedule meeting" (on phones the labelled "+ Schedule") is the
+            one way to schedule. GoodDay #14223 (16 Nov: "schedule meeting is visible 2 times in the mobile") - the phone-only copy
+            that used to sit here was removed. On phones an odd last button takes the full row instead of leaving a gap. */}
+        <div className="grid grid-cols-2 gap-2 max-sm:[&>:last-child:nth-child(odd)]:col-span-2 sm:flex sm:flex-wrap sm:justify-end">
           {can('meetings.create') && (
             <Button onClick={() => setQuick('new')} leftIcon={<Video className="size-4" />} data-testid="new-meeting">
               Instant meeting
@@ -87,16 +91,6 @@ export function DashboardPage() {
             <Button variant="secondary" onClick={() => setQuick('join')} leftIcon={<LogIn className="size-4" />} data-testid="join-meeting">
               Join meeting
             </Button>
-          )}
-          {/* No "Schedule" here on larger screens: the header's "Schedule meeting" button is the one way to schedule (it was
-              offered twice). GoodDay #14223 (reopened): on phones the header only has room for a "+" icon, which was not
-              recognisable as "Schedule" - so phones also get a labelled button here. */}
-          {can('meetings.create') && (
-            <ButtonLink to="/schedule" variant="secondary" leftIcon={<CalendarPlus className="size-4 shrink-0" />} className="px-3! whitespace-nowrap sm:hidden" data-testid="dashboard-schedule-mobile">
-              {/* The smallest phones (under 360 px) have room for "Schedule" only. */}
-              <span className="max-[359px]:hidden">Schedule meeting</span>
-              <span className="min-[360px]:hidden">Schedule</span>
-            </ButtonLink>
           )}
           {can('calendar.view') && (
             <ButtonLink to="/calendar" variant="secondary" leftIcon={<CalendarDays className="size-4" />}>
@@ -151,11 +145,58 @@ const stagger = {
   item: { initial: { opacity: 0, y: 12 }, animate: { opacity: 1, y: 0, transition: { duration: 0.4, ease: [0.22, 1, 0.36, 1] as [number, number, number, number] } } },
 }
 
+/** "My Team": the people counted on the tile - read-only (name, code, designation, department). */
+function TeamDialog({ open, onClose, scope }: { open: boolean; onClose: () => void; scope: string | null }) {
+  const [rows, setRows] = useState<TeamMember[] | null>(null)
+  const [error, setError] = useState(false)
+  useEffect(() => {
+    if (!open || !dashboardApi.getTeam) return
+    let alive = true
+    setError(false)
+    dashboardApi.getTeam().then((r) => alive && setRows(r)).catch(() => alive && setError(true))
+    return () => {
+      alive = false
+    }
+  }, [open])
+  return (
+    <Dialog open={open} onClose={onClose} title={scope ? `My team · ${scope}` : 'My team'} size="md">
+      {error ? (
+        <p className="text-[13.5px] text-danger">The team list could not be loaded. Please try again.</p>
+      ) : !rows ? (
+        <div className="flex flex-col gap-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-11 w-full" />)}</div>
+      ) : rows.length === 0 ? (
+        <p className="text-[13.5px] text-ink-secondary">No team members found.</p>
+      ) : (
+        <ul className="-mx-1 flex max-h-[60vh] flex-col divide-y divide-line overflow-y-auto" data-testid="team-list">
+          {rows.map((m) => (
+            <li key={m.employeeCode} className="flex items-center justify-between gap-3 px-1 py-2.5">
+              <div className="min-w-0">
+                <p className="truncate text-[14px] font-semibold text-ink">{m.name}{m.isMe && <span className="font-normal text-ink-muted"> (you)</span>}</p>
+                <p className="truncate text-[12.5px] text-ink-secondary">{m.designation} · {m.department} · {m.employeeCode}</p>
+              </div>
+              <span className="flex shrink-0 gap-1.5">
+                {m.isHead && <Badge tone="brand">Head</Badge>}
+                {m.reportsToMe && <Badge tone="neutral">Reports to you</Badge>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Dialog>
+  )
+}
+
 function DashboardContent({ data, fmt, reloading, onReload }: { data: DashboardSummary; fmt: Fmt; reloading: boolean; onReload: () => void }) {
   const { can } = useAuth()
   const k = data.kpis
-  const kpis: { label: string; value: number; icon: ReactNode; accent: Parameters<typeof StatCard>[0]['accent']; footnote: string; to?: string }[] = [
-    { label: 'Total Employees', value: k.totalEmployees, icon: <Users className="size-[18px]" />, accent: 'navy', footnote: 'Active employees', to: can('employees.manage') ? '/employees' : undefined },
+  // 17 Nov 2026: only people who manage employees see the company total (and open the Employees page); everyone else sees
+  // their team - own department, departments they head, people reporting to them - and can open the list.
+  const allEmployees = can('employees.manage')
+  const [teamOpen, setTeamOpen] = useState(false)
+  const kpis: { label: string; value: number; icon: ReactNode; accent: Parameters<typeof StatCard>[0]['accent']; footnote: string; to?: string; onClick?: () => void }[] = [
+    allEmployees
+      ? { label: 'Total Employees', value: k.totalEmployees, icon: <Users className="size-[18px]" />, accent: 'navy', footnote: 'Active employees', to: '/employees' }
+      : { label: 'My Team', value: k.totalEmployees, icon: <Users className="size-[18px]" />, accent: 'navy', footnote: k.employeesScope ? `${k.employeesScope} department` : 'Active employees', onClick: () => setTeamOpen(true) },
     { label: "Today's Meetings", value: k.todaysMeetings, icon: <CalendarCheck className="size-[18px]" />, accent: 'brand', footnote: 'Scheduled today', to: can('meetings.view.own') ? '/meetings?tab=today' : undefined },
     { label: 'Upcoming Meetings', value: k.upcomingMeetings, icon: <CalendarClock className="size-[18px]" />, accent: 'cyan', footnote: 'Next 7 days', to: can('meetings.view.own') ? '/meetings?tab=upcoming' : undefined },
     { label: 'Internal Meetings', value: k.internalMeetings, icon: <Video className="size-[18px]" />, accent: 'brand', footnote: 'This month', to: can('meetings.view.own') ? '/internal' : undefined },
@@ -167,6 +208,7 @@ function DashboardContent({ data, fmt, reloading, onReload }: { data: DashboardS
 
   return (
     <motion.div variants={stagger.container} initial="initial" animate="animate" className="flex flex-col gap-5">
+      {!allEmployees && <TeamDialog open={teamOpen} onClose={() => setTeamOpen(false)} scope={k.employeesScope ?? null} />}
       <motion.div variants={stagger.container} className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         {kpis.map((kpi) => (
           <motion.div key={kpi.label} variants={stagger.item}>

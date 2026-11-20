@@ -16,7 +16,7 @@ export function AuthLayout() {
     // background all the way to the top of the screen instead of leaving that strip to body's canvas colour.
     <div className="relative flex min-h-dvh flex-col overflow-hidden bg-gradient-brand bg-[length:220%_220%] text-white animate-gradient -mt-[var(--sat)] pt-[var(--sat)]">
       <AuthAmbience />
-      <div className="relative z-10 flex items-center justify-end px-5 pt-5 sm:px-8">
+      <div className="relative z-10 flex items-center justify-end px-5 pt-5 short:pt-3 sm:px-8">
         {DEMO_MODE && (
           <Badge tone="warning" dot>
             DEMO MODE
@@ -26,10 +26,10 @@ export function AuthLayout() {
       {/* z-20, above the footer: guests join from /join and /m pages under this layout, and the full-screen meeting room
           (fixed, z-40) is painted inside this stacking context - at z-10 the footer was drawn over the room's control bar
           and swallowed taps on phones. */}
-      <div className="relative z-20 flex flex-1 items-center justify-center px-4 py-8 sm:px-6">
+      <div className="relative z-20 flex flex-1 items-center justify-center px-4 py-5 sm:py-8 short:py-3 sm:px-6">
         <Outlet />
       </div>
-      <footer className="oic-auth-footer relative z-10 flex flex-col items-center gap-1 px-6 pb-6 text-center text-[12px] text-white/55 sm:flex-row sm:justify-between">
+      <footer className="oic-auth-footer relative z-10 flex flex-col items-center gap-1 px-6 pb-6 short:pb-3 text-center text-[12px] text-white/55 sm:flex-row sm:justify-between">
         <span className="inline-flex items-center gap-1.5">
           <Headset className="size-3.5" /> Need help?{' '}
           <a href={`mailto:${SUPPORT.email}`} className="font-medium text-white/80 hover:text-white hover:underline">
@@ -124,32 +124,46 @@ function FloatingIconBubbles() {
 }
 
 /** White card used by every auth screen, with the shared product brand lock-up and consistent entrance animation. */
-export function AuthCard({ children, wide }: { children: ReactNode; wide?: boolean }) {
+/**
+ * `compact` (17 Nov 2026, the change-password page needed scrolling at 125% zoom / laptop heights): the brand becomes one
+ * small row and the spacing is tighter, so long forms (three password fields + checklist) fit on one screen.
+ */
+export function AuthCard({ children, wide, compact }: { children: ReactNode; wide?: boolean; compact?: boolean }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 22, scale: 0.97 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-      className={`w-full ${wide ? 'max-w-[480px]' : 'max-w-[400px]'} rounded-2xl border border-line/80 bg-surface p-6 shadow-[0_32px_70px_-24px_rgb(5_15_35/0.55)] sm:p-7 short:p-6 tiny:p-5`}
+      className={`w-full ${wide ? 'max-w-[480px]' : 'max-w-[400px]'} rounded-2xl border border-line/80 bg-surface p-6 shadow-[0_32px_70px_-24px_rgb(5_15_35/0.55)] ${compact ? 'sm:p-7 short:p-5 tiny:p-4' : 'sm:p-7 short:p-6 tiny:p-5'}`}
+      data-compact={compact || undefined}
     >
-      <div className="mb-5 flex flex-col items-center text-center">
-        <div className="relative mb-3 flex size-14 items-center justify-center">
-          <span className="absolute inset-[-8px] rounded-full bg-[conic-gradient(from_0deg,var(--color-cyan-400),var(--color-brand-500),var(--color-brand-700),var(--color-cyan-400))] opacity-55 blur-md animate-spin-slow" aria-hidden />
-          <ConnectMark size={56} className="relative" />
+      {compact ? (
+        <div className="mb-4 flex items-center justify-center gap-2.5">
+          <ConnectMark size={32} />
+          <span className="text-[15px] font-extrabold tracking-[-0.01em] text-ink">
+            OneInsure <span className="text-gradient-accent">Connect</span>
+          </span>
         </div>
-        <span className="text-[15px] font-extrabold tracking-[-0.01em] text-ink">
-          OneInsure <span className="text-gradient-accent">Connect</span>
-        </span>
-      </div>
+      ) : (
+        <div className="mb-5 flex flex-col items-center text-center">
+          <div className="relative mb-3 flex size-14 items-center justify-center">
+            <span className="absolute inset-[-8px] rounded-full bg-[conic-gradient(from_0deg,var(--color-cyan-400),var(--color-brand-500),var(--color-brand-700),var(--color-cyan-400))] opacity-55 blur-md animate-spin-slow" aria-hidden />
+            <ConnectMark size={56} className="relative" />
+          </div>
+          <span className="text-[15px] font-extrabold tracking-[-0.01em] text-ink">
+            OneInsure <span className="text-gradient-accent">Connect</span>
+          </span>
+        </div>
+      )}
       {children}
-      <div className="mt-6 flex items-center justify-center gap-2 border-t border-line pt-4">
+      <div className={`flex items-center justify-center gap-2 border-t border-line ${compact ? 'mt-4 pt-3 tiny:hidden' : 'mt-6 pt-4'}`}>
         <ParentBrand tone="dark" compact />
       </div>
     </motion.div>
   )
 }
 
-export function AuthHeading({ icon, title, description, tone = 'brand' }: { icon?: ReactNode; title: string; description?: ReactNode; tone?: 'brand' | 'danger' | 'warning' | 'success' }) {
+export function AuthHeading({ icon, title, description, tone = 'brand', compact }: { icon?: ReactNode; title: string; description?: ReactNode; tone?: 'brand' | 'danger' | 'warning' | 'success'; compact?: boolean }) {
   const toneCls = {
     brand: 'bg-brand-50 text-brand-500',
     danger: 'bg-danger-soft text-danger',
@@ -157,7 +171,7 @@ export function AuthHeading({ icon, title, description, tone = 'brand' }: { icon
     success: 'bg-success-soft text-success',
   }[tone]
   return (
-    <div className="mb-6 tiny:mb-5">
+    <div className={compact ? 'mb-4' : 'mb-6 tiny:mb-5'}>
       {icon && <div className={`mb-4 tiny:mb-3 flex size-12 items-center justify-center rounded-lg ${toneCls}`}>{icon}</div>}
       <h1 className="text-[24px] leading-8 font-bold tracking-[-0.015em] text-ink">{title}</h1>
       {description && <p className="mt-1.5 text-[14px] leading-[22px] text-ink-secondary">{description}</p>}

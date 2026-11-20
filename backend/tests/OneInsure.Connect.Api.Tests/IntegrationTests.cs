@@ -172,6 +172,63 @@ public sealed class IntegrationTests(ApiFixture fx)
         Assert.Equal("INTEGRATION_INACTIVE", await Code(await Ext(rotated.GetProperty("apiKey").GetString()).GetAsync("/api/ext/v1/me")));
     }
 
+    /// <summary>
+    /// 16 Nov 2026 (requirements doc "instant meeting returned 14 November"): a portal reused its Integration ID as the Idempotency-Key,
+    /// so a 16 Nov create replayed the stored 14 Nov response. The Integration ID is refused as a key, a replay of a meeting that has
+    /// ended/expired is refused instead of returning the stale snapshot, and a key is released after IdempotencyHours.
+    /// </summary>
+    [Fact]
+    public async Task Idempotency_keys_cannot_be_the_integration_id_never_replay_ended_meetings_and_expire()
+    {
+        var admin = await SignedIn("admin@test.invalid");
+        var (_, key) = await NewIntegration(admin, "Portal I " + Guid.NewGuid().ToString("N")[..6], IntegrationScopes.All);
+        var a = Ext(key);
+        var integrationCode = (await Json(await a.GetAsync("/api/ext/v1/me"))).GetProperty("integrationId").GetString()!;
+        Task<HttpResponseMessage> Create(string idemKey, string prarambh)
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, "/api/ext/v1/meetings") { Content = JsonContent.Create(Plvc(prarambh)) };
+            req.Headers.Add("Idempotency-Key", idemKey);
+            return a.SendAsync(req);
+        }
+
+        // The Integration ID is not a per-request key.
+        var asId = await Create(integrationCode, "7101");
+        Assert.Equal(HttpStatusCode.BadRequest, asId.StatusCode);
+        Assert.Equal("IDEMPOTENCY_KEY_INVALID", await Code(asId));
+        Assert.Equal(0, await Count("SELECT COUNT(*) FROM mtg.Meetings WHERE PrarambhMainId = '7101'"));
+
+        // Retry of a live meeting is still replayed (unchanged behaviour).
+        var idem = "case-" + Guid.NewGuid().ToString("N");
+        var first = await Create(idem, "7102");
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        var code1 = (await Json(first)).GetProperty("meetingId").GetString()!;
+        var retry = await Create(idem, "7102");
+        Assert.Equal(HttpStatusCode.Created, retry.StatusCode);
+        Assert.Equal("true", retry.Headers.GetValues("Idempotent-Replayed").Single());
+
+        // Once that meeting has ended/expired, the same key gets a clear 409 - never the stale "Scheduled" snapshot.
+        await Exec("UPDATE mtg.Meetings SET [Status] = 'EXPIRED' WHERE MeetingCode = @code1", new { code1 });
+        var stale = await Create(idem, "7102");
+        Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+        Assert.Equal("IDEMPOTENCY_KEY_USED", await Code(stale));
+        Assert.False(stale.Headers.Contains("Idempotent-Replayed"));
+
+        // After IdempotencyHours (24 h) the key is free again: a new meeting with a new code.
+        await Exec("UPDATE app.ApiIdempotency SET CreatedUtc = DATEADD(HOUR, -25, SYSUTCDATETIME()) WHERE IdempotencyKey = @idem", new { idem });
+        var fresh = await Create(idem, "7102");
+        Assert.Equal(HttpStatusCode.Created, fresh.StatusCode);
+        Assert.False(fresh.Headers.Contains("Idempotent-Replayed"));
+        Assert.NotEqual(code1, (await Json(fresh)).GetProperty("meetingId").GetString());
+        Assert.Equal(2, await Count("SELECT COUNT(*) FROM mtg.Meetings WHERE PrarambhMainId = '7102'"));
+
+        // The hourly cleanup forgets old keys.
+        var old = "old-" + Guid.NewGuid().ToString("N");
+        Assert.Equal(HttpStatusCode.Created, (await Create(old, "7103")).StatusCode);
+        await Exec("UPDATE app.ApiIdempotency SET CreatedUtc = DATEADD(HOUR, -30, SYSUTCDATETIME()) WHERE IdempotencyKey = @old", new { old });
+        Assert.True(await fx.Factory.Services.GetRequiredService<WebhookWorker>().CleanupIdempotencyAsync(CancellationToken.None) >= 1);
+        Assert.Equal(0, await Count("SELECT COUNT(*) FROM app.ApiIdempotency WHERE IdempotencyKey = @old", new { old }));
+    }
+
     [Fact]
     public async Task Completion_report_keeps_recording_status_separate_and_downloads_are_signed_and_isolated()
     {
@@ -373,7 +430,7 @@ public sealed class IntegrationTests(ApiFixture fx)
 
         var ok = await host.PostAsync("/api/v1/meetings/instant", new
         {
-            category = "CUSTOMER_PLVC", prarambhMainId = "000123", waitingRoomEnabled = false,
+            title = "PLVC 123", category = "CUSTOMER_PLVC", prarambhMainId = "000123", waitingRoomEnabled = false,
             participants = new[] { new { name = "Zoya Customer", email = "zoya.customer@test.invalid" }, new { name = "Yash Guest", email = "yash.guest@test.invalid" } },
         });
         Assert.True(ok.StatusCode == HttpStatusCode.Created, await ok.Content.ReadAsStringAsync());
@@ -385,7 +442,7 @@ public sealed class IntegrationTests(ApiFixture fx)
         var detail = await Json(await host.Http.GetAsync($"/api/v1/meetings/{id}"));
         Assert.Equal("000123", detail.GetProperty("prarambhMainId").GetString());
         // A second PLVC meeting for the same customer e-mail reuses the customer record.
-        await host.PostAsync("/api/v1/meetings/instant", new { category = "CUSTOMER_PLVC", prarambhMainId = "000124", participants = new[] { new { name = "Zoya C.", email = "zoya.customer@test.invalid" } } });
+        await host.PostAsync("/api/v1/meetings/instant", new { title = "PLVC 124", category = "CUSTOMER_PLVC", prarambhMainId = "000124", participants = new[] { new { name = "Zoya C.", email = "zoya.customer@test.invalid" } } });
         Assert.Equal(1, await Count("SELECT COUNT(*) FROM crm.Customers WHERE Email = N'zoya.customer@test.invalid'"));
         // Guests and customers may present (screen share in every meeting).
         Assert.Equal(2, await Count("SELECT COUNT(*) FROM mtg.MeetingParticipants p JOIN mtg.Meetings m ON m.MeetingId = p.MeetingId WHERE m.PublicId = @id AND p.ParticipantType IN ('CUSTOMER', 'GUEST') AND p.CanScreenShare = 1", new { id }));
@@ -402,7 +459,7 @@ public sealed class IntegrationTests(ApiFixture fx)
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
         var r = await host.PostAsync("/api/v1/meetings/instant", new
         {
-            category = "CUSTOMER_PLVC", skipPlvcDetails = true, prarambhMainId = "999", // typed, then skipped: not used
+            title = "Skipped details", category = "CUSTOMER_PLVC", skipPlvcDetails = true, prarambhMainId = "999", // typed, then skipped: not used
             participants = new[] { new { name = "Half filled", email = "" } },
         });
         Assert.True(r.StatusCode == HttpStatusCode.Created, await r.Content.ReadAsStringAsync());
@@ -436,7 +493,7 @@ public sealed class IntegrationTests(ApiFixture fx)
         // Normal instant PLVC: each participant is e-mailed their own link.
         var normal = await Json(await host.PostAsync("/api/v1/meetings/instant", new
         {
-            category = "CUSTOMER_PLVC", prarambhMainId = "5566",
+            title = "PLVC 5566", category = "CUSTOMER_PLVC", prarambhMainId = "5566",
             participants = new[] { new { name = "Mail One", email = "mail.one@test.invalid" }, new { name = "Mail Two", email = "mail.two@test.invalid" } },
         }));
         Assert.Equal(2, await Count("SELECT COUNT(*) FROM app.EmailOutbox o JOIN mtg.Meetings m ON m.MeetingId = o.RelatedMeetingId WHERE m.PublicId = @id AND o.Template = 'MEETING_INSTANT_INVITED'",

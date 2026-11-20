@@ -1,0 +1,210 @@
+// Chat Phase 5 (advanced) in the browser: scheduled messages, saved and pinned messages, @mentions, search filters,
+// favourites, quiet hours, quick follow-up panel. Hema on a computer, Esha on an Android phone, plus Test Emp One via the API.
+// Isolated environment only (LocalDB *_Room, API 7191, Vite 5175).
+// Run:  cd "E:\Beeinsured.com\MeetIQ\tests\e2e"; node room\advanced.mjs
+setTimeout(() => { console.log('WATCHDOG: test still running after 9 min - giving up'); process.exit(2) }, 9 * 60_000).unref()
+import { Api, EMP, HOST, check, closeAll, exec, loginUI, newPage, overflowX, scalar, sleep, tc, until, view, writeResults } from './harness.mjs'
+
+exec("UPDATE app.FeatureSettings SET IsEnabled = 1 WHERE FeatureKey IN ('CHAT', 'CHAT_CALLS', 'CHAT_TASKS', 'CHAT_ADVANCED')")
+exec("UPDATE chat.TRN_ChatReminder SET [State] = 'DISMISSED', AcknowledgedUtc = SYSUTCDATETIME() WHERE [State] = 'FIRED' AND AcknowledgedUtc IS NULL")
+exec("UPDATE auth.Users SET PasswordHash = (SELECT PasswordHash FROM auth.Users WHERE Email = 'hema.host@room.oneinsure.test') WHERE Email = 'tst.e1@room.oneinsure.test'")
+exec("UPDATE chat.MST_ChatUserPreference SET QuietEnabled = 0")
+// Clean state from earlier runs: no pending scheduled messages, no favourites.
+exec("UPDATE chat.TRN_ChatScheduledMessage SET [State] = 'CANCELLED' WHERE [State] IN ('PENDING', 'SENDING')")
+exec("DELETE FROM chat.TRN_ChatFavourite")
+const THIRD = { email: 'tst.e1@room.oneinsure.test', name: 'Test Emp One' }
+const tag = Date.now().toString(36).slice(-5)
+const idOf = (email) => scalar(`SELECT CONVERT(varchar(36), PublicId) AS id FROM auth.Users WHERE Email = '${email}'`)
+const ok = {}
+
+const hemaApi = await new Api().login(HOST.email)
+const thirdApi = await new Api().login(THIRD.email)
+const direct = (await hemaApi.req('POST', '/chat/direct', { userId: idOf(EMP.email) })).data.id
+const grp = await hemaApi.req('POST', '/chat/groups', { name: `Renewals ${tag}`, description: '', memberIds: [idOf(EMP.email), idOf(THIRD.email)] })
+check(grp.status === 200 || grp.status === 201, `group: ${grp.status} ${JSON.stringify(grp.data)}`)
+const group = grp.data.id
+
+const hema = await newPage({ width: 1366, height: 860 })
+await loginUI(hema, HOST.email)
+const esha = await newPage({ width: 412, height: 915, mobile: true })
+await loginUI(esha, EMP.email)
+
+ok.schedule = await tc('A-01', 'Schedule a message; it is sent once at the time; edit and cancel work', 'Hema schedules via + → Schedule message; banner "1 scheduled"; time moved to now → Esha receives it exactly once; a second one is cancelled', async () => {
+  await hema.goto(`/chat?c=${direct}`)
+  await hema.getByTestId('chat-view').waitFor()
+  await hema.getByTestId('chat-input').fill(`Scheduled hello ${tag}`)
+  await hema.getByRole('button', { name: 'More: attach or schedule' }).click()
+  await hema.getByTestId('composer-schedule').click()
+  const sh = hema.getByTestId('schedule-sheet')
+  await sh.waitFor()
+  check((await sh.getByTestId('schedule-text').inputValue()).includes(`Scheduled hello ${tag}`), 'composer text not carried over')
+  await sh.getByText('In 1 hour').click()
+  await sleep(250)
+  await view(hema, 'a01-schedule-sheet')
+  await sh.getByTestId('sheet-done').click()
+  await sh.waitFor({ state: 'detached' })
+  await hema.getByTestId('scheduled-banner').waitFor()
+  check(/1 scheduled/.test(await hema.getByTestId('scheduled-banner').innerText()), 'banner does not say 1 scheduled')
+  // A second one, cancelled from the list.
+  await hema.getByTestId('chat-input').fill(`Never sent ${tag}`)
+  await hema.getByRole('button', { name: 'More: attach or schedule' }).click()
+  await hema.getByTestId('composer-schedule').click()
+  await hema.getByTestId('schedule-sheet').getByTestId('sheet-done').click()
+  await until(async () => /2 scheduled/.test(await hema.getByTestId('scheduled-banner').innerText()), 'banner not 2')
+  await hema.getByTestId('scheduled-banner').click()
+  const list = hema.getByTestId('scheduled-list')
+  await list.getByTestId('scheduled-item').filter({ hasText: `Never sent ${tag}` }).getByTestId('scheduled-cancel').click()
+  await until(async () => (await list.getByTestId('scheduled-item').count()) === 1, 'cancel did not remove it')
+  await list.getByRole('button', { name: 'Close' }).click()
+  // Make the first one due now: the server worker sends it.
+  exec(`UPDATE chat.TRN_ChatScheduledMessage SET SendAtUtc = DATEADD(SECOND, -1, SYSUTCDATETIME()) WHERE Body = 'Scheduled hello ${tag}' AND [State] = 'PENDING'`)
+  await esha.goto(`/chat?c=${direct}`)
+  await esha.getByTestId('chat-message').filter({ hasText: `Scheduled hello ${tag}` }).waitFor({ timeout: 40_000 })
+  await sleep(2000)
+  check(scalar(`SELECT COUNT(*) AS n FROM chat.TRN_ChatMessage WHERE Body = 'Scheduled hello ${tag}'`) === 1, 'sent more than once')
+  check(scalar(`SELECT COUNT(*) AS n FROM chat.TRN_ChatMessage WHERE Body = 'Never sent ${tag}'`) === 0, 'the cancelled one was sent')
+  check(scalar(`SELECT [State] AS s FROM chat.TRN_ChatScheduledMessage WHERE Body = 'Never sent ${tag}'`) === 'CANCELLED', 'not CANCELLED')
+  return 'sent once; cancelled one never sent'
+})
+
+ok.saved = await tc('A-02', 'Save (star) and pin a message on the phone; Saved list with search; pinned bar for both', 'action sheet → Save → star on the bubble → Saved filter lists it and search finds it; Pin → pinned bar on the phone and on Hema\'s computer', async () => {
+  const msg = esha.locator('[data-testid="chat-message"]:not([data-mine])').filter({ hasText: `Scheduled hello ${tag}` }).last()
+  await msg.locator('.ios-bubble').click()
+  await esha.getByTestId('chat-action-sheet').getByRole('button', { name: 'Save', exact: true }).click()
+  await msg.getByLabel('Saved').waitFor()
+  await msg.locator('.ios-bubble').click()
+  await esha.getByTestId('chat-action-sheet').getByRole('button', { name: 'Pin', exact: true }).click()
+  await esha.getByTestId('pinned-bar').waitFor()
+  await hema.getByTestId('pinned-bar').waitFor({ timeout: 15_000 })
+  check((await hema.getByTestId('pinned-bar').innerText()).includes(`Scheduled hello ${tag}`), 'pinned bar shows another message')
+  await view(esha, 'a02-pinned-phone')
+  await esha.getByTestId('chat-back').click()
+  await esha.getByRole('tab', { name: '★ Saved' }).click()
+  await esha.getByTestId('saved-item').filter({ hasText: `Scheduled hello ${tag}` }).waitFor()
+  await esha.getByTestId('saved-search').fill('hello ' + tag)
+  await until(async () => (await esha.getByTestId('saved-item').count()) === 1, 'saved search')
+  check(await overflowX(esha) <= 0, 'Saved list scrolls sideways')
+  await view(esha, 'a02-saved-phone')
+  return 'saved, found, pinned on both'
+})
+
+ok.mention = await tc('A-03', '@mention in a group: picker, highlight, bell, @ badge; @all only for admins', 'Hema types "@Es" → picks Esha → sends; Esha sees the @ badge on the group, the mention highlighted, a CHAT_MENTION bell entry; Hema (admin) can @all; a member cannot', async () => {
+  await hema.goto(`/chat?c=${group}`)
+  await hema.getByTestId('chat-view').waitFor()
+  const input = hema.getByTestId('chat-input')
+  await input.click()
+  await input.pressSequentially('Please check @Es', { delay: 20 })
+  await hema.getByTestId('mention-picker').waitFor()
+  await view(hema, 'a03-mention-picker')
+  await hema.getByTestId('mention-option').filter({ hasText: EMP.name }).click()
+  await input.pressSequentially(`the quote ${tag}`, { delay: 5 })
+  await hema.getByTestId('chat-send').click()
+  await until(() => scalar(`SELECT COUNT(*) AS n FROM chat.TRN_ChatMessageMention mm JOIN chat.TRN_ChatMessage m ON m.MessageId = mm.MessageId WHERE m.Body LIKE '%the quote ${tag}%'`) === 1, 'mention not stored')
+  await until(() => scalar(`SELECT COUNT(*) AS n FROM mtg.MeetingNotifications n JOIN auth.Users u ON u.UserId = n.RecipientUserId WHERE n.[Type] = 'CHAT_MENTION' AND u.Email = '${EMP.email}' AND n.Body LIKE '%the quote ${tag}%'`) === 1, 'no CHAT_MENTION bell for Esha')
+  await esha.goto('/chat')
+  await esha.getByTestId('chat-item').filter({ hasText: `Renewals ${tag}` }).getByTestId('chat-item-mention').waitFor({ timeout: 15_000 })
+  await esha.getByTestId('chat-item').filter({ hasText: `Renewals ${tag}` }).click()
+  const m = esha.getByTestId('chat-message').filter({ hasText: `the quote ${tag}` }).last()
+  await m.getByTestId('chat-mention').waitFor()
+  await view(esha, 'a03-mention-phone')
+  // @all: allowed for Hema (admin), refused for a member.
+  await input.fill('')
+  await input.pressSequentially('@al', { delay: 20 })
+  await hema.getByTestId('mention-option').filter({ hasText: '@all' }).click()
+  await input.pressSequentially(`team meeting at 5 ${tag}`, { delay: 5 })
+  await hema.getByTestId('chat-send').click()
+  await until(() => scalar(`SELECT COUNT(*) AS n FROM chat.TRN_ChatMessageMention mm JOIN chat.TRN_ChatMessage m ON m.MessageId = mm.MessageId WHERE m.Body LIKE '%team meeting at 5 ${tag}%' AND mm.IsAll = 1`) === 1, '@all not stored')
+  const refused = await thirdApi.req('POST', `/chat/conversations/${group}/messages`, { body: '@all hi', clientMessageId: crypto.randomUUID(), mentionAll: true })
+  check(refused.status === 403, `a member could @all (${refused.status})`)
+  return 'picker, highlight, bell, badge; @all admin only'
+})
+
+ok.search = await tc('A-04', 'Search filters: from a person and files only', 'Filters sheet → From Hema → results only from Hema; Files only → only files', async () => {
+  await hema.goto(`/chat?c=${direct}`)
+  await hema.getByTestId('chat-view').waitFor()
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const file = path.join(process.cwd(), 'room', 'results', `adv-${tag}.txt`)
+  fs.writeFileSync(file, 'advanced search file')
+  await hema.getByTestId('chat-file-input').setInputFiles(file)
+  await hema.getByTestId('chat-message').filter({ hasText: `adv-${tag}.txt` }).waitFor({ timeout: 20_000 })
+  await esha.goto('/chat')
+  await esha.getByTestId('chat-search-filters').click()
+  const sh = esha.getByTestId('search-filters')
+  await sh.getByTestId('filter-from').click()
+  await esha.getByTestId('person-picker').getByLabel('Search colleagues').fill('Hema')
+  await esha.getByTestId('person-option').filter({ hasText: HOST.name }).first().click()
+  await sh.getByTestId('filter-files').click()
+  await view(esha, 'a04-filters-phone')
+  await sh.getByTestId('sheet-done').click()
+  await esha.getByTestId('chat-search-message').filter({ hasText: `adv-${tag}.txt` }).first().waitFor({ timeout: 15_000 })
+  const texts = await esha.getByTestId('chat-search-message').allInnerTexts()
+  check(texts.every((t) => t.includes('📎')), 'a non-file message appears with "Files only"')
+  return `${texts.length} file result(s) from Hema`
+})
+
+ok.fav = await tc('A-05', 'Favourites: add a colleague from the chat menu; shown above the chat list', '⋯ → Add to Favourites → Favourites row with Hema on the phone', async () => {
+  await esha.goto(`/chat?c=${direct}`)
+  await esha.getByTestId('chat-view').waitFor()
+  await esha.getByRole('button', { name: 'More options' }).click()
+  await esha.getByTestId('chat-favourite').click()
+  await esha.getByTestId('chat-back').click()
+  await esha.getByTestId('chat-favourites').getByTestId('chat-favourite-item').filter({ hasText: 'Hema' }).waitFor()
+  await view(esha, 'a05-favourites-phone')
+  return 'favourite shown'
+})
+
+ok.quiet = await tc('A-06', 'Quiet hours: switch on for now; moon shown; saved on the server', 'status menu → Quiet hours → on, 00:00–23:59 every day → moon next to the status; preference stored', async () => {
+  await esha.getByTestId('chat-me').click()
+  await esha.getByTestId('chat-quiet-hours').click()
+  const sh = esha.getByTestId('quiet-sheet')
+  await sh.getByTestId('quiet-on').click()
+  await sh.getByTestId('quiet-start').fill('00:00')
+  await sh.getByTestId('quiet-end').fill('23:59')
+  await sleep(250)
+  await view(esha, 'a06-quiet-phone')
+  await sh.getByTestId('sheet-done').click()
+  await sh.waitFor({ state: 'detached' })
+  await esha.getByTestId('quiet-indicator').waitFor()
+  check(scalar(`SELECT CAST(p.QuietEnabled AS int) AS q FROM chat.MST_ChatUserPreference p JOIN auth.Users u ON u.UserId = p.UserId WHERE u.Email = '${EMP.email}'`) === 1, 'quiet hours not saved')
+  exec("UPDATE chat.MST_ChatUserPreference SET QuietEnabled = 0")
+  return 'saved; indicator shown'
+})
+
+ok.panel = await tc('A-07', 'Quick follow-up panel: overdue task → +1 day, then complete', 'list-check button → panel shows the overdue task → +1 day moves it → tick completes it', async () => {
+  const past = new Date(Date.now() - 26 * 3600_000).toISOString()
+  const r = await hemaApi.req('POST', '/chat/tasks', { title: `Panel task ${tag}`, dueUtc: past, hasDueTime: true })
+  check(r.status === 200 || r.status === 201, `task: ${r.status}`)
+  await hema.goto('/chat')
+  await hema.getByTestId('chat-followups').click()
+  const panel = hema.getByTestId('followup-panel')
+  const row = panel.getByTestId('fu-overdue').filter({ hasText: `Panel task ${tag}` })
+  await row.waitFor()
+  await view(hema, 'a07-followup-panel')
+  await row.getByRole('button', { name: /to tomorrow/ }).click()
+  await panel.getByText(`Panel task ${tag}`).first().waitFor()
+  await until(() => scalar(`SELECT CASE WHEN DueUtc > SYSUTCDATETIME() THEN 1 ELSE 0 END AS f FROM chat.TRN_ChatTask WHERE Title = 'Panel task ${tag}'`) === 1, 'not moved to the future')
+  await panel.locator('[data-testid^="fu-"]').filter({ hasText: `Panel task ${tag}` }).getByTestId('task-check').click()
+  await until(() => scalar(`SELECT [Status] AS s FROM chat.TRN_ChatTask WHERE Title = 'Panel task ${tag}'`) === 'COMPLETED', 'not completed')
+  return 'postponed and completed'
+})
+
+ok.off = await tc('A-08', 'Switch CHAT_ADVANCED off: extras hidden, chat unchanged', 'no Saved/Mentions chips, no filters button, + attaches directly; API 403', async () => {
+  exec("UPDATE app.FeatureSettings SET IsEnabled = 0 WHERE FeatureKey = 'CHAT_ADVANCED'")
+  await sleep(11_000)
+  const r = await hemaApi.req('GET', '/chat/saved')
+  check(r.status === 403, `API not switched off (${r.status})`)
+  await hema.goto(`/chat?c=${direct}`)
+  await hema.getByTestId('chat-view').waitFor()
+  check(await hema.getByRole('button', { name: 'Attach files' }).count() === 1, '+ does not attach directly')
+  check(await hema.getByTestId('pinned-bar').count() === 0, 'pinned bar still shown')
+  check(await hema.getByTestId('chat-search-filters').count() === 0, 'filters button still shown')
+  exec("UPDATE app.FeatureSettings SET IsEnabled = 1 WHERE FeatureKey = 'CHAT_ADVANCED'")
+  return 'hidden while off'
+})
+
+await closeAll()
+writeResults('advanced')
+const all = Object.values(ok)
+console.log(`${all.filter(Boolean).length}/${all.length} passed`)
+process.exit(all.every(Boolean) ? 0 : 1)

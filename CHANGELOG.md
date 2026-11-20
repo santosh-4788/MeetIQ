@@ -1,5 +1,535 @@
 # Changelog
 
+## 20 Nov 2026, 11:15–11:25 IST — DEPLOYED: Chat Phase 5 (advanced chat, switched off) + Android app 1.1.0
+
+Deployed with approval. Delivery note: `documentation/CHAT_MODULE_PHASE5.md`. How it works for staff: `documentation/CHAT_HOW_IT_WORKS.md`.
+
+**Production state:**
+- CHAT and CHAT_CALLS on; CHAT_TASKS off.
+- 0 live meetings, 0 recordings, 0 calls. The next meeting was the following day.
+
+**Backups:**
+- Database `Oneinsure_v_preAdvanced_20261120-111508.bak` (copy-only, CHECKSUM, verified, 55.1 MB).
+- Files `deploy\_backup-20261120-111508` (`api` 376, `frontend-dist` 56).
+
+**Database (additive):**
+- V031 applied on its own.
+- New tables: `chat.TRN_ChatScheduledMessage`, `TRN_ChatSavedMessage`, `TRN_ChatPinnedMessage`, `TRN_ChatMessageMention`, `TRN_ChatFavourite`.
+- Quiet-hours columns on `chat.MST_ChatUserPreference`.
+- Notification types `CHAT_MENTION` and `GROUP_ADDED`.
+- Switch `CHAT_ADVANCED` is **off**.
+
+**API:**
+- `Chat/ChatAdvanced.cs`: scheduled, saved and pinned messages, mentions, favourites, quiet hours, search filters, follow-up panel.
+- `ChatScheduledMessageWorker` sends each scheduled message exactly once.
+- The API was down for about 10 s. Health `Healthy`; the new routes return 401 without sign-in. No MeetIQ errors in the event log.
+
+**Website:**
+- Phase 5 screens: + › Schedule message; Save and Pin in message actions; pinned bar; ★ Saved and @ Mentions filters; @mention picker and highlighting; search filters; Favourites row; quiet hours (moon indicator); quick follow-up panel.
+- Notification icons for mentions, group-added and task and note reminders.
+- Meeting Features switch "Advanced chat".
+
+**Android app 1.1.0** (versionCode 2):
+- Same signing key, so phones update in place, and the app offers the update itself.
+- Change: the background notification now reads "OneInsure Connect call or meeting in progress", because chat calls also keep the microphone alive.
+- Build: unit tests and lint passed; signature checked by `publish-apk.ps1`.
+- `/meet/app/OneInsureConnect.apk`, SHA-256 `257a5a4fcccf5c27651aa81c8b32972cee66f26c43f5511c3d65191ea4065f9c`, 26.3 MB.
+
+**Tests (test environment):**
+- **Backend:** 125/125.
+- **Phase 5:** `advanced` 8/8.
+- **Chat and calls suites:** `chat` 10/10 (also with Advanced off), `calls` 7/7, `tasks` 7/7, `ios-look` 9/9, `android-app-chat` 3/3.
+- **Cross-browser:** `browsers` 104/104 across Chrome, Edge, Safari, two Android phones, iPhone 14, iPhone SE and iPad. The iPhone 14 and the chat "last seen" check each failed once during the long run and passed on re-runs.
+- **With the chat features off:** `room` 11/11, `refresh-rejoin` 6/6, `instant-link` 8/8, `mobile-audit` 8/8, `meeting-features` 12 passed / 1 not testable headless, `android-app-present` 9/9.
+
+**Rollback:**
+- normal: switch CHAT_ADVANCED off;
+- code: restore `api\*` and `frontend-dist\*` from `_backup-20261120-111508` (the previous APK 1.0.0 is in that `frontend-dist\app`);
+- database (deletes scheduled, saved, pinned, mentions, favourites and quiet hours): `database/rollback/V031__chat_advanced.rollback.sql`.
+
+## 20 Nov 2026, 09:39–09:46 IST — DEPLOYED: Chat Phase 4 (notes, tasks, reminders, My Day), iOS-style Chat and Calls, animations, call fixes
+
+Deployed with approval. Delivery note: `documentation/CHAT_MODULE_PHASE4.md`.
+
+**Production state before the deploy:**
+- CHAT and CHAT_CALLS had been switched **on** by the administrator; 0 chat messages and 0 calls in progress.
+- 0 live meetings and 0 recordings. One meeting was due to start at 10:00 IST, so the API swap was done at 09:42, before joining opened. The API was down for about 10 s.
+
+**Backups:**
+- Database `Oneinsure_v_preTasks_20261120-093927.bak`: copy-only, CHECKSUM, RESTORE VERIFYONLY passed, 54.1 MB.
+- Files `deploy\_backup-20261120-093927` (`api` 376 files, `frontend-dist` 51 files, git diff and status).
+
+**Database (additive only):**
+- V030 applied from its own folder.
+- New tables: `chat.MST_TaskCategory` (5 defaults), `chat.TRN_ChatTask`, `chat.TRN_ChatNote`, `chat.TRN_ChatReminder`.
+- Notification types `TASK_REMINDER` and `NOTE_REMINDER`.
+- Switch `CHAT_TASKS` is **off**.
+
+**API:**
+- `Chat/ChatWork.cs`: notes, tasks, categories, reminders (snooze, done, dismiss, due, upcoming), My Day, meeting picker.
+- `ChatReminderWorker` runs every 15 s and fires each reminder exactly once, with a bell entry and a live popup.
+- `/chat/status` now also returns `tasks`.
+- Health `Healthy`, and the new routes return 401 without sign-in.
+
+**Website (`npm run build`):**
+- **iOS look for Chat and Calls:**
+  - large titles and a segmented control;
+  - bubbles with tails;
+  - action sheets on phones and tablets;
+  - full-screen incoming and in-call screens on phones, with a minimise-to-pill option;
+  - Calls tab like iOS Recents.
+- **Phase 4 screens:** My Day, Tasks, Notes, the editors, follow-ups from message, chat, call, meeting and note, and the reminder popup on every page.
+- **Animations** (the existing `motion` library and CSS, nothing new downloaded):
+  - sliding segmented thumb;
+  - new bubbles, reactions and badges pop in;
+  - section fades;
+  - phone conversations slide in;
+  - ticked tasks bounce.
+
+  All are off when the device asks for reduced motion.
+- **Call fixes** (Phase 3 code): a call declined within about a second no longer leaves the caller's panel stuck or shows a false error.
+- **Android app:** chat calls now tell the app to keep the microphone alive in the background, using the meeting room's existing message. The app shows the new screens with no new APK.
+- Reminders set in the past now mean "now", and editing a task no longer re-sends an unchanged reminder.
+- Meeting Features page: new switch "Notes, tasks and My Day".
+
+**Tests (test environment, all passing):**
+- **Backend:** 114/114.
+- **Cross-browser** (`tests/e2e/room/browsers.mjs`, 13 scenarios each): 104/104 on 8 screens. The scenarios are sign-in and menu, send and receive, react and reply, emoji, file and antivirus, search, follow-up, incoming call, Calls tab, reminder popup with Postpone and Complete, notes, My Day, and no script errors.
+  - Computers: Google Chrome, Microsoft Edge, Safari (WebKit, Mac settings).
+  - Android: Chrome on a Pixel 7 and on a 360 px Galaxy S8.
+  - Apple: Safari (WebKit) on iPhone 14, iPhone SE and iPad.
+- **Other suites:**
+  - `tasks` 7/7, `chat` 10/10, `calls` 7/7, `ios-look` 9/9;
+  - `android-app-chat` 3/3 (sections fit the app; the app is told to keep calls alive; reminder popup in the app);
+  - with the switches off: `room` 11/11, `android-app-present` 9/9, `refresh-rejoin` 6/6, `instant-link` 8/8, `mobile-audit` 8/8, `meeting-features` 12 passed / 1 not testable headless.
+- **Fixed during testing:**
+  - the emoji picker ran off the edge of small phones;
+  - tablets now get the touch action sheet;
+  - a reminder set at the current minute could be refused.
+
+**Switching on:** Administration › Meeting Features › **Notes, tasks and My Day** (Chat must be on).
+
+**Rollback:**
+- normal: switch CHAT_TASKS off;
+- code: restore `api\*` (stop/start MeetIQApi) and `frontend-dist\*` from `_backup-20261120-093927`;
+- database (deletes notes and tasks): `database/rollback/V030__chat_tasks.rollback.sql`.
+
+## 20 Nov 2026, 06:17–06:25 IST — DEPLOYED: Chat module Phase 3, audio calls (switched OFF until an admin turns it on)
+
+Deployed with approval. Delivery note: `documentation/CHAT_MODULE_PHASE3.md` (decision D4: up to 10 people per call).
+
+**Pre-checks and backups:**
+- 0 live meetings, 0 recordings and 0 meetings starting soon, checked before the database change and again before the API swap.
+- Database backup `Oneinsure_v_preCalls_20261120-061740.bak`: copy-only, CHECKSUM, RESTORE VERIFYONLY passed, 53.1 MB, in the SQL Server default backup folder.
+- Files backup `deploy\_backup-20261120-061740` (`api` 376 files, `frontend-dist` 47 files, `git-diff.patch`, `git-status.txt`).
+
+**Database `Oneinsure_v` (additive only):**
+- V029 applied from its own folder (same method as V028; the dry run showed only V029).
+- Adds `chat.TRN_ChatCall` and `chat.TRN_ChatCallParticipant`.
+- Adds notification type `MISSED_CALL`.
+- Switch `CHAT_CALLS` is **off**; `CHAT` is still off.
+
+**API:**
+- `Chat/ChatCalls.cs` (REST `/api/v1/chat/calls/*`): start, accept, decline, leave, end, invite, token, current, history.
+- `ChatCallWorker` runs every 5 s: ring timeout after 45 s, and connection state from LiveKit's participant list.
+- `RoomFeatureEndpoints.Keys` gains `CHAT_CALLS`.
+- The meeting webhook and meeting code are unchanged.
+- MeetIQApi restarted; health `Healthy`.
+
+**Website (`npm run build`):**
+- Phone button in chats; incoming-call popup on every portal page; call panel; Calls tab with history.
+- "In a call" presence; missed-call bell icon; Audio calls switch on the Meeting Features page.
+- The call screen (`CallOverlay`, 13 KB) loads only when needed.
+- **Size fix:** since the 19 Nov Android deploy, the video library (571 KB) had been in the main file. It now loads only for meetings and calls. Main file: 1.76 MB → 1.19 MB.
+
+**Live checks without sign-in:**
+- health OK; `/chat/status` and `/chat/calls/current` return 401;
+- `/meet/`, `/meet/login`, `/meet/chat`, the new chunks and the Android APK are served.
+- Event log: no MeetIQ errors after the restart. A Hangfire message repeats every 10 minutes, but it comes from another application on this server (MeetIQ doesn't use Hangfire) and was already there before the deploy.
+
+**Tests (test environment):**
+- backend 106/106 (4 new call tests);
+- `tests/e2e/room/calls.mjs` 7/7 (three people incl. a phone, real audio both ways through the test LiveKit);
+- `chat.mjs` 10/10;
+- regression with chat and calls off: `room` 11/11, `refresh-rejoin` 6/6, `instant-link` 8/8, `mobile-audit` 8/8, `android-app-present` 9/9, `meeting-features` 12 passed / 1 not tested;
+- V029 rollback tested, then re-applied.
+
+**Switching on:** Administration › Meeting Features: first **Chat**, then **Audio calls in Chat**.
+
+**Rollback:**
+- normal: switch CHAT_CALLS off (ends calls in progress within seconds);
+- code: copy `api\*` over `deploy\api` (stop/start MeetIQApi) and `frontend-dist\*` over `frontend\dist` from `_backup-20261120-061740`;
+- database (deletes call history): `database/rollback/V029__chat_calls.rollback.sql`.
+
+## 20 Nov 2026, 01:53–02:05 IST — DEPLOYED: Chat module Phase 2 (switched OFF until an admin turns it on)
+
+Deployed with approval. Plan: `documentation/CHAT_MODULE_PHASE1.md` (approved, decisions D1–D10). Delivery note: `documentation/CHAT_MODULE_PHASE2.md`.
+
+**Pre-checks and backups:**
+- 0 live meetings and 0 recordings, checked before the database change and again before the API swap.
+- Database backup `Oneinsure_v_preChat_20261120-015326.bak`: copy-only, CHECKSUM, RESTORE VERIFYONLY passed, 53.1 MB, in the SQL Server default backup folder.
+- Files backup `deploy\_backup-20261120-015326` (`api`, `frontend-dist`, `git-diff.patch`, `git-status.txt`).
+
+**Database `Oneinsure_v` (additive only):**
+- V028 applied from its own folder.
+  - The full-folder dry run reports V001–V013 as "modified after apply". Those files are unchanged since the first import, so production was set up from a different copy of them (line endings). Nothing was changed for them.
+- Adds the `chat` schema: 7 tables (`MST_ChatFileType` with 15 types, `MST_ChatUserPreference`, `TRN_ChatConversation`, `TRN_ChatConversationParticipant`, `TRN_ChatMessage`, `TRN_ChatMessageReaction`, `TRN_ChatFile`).
+- Permission `chat.use` granted to all 8 roles; switch `CHAT` is **off**.
+
+**Storage:** new folder `deploy\data\chat` with its own permissions (Administrators and SYSTEM full control, `NT SERVICE\MeetIQApi` Modify, nothing inherited).
+
+**API:** `Chat/` (REST `/api/v1/chat/*`, SignalR hub `/api/v1/hubs/chat`, presence and session sweep every 30 s, Windows Defender scan worker). `Program.cs` additions; `RoomFeatureEndpoints.Keys` gains `CHAT`. MeetIQApi restarted; health `Healthy`.
+
+**Website (`npm run build`):**
+- New Chat workspace (`/chat`, own chunk; the SignalR client loads only when Chat is on for the person).
+- Menu item "Communication › Chat" below Meetings, with an unread badge, shown only while CHAT is on.
+- On phones Chat replaces Calendar in the bottom bar while on.
+- Chat switch on the Meeting Features page.
+
+**New package:** `@microsoft/signalr` 10.0.11 (MIT).
+
+**Live checks without sign-in:**
+- health OK;
+- `/chat/status` and `/chat/conversations` return 401;
+- hub negotiate returns 403 without the security token;
+- `/meet/chat` and the chat chunk are served.
+
+**Tests (test environment):**
+- backend 102/102 (6 new chat tests);
+- `tests/e2e/room/chat.mjs` 10/10 (two people live plus a phone; files scanned by the real Windows Defender);
+- regression with Chat off: `room` 11/11, `refresh-rejoin` 6/6, `instant-link` 8/8, `mobile-audit` 8/8 (also 8/8 with Chat on), `mobile-join-devices` 5/5, `goodday-14227-back` 3/3, `goodday-14224-14226` 4/4, `screen-share-view` 10/10, `android-app-present` 9/9, `meeting-features` 12 passed / 1 not tested;
+- V028 rollback tested, then re-applied.
+
+**After switching Chat on:** the first upload confirms that Windows Defender runs under the service account. If it cannot run, files stay "could not be checked" and are never served.
+
+**Rollback:**
+- normal: switch CHAT off;
+- code: copy `api\*` over `deploy\api` (stop/start MeetIQApi) and `frontend-dist\*` over `frontend\dist`;
+- database (deletes chat data): `database/rollback/V028__chat.rollback.sql`.
+
+## 19 Nov 2026, 14:20 IST — Android app 1.0.0 (phone screen sharing) + refresh rejoins the meeting
+
+Deployed with approval: API, website and recording layout (no database change). Before the deploy: 0 live meetings, 0 active recordings, nothing starting in the next 30 min. API down about 7 s. Backup `deploy/_backup-20261119-141811` (`api`, `frontend-dist`, `recorder-layout`, `git-diff.patch`, `git-status.txt`).
+
+- **Android app** (`mobile/android`, new; free and open-source tools only, no store or paid service):
+  - what it is: the portal in a locked-down WebView, package `com.oneinsure.connect` 1.0.0, Android 8+, ARM, 26.3 MB, signed with our own key (certificate SHA-256 `b0e35fac…bc02`; key at `C:\Android\keys`, **back it up**);
+  - download: `/meet/get-app` (new public page) → `/meet/app/OneInsureConnect.apk`, SHA-256 `56dd0135…1fc46`; `android.json` drives the in-app update check;
+  - **presenting the phone screen** (phone browsers cannot): Android MediaProjection + a second, screen-only LiveKit connection `<identity>.screen`;
+  - the call keeps going while another app is open (foreground service);
+  - meeting/join links open in the app;
+  - security: only `https://www.oneinsure.com/meet/…` runs inside; other links go to the browser; the JS bridge is origin-locked to the main frame; the screen goes only to our own `wss://` server.
+- **API** (`ScreenCompanion.cs`, `LiveKit.CreateScreenCompanionToken`, `RoomEndpoints.cs`):
+  - `POST /meetings/{id}/room/screen-companion` (employees) and `POST /join/{token}/screen-companion` (admitted guests, rate-limited) give a token that may only publish a screen: no subscribe, no data, no admin, at most 10 minutes;
+  - live meeting and publish rights required; audited `ROOM_SCREEN_APP_TOKEN_ISSUED`;
+  - removing a person also removes their phone screen.
+- **Website:**
+  - `androidApp.ts` bridge; Present in More inside the app;
+  - "You're presenting your phone screen · Stop" bar; the presenter does not see their own screen mirrored;
+  - the screen connection is not counted or listed as a person (`usePeople`: header, participants, chat, whiteboard);
+  - `web.config` serves `.apk` and `.json`.
+- **Recording layout:** the phone screen shows as "<name> is presenting", with no extra person tile.
+- **Refresh rejoins the meeting** (`room/rejoin.ts`, `EmployeeRoomPage.tsx`, `GuestRoom.tsx`, `JoinPage.tsx`, `LinkJoinPage.tsx`):
+  - before: refreshing during a meeting (Chrome, Safari, the app) dropped the person to "Join now" / the invitation page;
+  - now: "Rejoining the meeting…" and straight back in with the same mic/camera choices, for hosts, colleagues, customers and link guests; an admitted customer is not queued again;
+  - how: a per-tab sessionStorage marker (device choices and the guest's name only, no tokens), used only within 2 minutes;
+  - when it does not apply: Leave, removed, ended, turned away, a new tab;
+  - someone refreshing in the waiting room asks again automatically.
+- **Tests** (test site):
+  - backend 96/96 (new `Android_app_screen_companion_token_may_only_publish_a_screen_…`);
+  - Android unit tests 7/7, lint clean, signed APK verified;
+  - `android-app-present` 9/9; new `refresh-rejoin` 6/6 (media flows to the host after a refresh);
+  - regression: `room` 11/11, `goodday-14224-14226` 4/4, `goodday-14227-back` 3/3, `instant-link` 8/8, `mobile-join-devices` 5/5, `screen-share-view` 10/10, `screen-share-mobile` 4/4, `goodday-14229` 6/6, `mobile-audit` 8/8, `goodday-14231` 2/2, `goodday-14222-14223` 6/6, `meeting-features` 12 passed / 1 not tested.
+- **Live checks after the deploy:**
+  - health OK;
+  - the new endpoint answers 403 without sign-in;
+  - `android.json` 200 `application/json`;
+  - APK 200 `application/vnd.android.package-archive`, downloaded SHA-256 matches;
+  - `/meet/get-app` renders at 390 px with no overflow and no errors.
+- **Not tested:** real phones; use `documentation/ANDROID_APP_TEST_CHECKLIST.md`. iOS app not built (needs a Mac and a paid Apple account).
+- **Rollback:**
+  - API: `Stop-Service MeetIQApi`; copy `api\*` over `deploy\api`; `Start-Service MeetIQApi`;
+  - website: copy `frontend-dist\*` over `frontend\dist`;
+  - recording layout: copy `recorder-layout\*` over `deploy\recorder-layout`.
+
+## 18 Nov 2026, 23:29 IST — Shorter meeting and join links (128-bit codes) + link format check
+
+Deployed with approval: API only (no database or website change). Before the deploy: 0 live meetings, 0 active recordings, nothing starting in the next 30 min. API down about 9 s. Backup `deploy/_backup-20261118-232902` (`api`, `frontend-dist`, `git-diff.patch`, `git-status.txt`).
+
+- **Shorter links** (`Security/Crypto.cs` `Tokens.NewLinkToken`; `MeetingLinkEndpoints.cs` x5, `MeetingSupport.cs` x1): meeting links (`/m/…`) and personal join links (`/join/…`) use 16 random bytes = 22 base64url characters (128-bit), was 32 bytes / 43. A link is ~55 characters instead of ~76. Links made before keep working (looked up by SHA-256 hash, whatever their length). Sessions, password resets, API keys and webhook secrets unchanged (32 bytes).
+- **Format check** (`Tokens.LinkTokenRoute`): every link route (`/m/{token}`, `/m/{token}/request`, `/join/{token}`, `/join/{token}/…` incl. `/join/{token}/recording`) accepts only base64url codes of exactly 22 or 43 characters; anything else gets the same 404 "invalid link" JSON from a low-precedence catch-all, without a database lookup.
+- **Unchanged protections:** only hashes stored, per-IP rate limit on link/join requests, links expire with the meeting and can be withdrawn/replaced, link guests always go through the waiting room.
+- **Tests:** backend 95/95 (new `Link_codes_are_22_characters_old_43_character_links_still_work_and_junk_is_refused`; the rate-limit test now uses well-formed unknown codes; customer invitation test expects 22); browser (test site) `instant-link` 8/8, `goodday-14231` 2/2, `mobile-join-devices` 5/5, `goodday-14222-14223` 6/6, `room` 11/11.
+- **Rollback:** `Stop-Service MeetIQApi`; copy `api\*` over `deploy\api`; `Start-Service MeetIQApi`. Links created while this version ran (22 characters) keep working after a rollback (hash lookup; the old version has no format check).
+
+## 18 Nov 2026, 22:58 IST — Phones: mic/camera "busy" message, join page fits, screen toolbar folds away
+
+Request: `Oneinsure_connect_bugs.docx` (18 Nov evening, 3 screenshots) plus the phone check of the screen-share view. Deployed with approval: website only (no API restart, no database change). Before the deploy: 0 live meetings, 0 active recordings, nothing starting in the next 30 min. Backup `deploy/_backup-20261118-225814` (`frontend-dist`, `git-diff.patch`, `git-status.txt`). Rollback: copy `frontend-dist\*` over `frontend\dist`.
+
+- **"Your microphone/camera is being used by another app" on Android/iOS** (`MeetingRoom.tsx`):
+  - cause: phones refuse a device for a moment (NotReadable/TrackStart/Abort) after it was released or after returning from another app; the first refusal was final, and the room-wide `onMediaDeviceFailure` showed the message at once (and reported a failed screen share as a microphone problem);
+  - fix: `enableDevice` - up to 3 quiet attempts over ~2 s (waits while the page is in the background), used by the mic/camera buttons and the on-join publish; one message only if all fail, with the browser's error code; the room-wide handler now only opens the "blocked permission" steps, and ignores screen-share failures.
+- **Phone join page** (`PreJoin.tsx`): the name is shown under the avatar above the mic/camera buttons (was hidden behind them); compact header, preview and card on phones; Camera/Microphone pickers behind "Camera and microphone settings" on phones; "Ask to join" visible without scrolling at 360x600, 412x780, 390x664.
+- **Screen-share toolbar** (`ScreenShareView.tsx`, `room.css`): closed by default to one small faint button; opens on tap/click; closes by itself after 5 s without use (not while the mouse is over it) or with its close button. No fullscreen button where the browser cannot do page fullscreen (iPhone Safari).
+- **Tests** (test site): new `mobile-join-devices.mjs` 5/5, `screen-share-mobile.mjs` 4/4 (Android/iPhone portrait/landscape), `screen-share-view.mjs` 10/10; regression `room` 11/11, `goodday-14229` 6/6, `mobile-audit` 8/8, `instant-link` 8/8, `meeting-features` 12 passed / 1 not tested, `goodday-14222-14223` 6/6, `goodday-14227-back` 3/3; frontend type check clean. Test helper `newPage` takes optional `userAgent` / `deviceScaleFactor`.
+
+## 18 Nov 2026, 16:55 IST — Screen sharing: sharp full-resolution picture, working fullscreen, zoom (Phase 2)
+
+Request: `Oneinsure_connect_bugs.docx` "Screen Sharing Quality, Fullscreen and Remote Control Enhancement" (two screenshots from OIC-261118-5YE5). Phase 1 report approved; remote control dropped by the user. Deployed with approval: website only (no API restart, no database change). Before the deploy: 0 live meetings, 0 active recordings, nothing starting in the next 30 min. Backup `deploy/_backup-20261118-165457` (`frontend-dist`, `git-diff.patch`, `git-status.txt`). Rollback: copy `frontend-dist\*` over `frontend\dist`.
+
+- **Root causes** (measured, `tests/e2e/room/screen-share-probe.mjs`):
+  - blurry text: adaptive stream requested the layer matching the shown size, so a 1920x1080 share shown ~1163x545 arrived as 960x540 and was stretched (production log: the share itself was sent at 1920x1080);
+  - "expand" did nothing: it was LiveKit's pin toggle, and the share is already the pinned tile;
+  - small: header + toolbar + participants strip left ~970x545 for a 16:9 screen.
+- **Fix** (new `src/pages/room/ScreenShareView.tsx`; `MeetingRoom.tsx` `Stage`, `Tile`, `roomOptions`, `ScreenShareToggle`; `room.css`):
+  - someone else's screen on the main area: the video element keeps the share's full size and is scaled down with a transform, so the full-resolution layer is received and downsampled (sharp); the video server still lowers it on a weak link;
+  - **Quality**: Auto (default; full unless this viewer's connection is poor), Standard (smaller layer, previous behaviour), Maximum; remembered per browser;
+  - **Zoom** in / out, **Fit**, **1:1** actual size, drag or scroll to move, Ctrl + wheel;
+  - **Hide / show participants**; compact participants strip while a screen is shown;
+  - **Fullscreen**: the whole meeting page (controls, dialogs, toasts usable) through the Fullscreen API from the click; Esc or the button exits and restores the strip; if the browser refuses, a message says so and the screen is expanded in the page instead;
+  - the useless pin icon is hidden on screen tiles only (camera tiles keep it); the presenter's own view is unchanged;
+  - presenter: screen-share bitrate 2.5 -> 3.5 Mbps (1080p, 15 fps) and `contentHint: 'detail'`.
+- **Not changed:** capture, room connection, permissions, recording (the recorder already receives the full layer), meeting lifecycle. Remote control not built (not approved).
+- **Tests** (test site):
+  - new `tests/e2e/room/screen-share-view.mjs` 9/9 (full 1920x1080 received at the screenshot size; Standard 960x540; hide strip; zoom/1:1/fit; fullscreen enter/exit with the share still running; late joiner; 390 px; touch phone toolbar; stop presenting);
+  - regression: `room` 11/11, `goodday-14229` 6/6, `mobile-audit` 8/8, `meeting-features` 12 passed / 1 not tested, `instant-link` 8/8, `goodday-14227-back` 3/3; frontend type check clean;
+  - not run here: `end-and-late-share` (needs the 5176 environment), `recording-board-poll` (recorder not configured in this test launch).
+
+## 17 Nov 2026, 21:28 IST — GoodDay #14229: presenting from iPhone needs the latest iOS (message corrected)
+
+Deployed with approval: website only (no API restart, no database change). Before the deploy: 0 live meetings, 0 active recordings, nothing starting in the next 30 min. Backup `deploy/_backup-20261117-212830` (`frontend-dist`, `git-diff.patch`, `git-status.txt`). Rollback: copy `frontend-dist\*` over `frontend\dist`.
+
+- **Finding** (production video-server logs 3–17 Nov, screen-share tracks by the sender's device):
+  - iPhone on iOS 27.2+ (Safari and Chrome): 7 screen shares (13–16 Nov), including after the 15 Nov change;
+  - iPhone on iOS 26.x / 27.0: 0 of 22 connections;
+  - Android phone browsers: 0 of 68 connections.
+  The browser offers screen capture (`getDisplayMedia`) only on the latest iOS; Present was already shown by feature detection (in More on a phone). The earlier statement that Apple never allows it was wrong.
+- **Fix** (`MeetingRoom.tsx` `screenShareUnsupportedMessage`): an iPhone/iPad without screen capture now reads "Presenting from iPhone or iPad needs the latest iOS. Update it in Settings > General > Software Update (iOS 27.2 or later), then join again: Present will be in the More (⋯) menu. You can still see screens others present." Android message unchanged.
+- **Tests:** `tests/e2e/room/goodday-14229.mjs` 6/6 on the test site (new GD14229-06: an iPhone whose browser offers screen capture gets the working Present button in More); frontend type check clean.
+- **Android:** not possible from a phone browser; would need a companion Android app (proposed, not approved).
+
+## 17 Nov 2026, 20:23 IST — GoodDay #14231: one link in "Invite people" for customer meetings
+
+Deployed with approval: website only (no API restart, no database change). Before the deploy: 0 live meetings, 0 active recordings, nothing starting in the next 30 min. Backup `deploy/_backup-20261117-202327` (`frontend-dist`, `git-diff.patch`, `git-status.txt`). Rollback: copy `frontend-dist\*` over `frontend\dist`.
+
+- **Report:** after starting an instant customer meeting, Invite showed two different links (the customer's personal link and the general meeting link), both with "Copy link".
+- **Fix** (`MeetingLinkShare.tsx` `ShareLinkDialog`): with personal links (customer / PLVC participants / "Send link to customer"), only those are shown; the general meeting link is behind **Invite someone else (colleague or extra person)**. Internal meetings unchanged.
+- **Tests:** `tests/e2e/room/goodday-14231.mjs` 2/2 on the test site; frontend type check clean.
+- **Not changed:** #14229 (screen sharing from phone browsers). Present is already enabled by feature detection (`getDisplayMedia`), so any phone browser that supports screen capture gets it; iOS and Android phone browsers do not offer it to websites.
+
+## 17 Nov 2026, 18:12 IST — Instant meeting: Title is mandatory for everyone
+
+Deployed with approval: API and website (no database change). Before the deploy: 0 live meetings, 0 active recordings, nothing starting in the next 30 min. API down about 9 s. Backup `deploy/_backup-20261117-181208` (`api`, `frontend-dist`, `git-diff.patch`, `git-status.txt`).
+
+- **Dialog** (`QuickMeetingDialogs.tsx`): "Title (optional)" is now **Title**; blank or spaces shows "Title is required." under the field and the meeting is not started. Applies to every type, including PLVC **Skip details & start**. The default "<name>'s meeting" placeholder is replaced by an example.
+- **API** (`MeetingLinkEndpoints.cs`): `POST /api/v1/meetings/instant` (portal) refuses a missing title with 400 `VALIDATION` `errors.title`, collected with the other field errors. The external Integration API is **unchanged**: `meetingTitle` stays optional with the default "<host name>'s meeting".
+- **Tests:**
+  - backend 94/94, with a new blank-title check;
+  - browser test `tests/e2e/room/instant-link.mjs` 8/8 on the test site (now also checks that a blank title is blocked).
+- **Rollback:**
+  1. **Website:** copy `frontend-dist\*` over `frontend\dist`.
+  2. **API:** `Stop-Service MeetIQApi`; copy `api\*` over `deploy\api`; `Start-Service MeetIQApi`.
+
+## 17 Nov 2026, 16:53 IST — PLVC: Ganesh Pansare as Senior Manager / department head; dashboard "My Team"
+
+Deployed with approval: database data, API and website. Before the deploy nobody was connected (last video-server activity 15:42 IST). API down about 4 s. Backup `deploy/_backup-20261117-165332` (`api`, `frontend-dist`, `git-diff.patch`, `git-status.txt`).
+
+- **Data** (production `Oneinsure_v`, scratchpad script `plvc-ganesh-head.sql`, audited):
+  - designation **Senior Manager** (SM) created and set on GANESH PANSARE (5847);
+  - PLVC department head = Ganesh;
+  - Tanvi Patil, Ayush Salian, Akshay Udhan and Tahir Khan report to Ganesh;
+  - Ganesh's sign-in got the **DepartmentHead** role (adds `reports.view` and `minutes.approve`; next sign-in).
+- **Dashboard** (`DashboardEndpoints.cs`, `DashboardPage.tsx`, `Card.tsx` `StatCard.onClick`):
+  - "Total Employees" (all active employees) is shown only with `employees.manage`;
+  - everyone else sees **My Team** (`#team`: own department, departments they head, reports at any depth), with the department as footnote;
+  - clicking it opens the read-only team list from the new `GET /api/v1/dashboard/team` (name, designation, department, code; Head / Reports to you).
+- **Tests:**
+  - backend 94/94;
+  - manager, member and admin views checked through the API and on screen (test site);
+  - data script re-run safe;
+  - frontend type check clean.
+- **Rollback:**
+  1. **Website:** copy `frontend-dist\*` over `frontend\dist`.
+  2. **API:** `Stop-Service MeetIQApi`; copy `api\*` over `deploy\api`; `Start-Service MeetIQApi`.
+  3. **Data:** keep it, or reverse in Employee/Department Management (the audit log has the old values).
+
+## 17 Nov 2026, 16:16 IST — Change-password page fits on one screen (no scrolling)
+
+Deployed with approval: website only (no API restart, no database change). Before the deploy, the production video server's last activity was 15:42 IST and nobody was connected. Backup `deploy/_backup-20261117-161617` (`frontend-dist`, `git-diff.patch`, `git-status.txt`). Rollback: copy `frontend-dist\*` over `frontend\dist`.
+
+- **Report:** the change-password page (shown at first sign-in) was too tall and had to be scrolled (screenshot at about 125% zoom).
+- **Change:**
+  - `AuthCard compact`: a small one-row brand, tighter padding; the in-card "OneInsure" line is hidden on very short screens.
+  - `AuthHeading compact`: no large icon.
+  - Smaller gaps, strength meter and rules list (`PasswordPages.tsx`).
+  - Applies to **Change password** and **Set a new password** only.
+  - Short screens (`short:` ≤ 820 px tall) get less outer padding on every sign-in page.
+  - Phones get `py-5` instead of `py-8`.
+- **Extra scroll, before → after:**
+
+  | Screen | Before | After |
+  |---|---|---|
+  | 1536×736 | 191 px | 0 |
+  | 1366×650 | 261 px | 0 |
+  | 1920×940 | 0 | 0 |
+  | 390×844 phone | 187 px | 0 |
+
+  The sign-in page is unchanged in look and also fits at 1536×736 and 390×844. Frontend type check clean.
+
+## 16 Nov 2026, 22:23 IST — GoodDay #14227: phone Back during a meeting asks "Leave the meeting?"
+
+Deployed with approval: website only (no API restart, no database change). Before the deploy, the production video server had no activity since 16:28 IST. Backup `deploy/_backup-20261116-222311` (`frontend-dist`, `git-diff.patch`, `git-status.txt`). Rollback: copy `frontend-dist\*` over `frontend\dist`.
+
+- **Report:** "if we go back from Chrome or Google from the meeting, after a few seconds the user shows as exited; opening the same URL again brings them back".
+- **Cause:** the phone's Back button or gesture navigated away from the meeting page. That leaves the call (`pagehide`), and returning showed the previous page.
+- **Change** (`MeetingRoom.tsx` `BackGuard`):
+  - while in the room, one extra history entry (same address, router state `oicRoomGuard`) catches Back and is put back at once;
+  - the person is asked "Leave the meeting?" (Stay in the meeting / Leave meeting; Leave = the normal Leave button);
+  - applies to everyone in a meeting.
+- **Tests (isolated test environment):**
+  - new `room/goodday-14227-back.mjs` 3/3: Back asks; after Stay, the host still sees the customer 10 s later; Leave leaves; the host also asked;
+  - regression 26/26: host-alert 3, 14230 2, 14208/14227 2, 14229 5, 14222/14223 6, instant-link 8;
+  - frontend type check clean.
+- **GoodDay:** #14227 resolved. #14229 commented: phone browsers cannot present; asked for phone, browser and time if it worked from a phone earlier.
+
+## 16 Nov 2026, 21:51 IST — GoodDay #14230 (reopened): hosts get the Extend prompt 5 minutes early and when not looking at the meeting
+
+Deployed with approval: website only (no API restart, no database change). Before the deploy, the production video server's last activity was 16:28 IST, so no meeting was running. Backup `deploy/_backup-20261116-215038` (`frontend-dist`, `git-diff.patch`, `git-status.txt`). Rollback: copy `frontend-dist\*` over `frontend\dist`.
+
+- **Report:** "logged in through an id which is not an admin; no option is coming to the host for extending" / "sometimes the host does not get the extend notification".
+- **Findings:** production query of 16 Nov tests (host Harsh Raj, Employee login, role HOST).
+  - The host ended all four meetings himself before the scheduled end, e.g. `OIC-261116-LVJ9` at 15:22:57 vs end 15:23:33.
+  - Extend is not admin-only: it needs the meeting role HOST or COHOST. A non-admin host was verified on phone and computer.
+  - **Cause:** before the end there was only the small strip. The popup came only once the time was up, and only inside the page.
+- **Changes** (`MeetingRoom.tsx` `EndTimeBanner`, new `pages/room/hostAlerts.ts`, `EmployeeRoomPage.tsx`):
+  - **Earlier popup:** hosts get the popup at the **5-minute warning** ("The meeting ends soon": Extend 15 / Extend 30 / End now / Keep going), then again when the time is up. Each comes once per end time.
+  - **When the popup opens:** a short chime plays (Web Audio, unlocked by the Start/Join click).
+  - **If the page is hidden:** a **system notification** (only if allowed; asked once on the host's Start/Join click; clicking it focuses the tab) and a **flashing tab title** ("⏰ Time is up - extend?"), restored on return.
+  - **Unchanged:** customers and guests see only the strip, as before. Nothing is sent to any server or third party.
+- **Tests (isolated test environment):**
+  - new `room/goodday-14230-host-alert.mjs` 3/3: popup at 5 min, host only; hidden tab → notification and title; Extend from the popup;
+  - regression `goodday-14230.mjs` 2/2 and `goodday-14208-14227.mjs` 2/2;
+  - frontend type check clean.
+
+## 16 Nov 2026 — Reporting view `rpt.TRN_MeetingCallLog` (calling-portal call-back shape)
+
+Applied on 16 Nov 2026 to production `Oneinsure_v` (run in SSMS, output checked) and to the test database `OneInsureVideoMeetingDB_Room`. Database only: one new schema `rpt` and one view. No table, procedure or application code changed; no restart.
+
+- **What it is:** one row per meeting, with the calling portal's field names.
+- **Fields:** `callid`, `Agentname`, `AgentUniqueID`, `CallerID`, `CampaignName`, `StartTime`/`EndTime` (IST), `CallDuration`, `RingingDuration`, `Duration`, `DialStatus`, `CustomerStatus`, `HangupBy`, `status`; plus Prarambh Main ID, external reference, recording status/duration and an `AudioFile` link (sign-in required).
+- **Script:** `database/reports/rpt_TRN_MeetingCallLog.sql`. It is not a migration, so re-run it by hand after a database rebuild.
+- **Rollback:** `DROP VIEW rpt.TRN_MeetingCallLog;`
+
+## 16 Nov 2026 — GoodDay #14230, #14223 (reopened), #14229 / #14227 answered; Integration API idempotency fix (phase a)
+
+Deployed with approval on 16 Nov 2026, ~13:49–13:50 IST: API and website. Backup `deploy/_backup-20261116-134848` (`api`, `frontend-dist`, `git-diff.patch`, `git-status.txt`). No database change.
+
+**Before the deploy** (production `Oneinsure_v`, read-only check): 0 LIVE meetings, 0 active recordings or recording jobs, none starting within 30 min; checked again just before the API swap. API down about 4 s.
+
+**#14230: "Host extended the meeting but the customer still sees 'Scheduled time is up'":**
+- **Cause:**
+  - an extension reached the other participants only as a one-off LiveKit data message (`end-changed`);
+  - a phone that was reconnecting at that moment missed it;
+  - nothing re-checked afterwards, so it counted down to the old end.
+- **Fix:**
+  - the recording state that every participant (guests too) already re-reads every 10 s and on reconnect now carries `ends: {endUtc, autoEndUtc}` (`RecordingService.StateAsync`; additive field);
+  - the room applies it when it differs (`MeetingRoom.tsx`, `sameInstant`).
+- **Unchanged:** the push message, the host popup, Extend / End now, and automatic end.
+
+**#14223 (reopened 16 Nov: "schedule meeting is visible 2 times in the mobile"):**
+- The phone-only dashboard "Schedule meeting" button (`dashboard-schedule-mobile`) was removed.
+- The header's labelled "+ Schedule" is the one Schedule button on phones, as on a computer.
+- On phones an odd last quick-action button (Calendar) takes the full row (`DashboardPage.tsx`).
+
+**#14229 / #14227:** answered in GoodDay, no code change.
+- **#14229:** phone browsers have no screen capture for websites. It was set to Resolved, "works as designed for the web".
+- **#14227:** Nothing OS cuts the browser's network when minimised. We asked for the battery setting and the auto-rejoin result, and left it Reopened.
+
+**Integration API — idempotency (requirements doc "instant meeting returned 14 November"):**
+- **Root cause:**
+  - the portal sent its Integration ID (`INT-…`) as `Idempotency-Key` on every create;
+  - `POST /meetings` replayed the stored 14 Nov response (same body hash; an instant body has no time);
+  - stored keys never expired.
+  - The server clock and the IST conversion were correct.
+- **Fix (`ExternalApiEndpoints.CreateMeeting`):**
+  - **Integration ID refused:** `Idempotency-Key` equal to the Integration ID → `400 IDEMPOTENCY_KEY_INVALID`.
+  - **Keys expire:** a key is remembered for `Integrations:IdempotencyHours` (default 24, 1–720), then it is free again.
+  - **No stale replays:** a replay whose meeting has ended, expired or been cancelled → `409 IDEMPOTENCY_KEY_USED` instead of the old response.
+  - **Unchanged:** a retry of a live meeting is still replayed (`Idempotent-Replayed: true`), and 422 / 409 REQUEST_IN_PROGRESS work as before.
+- **Hourly cleanup:** `WebhookWorker.CleanupIdempotencyAsync`. In production it removed the one stale key at startup (1 → 0 rows).
+- **Docs:** API guide (`ApiGuide.tsx`: notes, curl example, error table), the OpenAPI description, `API_INTEGRATION_GUIDE.md`, `API_ENDPOINT_REFERENCE.md`, and the static OpenAPI copy.
+- **The portal team must still change their call:** a new key per meeting (for example case ID + GUID), and the same key only for a retry.
+
+**Tests:**
+- **Backend:** 94/94 (`OIC_TEST_DATA_PATH`, `OIC_FFMPEG_DIR=C:\ffmpeg\bin` on this server), including the new `IntegrationTests.Idempotency_keys_cannot_be_the_integration_id_never_replay_ended_meetings_and_expire`.
+- **Browser (isolated LocalDB `_Room`, API 7191, LiveKit 7890 — never production 7880):**
+  - new `room/goodday-14230.mjs` 2/2: a silent extension cleared the phone strip in 9 s; a normal Extend cleared it in 21 ms;
+  - `room/goodday-14222-14223.mjs` 6/6 (GD14223-02 updated to the new rule);
+  - regression `room/goodday-14208-14227.mjs` 2/2.
+
+**Rollback:**
+1. **Website:** copy `deploy\_backup-20261116-134848\frontend-dist\*` over `frontend\dist`.
+2. **API:** `Stop-Service MeetIQApi`; copy `deploy\_backup-20261116-134848\api\*` over `deploy\api`; `Start-Service MeetIQApi`.
+
+**Pending your approval:** Integration API phase (b) (reschedule endpoint, `timeZone` field) and phase (c) (host direct join with an e-mail code). Their detailed designs come first.
+
+## 15 Nov 2026 — API Documentation: Swagger UI replaced by a built-in API reference
+
+Deployed with approval on 15 Nov 2026 ~21:50 IST (website only; no service restarted). Backup `deploy/_backup-20261115-214959` (`frontend-dist`, `git-diff.patch`, `git-status.txt`). Rollback: copy `frontend-dist\*` over `frontend\dist`.
+
+- **Removed:** `swagger-ui-dist` (package, `SwaggerPanel.tsx`, type file). No new packages; no CDN, analytics or paid service.
+- **New `ApiReferencePanel.tsx`** (tab renamed "API reference"): reads the same OpenAPI document, shows operations, parameters, request/response schemas, and a "Try it" form with a ready-to-copy `curl`.
+- **Security of "Try it":**
+  - the API key is held in memory only and cleared when you leave the tab;
+  - requests go only to this site's `/api/ext/`;
+  - the session cookie is never sent;
+  - redirects are refused;
+  - no caching and no referrer.
+- **Unchanged:** backend, external API, OpenAPI generation and its 401/403 rules, the guide, Download OpenAPI, Integrations & API keys.
+- **Before the deploy:** the last LiveKit activity was at 16:08 IST.
+- **Checked live:**
+  - `/meet/` serves the new entry script;
+  - health 200;
+  - OpenAPI 401 and `/api/ext/v1/me` 401 when called without credentials;
+  - the new chunk is served, and nothing in the entry script mentions Swagger.
+- **Tests:** `api-docs-page.mjs` and `enhancements-1112.mjs` now target the new panel; not yet re-run.
+
+## 15 Nov 2026 — Recordings show the whiteboard and polls; whiteboard open to everyone; live poll results for everyone
+
+Deployed with approval on 15 Nov 2026 ~11:28 IST: API, website and recorder page. Backup `deploy/_backup-20261115-112647` (`api`, `frontend-dist`, `recorder-layout`, `git-diff.patch`).
+
+**Feature switches:** Polls, Whiteboard and the other six features were **already on** in production: switched on 14 Nov 2026, 21:44 IST, by Santosh Yadav (audit `FEATURE_SETTING_CHANGED`). The 07:27 entry below ("every switch is off") describes the state at that deploy only. No switch was changed today.
+
+**What changed:**
+- **Recording shows the whiteboard:**
+  - while the board is open it fills the main area of the recording, live, like a screen share;
+  - when there is both a board and a screen share, the one started more recently is shown;
+  - cameras move to the side strip.
+- **Recording shows polls:**
+  - a card in the top-right of the main area with the question and live Yes/No counts;
+  - "Final result" for 15 s after the host closes the poll.
+- **Private chat is never recorded.**
+- **Drawing made before recording starts:** the server sends the recorder the open board, the saved drawing and the current poll, to the recorder's identity only. This happens each time the recorder starts a segment, including after a restart (`RecorderWorker` → `RoomFeatureEndpoints.SendRecorderSnapshotAsync`), and again when the board is reopened.
+  - Server-sent data has no sending participant, so nobody in the meeting can forge it.
+  - Strokes from participants who may not draw are ignored, as in the room.
+- **Whiteboard:** opens with drawing for **Everyone** by default; the host can still choose Only hosts or Selected people.
+- **Polls:** everyone in the meeting sees live results (until now only hosts did, before the poll was closed). Only hosts start and close polls, as before.
+- **Whiteboard drawing code** is now one shared file (`frontend/src/pages/room/features/whiteboardRender.ts`), used by both the room and the recorder page.
+
+**Before the deploy:** 0 LIVE meetings, 0 active recordings or recording jobs, no recorder process.
+
+**Checked live:**
+- API: `Healthy`, about 35 s down; production `appsettings*.json` untouched; the new code is in the deployed DLL.
+- `/room-features`: polls and whiteboard true.
+- `index.html` is new (Last-Modified 05:59 UTC); the sign-in page loads.
+- The recorder page in `deploy/recorder-layout` has the board and poll code.
+
+**Tests (local, isolated LiveKit on 7980 with the development keys):**
+- new `room/recording-board-poll.mjs`: 8/8. A rectangle drawn before recording, an employee stroke during recording, the live poll card and the final result were all checked in frames taken from the MP4.
+- `room.mjs`: 11/11.
+- `meeting-features.mjs`: 12/13. MF-10 (camera flip) not tested: it needs 2 cameras. MF-04 and MF-06 were updated to the new defaults.
+- `goodday-14229`: 5/5; `goodday-14208-14227`: 2/2; `goodday-14224-14226`: 4/4. That test now closes the #14208 "time is up" popup, which blocked it since 14 Nov evening.
+- API build: 0 warnings. The database-backed API unit tests could not run on this machine (LocalDB "Access is denied" while creating the test database); 9 of 9 tests that need no database pass.
+
 ## 15 Nov 2026 — GoodDay #14229 "Screen Present Feature Not Working in iOS Chrome, Check for iOS, Android and for all device"
 
 Deployed with approval on 15 Nov 2026 ~10:05 IST (website only; backup `deploy/_backup-20261115-100526`). In GoodDay (project Meet), this was the only new bug. It is marked Resolved there with a comment.

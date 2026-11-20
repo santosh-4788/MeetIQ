@@ -46,25 +46,38 @@ ok.header = await tc('GD14223-01', '#14223 Phone header: a labelled "+ Schedule"
   return m
 })
 
-ok.dash = await tc('GD14223-02', '#14223 (reopened) Phone dashboard has a labelled "Schedule meeting" button; desktop keeps only the header one', 'Phones 320/360/412: visible, icon 16 px, label fits (no clipping, no page overflow), opens /schedule; 1366: hidden', async () => {
+// 16 Nov 2026 (reopened: "schedule meeting is visible 2 times in the mobile"): the phone-only dashboard button was removed; the
+// header's labelled "+ Schedule" is the one Schedule button on phones, and the dashboard's last odd button takes the full row.
+ok.dash = await tc('GD14223-02', '#14223 (reopened 16 Nov) Exactly one Schedule button on the phone dashboard (the header "+ Schedule")', 'Phones 320/360/412: no dashboard Schedule button, header "+ Schedule" visible, Calendar spans the row, no page overflow; 1366: header button only', async () => {
   const seen = []
   for (const w of [320, 360, 412]) {
     const p = await newPage({ width: w, height: 800, mobile: true })
     await loginUI(p, HOST.email)
     await p.goto('/dashboard')
-    const b = p.getByTestId('dashboard-schedule-mobile')
-    await b.waitFor()
-    const m = await b.evaluate((a) => ({ icon: Math.round(a.querySelector('svg').getBoundingClientRect().width), clipped: a.scrollWidth > a.clientWidth, text: a.innerText.trim(), overflowX: document.documentElement.scrollWidth - innerWidth }))
-    check(m.icon === 16 && !m.clipped && m.overflowX === 0 && /^Schedule( meeting)?$/.test(m.text), `${w}px: ${JSON.stringify(m)}`)
-    if (w === 360) { await p.screenshot({ path: path.join(SHOTS, 'gd14223-dashboard-360.png') }); await b.click(); await p.waitForURL(/\/schedule$/) }
-    seen.push(`${w}px "${m.text}"`)
+    await p.getByTestId('new-meeting').waitFor()
+    const m = await p.evaluate(() => {
+      const main = document.querySelector('main') ?? document.body
+      const header = document.querySelector('[data-testid="header-schedule-mobile"]')
+      const cal = [...main.querySelectorAll('a')].find((a) => a.innerText.trim() === 'Calendar')
+      const row = cal?.parentElement?.getBoundingClientRect()
+      return {
+        dashBtn: !!document.querySelector('[data-testid="dashboard-schedule-mobile"]'),
+        headerVisible: !!header && header.getBoundingClientRect().width > 0,
+        calFullRow: !!cal && !!row && Math.abs(cal.getBoundingClientRect().width - row.width) < 2,
+        overflowX: document.documentElement.scrollWidth - innerWidth,
+      }
+    })
+    check(!m.dashBtn && m.headerVisible && m.calFullRow && m.overflowX === 0, `${w}px: ${JSON.stringify(m)}`)
+    if (w === 360) await p.screenshot({ path: path.join(SHOTS, 'gd14223-dashboard-360.png') })
+    seen.push(`${w}px ok`)
   }
   const d = await newPage({ width: 1366, height: 860 })
   await loginUI(d, HOST.email)
   await d.goto('/dashboard')
   await d.getByTestId('new-meeting').waitFor()
-  check(!(await d.getByTestId('dashboard-schedule-mobile').isVisible()), 'shown on desktop')
-  return `${seen.join(', ')}; opens /schedule; hidden at 1366 px`
+  check(await d.getByTestId('header-schedule').isVisible(), 'header button missing on desktop')
+  check(!(await d.getByTestId('dashboard-schedule-mobile').count()), 'dashboard button on desktop')
+  return `${seen.join(', ')}; header button only at 1366 px`
 })
 
 ok.occ = await tc('GD14217-01', '#14217 Repeat: the "After"/Occurrences choice is gone (reopened 14 Nov; full check in room/goodday-14227-14217.mjs GD14217-02)', 'No ends-after or occurrences on the Repeat editor', async () => {

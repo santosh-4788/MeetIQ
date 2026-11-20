@@ -10,7 +10,7 @@
 | Method | Path | Scope | Success | Errors (besides 401/403/429) |
 |---|---|---|---|---|
 | GET | `/me` | (any valid key) | 200 `ExtMe`: integrationId, name, scopes, rateLimitPerMinute, apiVersion | — |
-| POST | `/meetings` | `meeting.create` (+ `meeting.schedule` for SCHEDULED) | 201 `ExtMeeting` | 400 VALIDATION, 403 HOST_NOT_PERMITTED, 409 CONFLICT / REQUEST_IN_PROGRESS, 422 IDEMPOTENCY_KEY_REUSED |
+| POST | `/meetings` | `meeting.create` (+ `meeting.schedule` for SCHEDULED) | 201 `ExtMeeting` | 400 VALIDATION / IDEMPOTENCY_KEY_INVALID, 403 HOST_NOT_PERMITTED, 409 CONFLICT / REQUEST_IN_PROGRESS / IDEMPOTENCY_KEY_USED, 422 IDEMPOTENCY_KEY_REUSED |
 | GET | `/meetings?externalReference=&status=&page=&pageSize=` | `meeting.read` | 200 `ExtMeetingList` (newest first; pageSize ≤ 200) | — |
 | GET | `/meetings/{meetingId}` | `meeting.read` | 200 `ExtMeeting` (`meetingId` = meeting code or id) | 404 |
 | POST | `/meetings/{meetingId}/cancel` `{ "reason": "…" }` | `meeting.cancel` | 204; participants of scheduled meetings are notified | 400, 404, 409 (already started or ended) |

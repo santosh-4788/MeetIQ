@@ -184,6 +184,23 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
         }
     }
 
+    /// <summary>
+    /// 15 Nov 2026: the recording shows the whiteboard and polls. Each time the recorder starts a segment (a fresh page), send it
+    /// the open board and the current poll (RoomFeatureEndpoints.SendRecorderSnapshotAsync); later changes reach it live. A moment
+    /// later, so a stroke drawn just before is already saved (the board saves 1.2 s after the last change).
+    /// </summary>
+    void SendRoomStateToRecorder(string room, string jobKey) => _ = Task.Run(async () =>
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            using var scope = scopes.CreateScope();
+            await RoomFeatureEndpoints.SendRecorderSnapshotAsync(db, scope.ServiceProvider.GetRequiredService<LiveKitRoomService>(), room,
+                RoomFeatureEndpoints.RecorderIdentityPrefix + jobKey, CancellationToken.None);
+        }
+        catch (Exception e) when (e is not OperationCanceledException) { log.LogWarning(e, "Whiteboard/poll state not sent to recorder {Job}", jobKey); }
+    });
+
     async Task LaunchAsync(IDbConnection c, Running r, JobInfo info, CancellationToken ct)
     {
         var m = await RecordingService.MeetingAsync(c, info.MeetingId) ?? throw new InvalidOperationException("Meeting not found.");
@@ -207,7 +224,7 @@ public sealed class RecorderWorker(IServiceScopeFactory scopes, Db db, IClock cl
         var late = DateTime.SpecifyKind(m.EndUtc, DateTimeKind.Utc).AddMinutes(meetingOptions.Value.JoinLateMinutes) - clock.UtcNow;
         var maxMinutes = (int)Math.Clamp(Math.Ceiling(late.TotalMinutes), 1, O.MaxDurationMinutes);
         var launch = new RecorderLaunch("record", jobKey, dir, m.LiveKitRoomName, m.Title, mp.Kind == MeetingRecordingKind.Customer ? "customer" : "internal",
-            consentOk, maxMinutes, RecorderEnvironment(mp)) { OnChange = Kick };
+            consentOk, maxMinutes, RecorderEnvironment(mp)) { OnChange = Kick, OnSegmentStarted = () => SendRoomStateToRecorder(m.LiveKitRoomName, jobKey) };
         await c.ExecuteAsync("UPDATE rec.RecordingJobs SET LaunchCount = @launchNo, EngineJobId = @jobKey, SpoolPath = @dir, ModifiedUtc = SYSUTCDATETIME() WHERE JobId = @j",
             new { launchNo, jobKey, dir, j = info.JobId });
         var run = launcher.Start(launch);

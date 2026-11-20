@@ -15,7 +15,8 @@
   - The host or a co-host opens it from **Tools → Open whiteboard**; it then replaces the video area for everyone. Audio continues.
   - Anyone can press **X / "Hide whiteboard"** to go back to the video for themselves only.
   - **Close for all** (host) removes it for everyone.
-- **Who may draw** (host menu): *Only hosts* (default), *Everyone*, or *Selected people* (a tick-list of participants). Everyone else sees "View only".
+- **Who may draw** (host menu): *Everyone* (default since 15 Nov 2026; until then *Only hosts*), *Only hosts*, or *Selected people* (a tick-list of participants). Anyone not allowed sees "View only".
+- **Recording** (15 Nov 2026): while a meeting is recorded, the open board fills the main area of the recording, live, like a screen share (the newer of the two is shown). A board opened before recording starts is in the recording from its first second: the server hands the recorder the saved drawing whenever it starts a segment, and again when the board is reopened.
 - **Late joiners and reconnects** load the latest saved board.
 - **Insurance examples:** explaining products, benefits, premium calculations, coverage and comparisons. The sticky note in the test reads "Premium: ₹12,000 / year".
 
@@ -42,7 +43,7 @@
 
 ## Tests actually run
 `tests/e2e/room/meeting-features.mjs`:
-- **MF-06:** host opens; the employee is view-only and their drag changes nothing; the host's rectangle appears at the employee (2,438 inked pixels); the host grants Everyone; the employee's stroke appears at the host; a sticky note with ₹ text is saved (scene v3); PNG 44,720 B and PDF 29,002 B downloaded with valid file headers; audit rows present.
+- **MF-06:** host opens; the employee has the pen (default Everyone); the host restricts to Only hosts and the employee is view-only and their drag changes nothing; the host's rectangle appears at the employee (2,438 inked pixels); the host grants Everyone; the employee's stroke appears at the host; a sticky note with ₹ text is saved (scene v3); PNG 44,720 B and PDF 29,002 B downloaded with valid file headers; audit rows present.
 - **MF-07:** a guest on a 390 px phone joins late and sees the saved board; no horizontal overflow; "Close for all" removes it everywhere.
 
 ## Rollback

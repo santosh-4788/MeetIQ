@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="oic_navy">#102A43</color>
+    <color name="oic_blue">#1769AA</color>
+    <color name="oic_cyan">#20C4D8</color>
+    <color name="oic_midnight">#081525</color>
+
+    <style name="Theme.OneInsureConnect" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/oic_blue</item>
+        <item name="colorPrimaryDark">@color/oic_navy</item>
+        <item name="colorAccent">@color/oic_cyan</item>
+        <item name="android:windowBackground">@color/oic_midnight</item>
+        <item name="android:statusBarColor">@color/oic_midnight</item>
+        <item name="android:navigationBarColor">@color/oic_midnight</item>
+    </style>
+</resources>

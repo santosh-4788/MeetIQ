@@ -24,6 +24,7 @@ const httpAuthApi: AuthApi = {
 
 const httpDashboardApi: DashboardApi = {
   getSummary: () => http('/dashboard/summary'),
+  getTeam: () => http('/dashboard/team'),
 }
 
 // DEMO_MODE is a compile-time constant (false in production builds), so the demo adapters are

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OneInsure Connect</string>
+    <string name="channel_meeting">Call or meeting in progress</string>
+    <string name="channel_screen">Screen sharing</string>
+    <string name="meeting_notification_title">OneInsure Connect call or meeting in progress</string>
+    <string name="meeting_notification_text">Your microphone stays on. Tap to return.</string>
+    <string name="screen_notification_title">You are presenting your screen</string>
+    <string name="screen_notification_text">Everyone in the meeting can see your screen. Tap Stop to end.</string>
+    <string name="stop_presenting">Stop presenting</string>
+    <string name="offline_title">No internet connection</string>
+    <string name="offline_text">OneInsure Connect needs the internet. Check Wi-Fi or mobile data, then try again.</string>
+    <string name="retry">Try again</string>
+    <string name="update_title">Update available</string>
+    <string name="update_text">A new version of OneInsure Connect (%1$s) is available.</string>
+    <string name="update_now">Download</string>
+    <string name="later">Later</string>
+    <string name="permission_denied_media">Camera or microphone permission was not given. You can allow it in Settings → Apps → OneInsure Connect → Permissions.</string>
+    <string name="screen_share_failed">Screen sharing could not be started.</string>
+    <string name="download_started">Downloading %1$s…</string>
+    <string name="download_saved">Saved to Downloads: %1$s</string>
+    <string name="download_failed">The file could not be saved.</string>
+</resources>

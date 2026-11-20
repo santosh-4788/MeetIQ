@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react'
-import { useLocalParticipant, useParticipants, useRoomContext } from '@livekit/components-react'
+import { useLocalParticipant, useRoomContext } from '@livekit/components-react'
+import { usePeople } from '../androidApp'
 import { RoomEvent, type Participant, type RemoteParticipant } from 'livekit-client'
 import {
   ArrowUpRight, Circle, Download, Eraser, FileDown, Highlighter, Minus, PenLine, Redo2, Square, StickyNote, Trash2, Type, Undo2, Users, X,
@@ -10,6 +11,7 @@ import { ConfirmDialog } from '../../../components/ui/Overlay'
 import { useToast } from '../../../components/ui/Toast'
 import { cn } from '../../../lib/cn'
 import { participantRole } from '../roomUi'
+import { BOARD_H, BOARD_W, MAX_PTS, applyOpTo, mayDrawRole, parseScene, renderBoard as render, type Op, type Pt, type Shape, type TextShape } from './whiteboardRender'
 
 // Collaborative whiteboard (13 Nov 2026) - our own small canvas board, no third-party service or library.
 // Live strokes travel browser-to-browser over the meeting's own LiveKit connection (topic oic.wb); whoever draws also saves
@@ -18,23 +20,11 @@ import { participantRole } from '../roomUi'
 
 export const TOPIC_WB = 'oic.wb'
 export const TOPIC_WB_STATE = 'oic.wb-state'
-const W = 1600
-const H = 900
-const MAX_PTS = 800 // a longer stroke continues as a new one, so every message stays well under LiveKit's data packet size
+const W = BOARD_W
+const H = BOARD_H
 const CHUNK = 12_000
 
-type Pt = [number, number]
 type Tool = 'pen' | 'highlighter' | 'eraser' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'note'
-type Shape =
-  | { id: string; by: string; kind: 'pen' | 'highlighter'; color: string; size: number; pts: Pt[] }
-  | { id: string; by: string; kind: 'line' | 'arrow' | 'rect' | 'ellipse'; color: string; size: number; a: Pt; b: Pt }
-  | { id: string; by: string; kind: 'text' | 'note'; color: string; size: number; a: Pt; text: string }
-type Op =
-  | { op: 'add'; s: Shape }
-  | { op: 'append'; id: string; pts: Pt[] }
-  | { op: 'addMany'; shapes: Shape[] }
-  | { op: 'remove'; ids: string[] }
-  | { op: 'clear' }
 
 const COLORS = ['#111827', '#2563EB', '#DC2626', '#16A34A', '#F59E0B', '#9333EA']
 const SIZES = [3, 6, 12]
@@ -42,15 +32,10 @@ const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 const rid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4)
 
-function isShape(x: unknown): x is Shape {
-  const s = x as Shape
-  return !!s && typeof s.id === 'string' && typeof s.kind === 'string' && typeof s.color === 'string'
-}
-
 /** Server-side state (open? who draws?) for the whole room. */
 export function useWhiteboardState(calls: FeatureCalls['whiteboard'] | undefined, enabled: boolean) {
   const room = useRoomContext()
-  const [state, setState] = useState<BoardState>({ isOpen: false, drawMode: 'HOSTS', allowed: [] })
+  const [state, setState] = useState<BoardState>({ isOpen: false, drawMode: 'EVERYONE', allowed: [] })
   const refresh = useCallback(() => {
     if (!calls || !enabled) return
     calls.get().then((b) => setState({ isOpen: b.isOpen, drawMode: b.drawMode, allowed: b.allowed })).catch(() => undefined)
@@ -78,93 +63,10 @@ export function useWhiteboardState(calls: FeatureCalls['whiteboard'] | undefined
 }
 
 function mayDraw(p: Participant, s: BoardState) {
-  const role = participantRole(p).role
-  return role === 'HOST' || role === 'COHOST' || s.drawMode === 'EVERYONE' || (s.drawMode === 'SELECTED' && s.allowed.includes(p.identity))
+  return mayDrawRole(participantRole(p).role, p.identity, s)
 }
 
 // ---- Drawing -----------------------------------------------------------------------------------------------------------
-
-function drawShape(ctx: CanvasRenderingContext2D, s: Shape) {
-  ctx.save()
-  ctx.lineCap = 'round'
-  ctx.lineJoin = 'round'
-  ctx.strokeStyle = s.color
-  ctx.fillStyle = s.color
-  if (s.kind === 'pen' || s.kind === 'highlighter') {
-    ctx.globalAlpha = s.kind === 'highlighter' ? 0.32 : 1
-    ctx.lineWidth = s.kind === 'highlighter' ? s.size * 3.5 : s.size
-    ctx.beginPath()
-    s.pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)))
-    if (s.pts.length === 1) ctx.lineTo(s.pts[0][0] + 0.1, s.pts[0][1])
-    ctx.stroke()
-  } else if (s.kind === 'line' || s.kind === 'arrow') {
-    ctx.lineWidth = s.size
-    ctx.beginPath()
-    ctx.moveTo(...s.a)
-    ctx.lineTo(...s.b)
-    ctx.stroke()
-    if (s.kind === 'arrow') {
-      const ang = Math.atan2(s.b[1] - s.a[1], s.b[0] - s.a[0])
-      const len = 14 + s.size * 2.5
-      ctx.beginPath()
-      ctx.moveTo(...s.b)
-      ctx.lineTo(s.b[0] - len * Math.cos(ang - 0.45), s.b[1] - len * Math.sin(ang - 0.45))
-      ctx.moveTo(...s.b)
-      ctx.lineTo(s.b[0] - len * Math.cos(ang + 0.45), s.b[1] - len * Math.sin(ang + 0.45))
-      ctx.stroke()
-    }
-  } else if (s.kind === 'rect') {
-    ctx.lineWidth = s.size
-    ctx.strokeRect(Math.min(s.a[0], s.b[0]), Math.min(s.a[1], s.b[1]), Math.abs(s.b[0] - s.a[0]), Math.abs(s.b[1] - s.a[1]))
-  } else if (s.kind === 'ellipse') {
-    ctx.lineWidth = s.size
-    ctx.beginPath()
-    ctx.ellipse((s.a[0] + s.b[0]) / 2, (s.a[1] + s.b[1]) / 2, Math.abs(s.b[0] - s.a[0]) / 2, Math.abs(s.b[1] - s.a[1]) / 2, 0, 0, Math.PI * 2)
-    ctx.stroke()
-  } else {
-    const t = s as TextShape
-    drawText(ctx, t)
-  }
-  ctx.restore()
-}
-
-type TextShape = Extract<Shape, { kind: 'text' | 'note' }>
-
-function drawText(ctx: CanvasRenderingContext2D, s: TextShape) {
-  {
-    const fontSize = s.kind === 'note' ? 22 : 16 + s.size * 2.5
-    ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`
-    const lines = wrap(ctx, s.text, s.kind === 'note' ? 236 : 900)
-    if (s.kind === 'note') {
-      const h = Math.max(150, 30 + lines.length * (fontSize + 6))
-      ctx.fillStyle = '#FDE68A'
-      ctx.shadowColor = 'rgba(0,0,0,.18)'
-      ctx.shadowBlur = 10
-      ctx.shadowOffsetY = 4
-      ctx.fillRect(s.a[0], s.a[1], 260, h)
-      ctx.shadowColor = 'transparent'
-      ctx.fillStyle = '#1F2937'
-    }
-    ctx.textBaseline = 'top'
-    lines.forEach((l, i) => ctx.fillText(l, s.a[0] + (s.kind === 'note' ? 12 : 0), s.a[1] + (s.kind === 'note' ? 14 : 0) + i * (fontSize + 6)))
-  }
-}
-
-function wrap(ctx: CanvasRenderingContext2D, text: string, max: number) {
-  const out: string[] = []
-  for (const para of text.split('\n')) {
-    let line = ''
-    for (const word of para.split(' ')) {
-      const t = line ? `${line} ${word}` : word
-      if (ctx.measureText(t).width > max && line) {
-        out.push(line)
-        line = word
-      } else line = t
-    }
-    out.push(line)
-  }
-  return out
-}
 
 function distToSeg(p: Pt, a: Pt, b: Pt) {
   const [dx, dy] = [b[0] - a[0], b[1] - a[1]]
@@ -185,15 +87,6 @@ function hit(s: Shape, p: Pt, r = 12): boolean {
   return p[0] > t.a[0] - r && p[0] < t.a[0] + (t.kind === 'note' ? 260 : 300) && p[1] > t.a[1] - r && p[1] < t.a[1] + (t.kind === 'note' ? 160 : 40)
 }
 
-function render(ctx: CanvasRenderingContext2D, shapes: Shape[], scale: number, preview?: Shape | null) {
-  ctx.setTransform(1, 0, 0, 1, 0, 0)
-  ctx.fillStyle = '#FFFFFF'
-  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
-  ctx.setTransform(scale, 0, 0, scale, 0, 0)
-  for (const s of shapes) drawShape(ctx, s)
-  if (preview) drawShape(ctx, preview)
-}
-
 // ---- Component ---------------------------------------------------------------------------------------------------------
 
 export function WhiteboardStage({
@@ -210,7 +103,7 @@ export function WhiteboardStage({
   const room = useRoomContext()
   const toast = useToast()
   const { localParticipant } = useLocalParticipant()
-  const participants = useParticipants()
+  const participants = usePeople()
   const me = localParticipant.identity
   const role = participantRole(localParticipant).role
   const isHost = role === 'HOST' || role === 'COHOST'
@@ -241,20 +134,7 @@ export function WhiteboardStage({
 
   // ---- apply operations (local or remote) ----
   const applyOp = useCallback((op: Op) => {
-    setShapes((cur) => {
-      switch (op.op) {
-        case 'add':
-          return isShape(op.s) ? [...cur.filter((x) => x.id !== op.s.id), op.s] : cur
-        case 'addMany':
-          return [...cur.filter((x) => !op.shapes.some((s) => s.id === x.id)), ...op.shapes.filter(isShape)]
-        case 'append':
-          return cur.map((x) => (x.id === op.id && (x.kind === 'pen' || x.kind === 'highlighter') ? { ...x, pts: [...x.pts, ...op.pts].slice(0, MAX_PTS + 50) } : x))
-        case 'remove':
-          return cur.filter((x) => !op.ids.includes(x.id))
-        case 'clear':
-          return []
-      }
-    })
+    setShapes((cur) => applyOpTo(cur, op))
   }, [])
 
   const save = useCallback(() => {
@@ -323,13 +203,7 @@ export function WhiteboardStage({
         .then((b) => {
           if (!alive) return
           version.current = b.version
-          let initial: Shape[] = []
-          try {
-            const parsed = b.scene ? (JSON.parse(b.scene) as { shapes?: unknown[] }) : null
-            initial = (parsed?.shapes ?? []).filter(isShape)
-          } catch {
-            /* unreadable scene: start empty */
-          }
+          const initial = parseScene(b.scene)
           setShapes(initial)
           loaded.current = true
           pending.current.splice(0).forEach((p) => applyOp(p.op))

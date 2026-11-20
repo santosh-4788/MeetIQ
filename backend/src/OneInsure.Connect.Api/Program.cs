@@ -81,6 +81,33 @@ builder.Services.AddHttpClient(WebhookWorker.HttpClientName, c => c.Timeout = Ti
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false }); // no redirects: the SSRF check covers the URL actually called
 builder.Services.AddSingleton<WebhookWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<WebhookWorker>());
+// Chat (20 Nov 2026, documentation/CHAT_MODULE_PHASE1.md): SignalR is part of ASP.NET Core (no package). Off until the CHAT switch is on.
+builder.Services.Configure<OneInsure.Connect.Api.Chat.ChatOptions>(builder.Configuration.GetSection("Chat"));
+builder.Services.AddSignalR(o =>
+{
+    o.KeepAliveInterval = TimeSpan.FromSeconds(15);
+    o.ClientTimeoutInterval = TimeSpan.FromSeconds(30); // a closed laptop / lost network shows offline within ~30 s
+    o.MaximumReceiveMessageSize = 16 * 1024;            // clients only send tiny signals (typing, delivered)
+}).AddJsonProtocol(o => o.PayloadSerializerOptions.Converters.Add(new UtcDateTimeConverter()));
+builder.Services.AddSingleton<OneInsure.Connect.Api.Chat.PresenceTracker>();
+builder.Services.AddSingleton<OneInsure.Connect.Api.Chat.PresenceService>();
+builder.Services.AddSingleton<OneInsure.Connect.Api.Chat.ChatPush>();
+builder.Services.AddSingleton<OneInsure.Connect.Api.Chat.ChatFileScanSignal>();
+builder.Services.AddScoped<OneInsure.Connect.Api.Chat.ChatEndpoints.ChatServices>();
+builder.Services.AddSingleton<OneInsure.Connect.Api.Chat.ChatPresenceSweeper>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<OneInsure.Connect.Api.Chat.ChatPresenceSweeper>());
+builder.Services.AddSingleton<OneInsure.Connect.Api.Chat.ChatFileScanWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<OneInsure.Connect.Api.Chat.ChatFileScanWorker>());
+builder.Services.AddScoped<OneInsure.Connect.Api.Chat.ChatCallEndpoints.CallServices>();
+builder.Services.AddSingleton<OneInsure.Connect.Api.Chat.ChatCallWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<OneInsure.Connect.Api.Chat.ChatCallWorker>());
+// Chat Phase 4: notes, tasks, reminders, My Day (V030). Off until the CHAT_TASKS switch is on.
+builder.Services.AddScoped<OneInsure.Connect.Api.Chat.ChatWorkEndpoints.WorkServices>();
+builder.Services.AddSingleton<OneInsure.Connect.Api.Chat.ChatReminderWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<OneInsure.Connect.Api.Chat.ChatReminderWorker>());
+// Chat Phase 5: advanced chat - scheduled / saved / pinned messages, @mentions, favourites, quiet hours (V031). Off until the CHAT_ADVANCED switch is on.
+builder.Services.AddSingleton<OneInsure.Connect.Api.Chat.ChatScheduledMessageWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<OneInsure.Connect.Api.Chat.ChatScheduledMessageWorker>());
 builder.Services.AddOpenApi(ExternalApiEndpoints.DocumentName, o =>
 {
     o.ShouldInclude = d => d.GroupName == ExternalApiEndpoints.DocumentName;
@@ -131,6 +158,7 @@ builder.Services.AddRateLimiter(o =>
         _ => new FixedWindowRateLimiterOptions { PermitLimit = c.RequestServices.GetRequiredService<IOptions<MeetingOptions>>().Value.JoinPermitPerMinute, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
     o.AddPolicy(RoomEndpoints.GuestRateLimit, c => RateLimitPartition.GetFixedWindowLimiter(Ip(c),
         _ => new FixedWindowRateLimiterOptions { PermitLimit = c.RequestServices.GetRequiredService<IOptions<MeetingOptions>>().Value.WaitingRoomPermitPerMinute, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    OneInsure.Connect.Api.Chat.ChatEndpoints.AddChatRateLimits(o);
 });
 
 var app = builder.Build();
@@ -192,6 +220,11 @@ api.MapRecordingLibraryEndpoints();
 api.MapReportsEndpoints();
 api.MapAuditEndpoints();
 api.MapIntegrationAdminEndpoints();
+OneInsure.Connect.Api.Chat.ChatEndpoints.MapChatEndpoints(api);
+OneInsure.Connect.Api.Chat.ChatCallEndpoints.MapChatCallEndpoints(api);
+OneInsure.Connect.Api.Chat.ChatWorkEndpoints.MapChatWorkEndpoints(api);
+OneInsure.Connect.Api.Chat.ChatAdvancedEndpoints.MapChatAdvancedEndpoints(api);
+app.MapHub<OneInsure.Connect.Api.Chat.ChatHub>("/api/v1/hubs/chat");
 app.MapExternalApi();
 // 13 Nov 2026: the API description is for people given the API Documentation page (api.docs.view) or integration admins - not public.
 app.MapOpenApi("/api/ext/openapi/{documentName}.json").RequireAnyPermission("api.docs.view", "integrations.manage");

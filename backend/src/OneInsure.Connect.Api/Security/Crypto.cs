@@ -9,6 +9,20 @@ public static class Tokens
 {
     public static string New(int bytes = 32) => Base64Url(RandomNumberGenerator.GetBytes(bytes));
 
+    /// <summary>
+    /// The code in a meeting link (/m/…) or a personal join link (/join/…): 16 random bytes = 22 characters, 128-bit
+    /// (18 Nov 2026: was 32 bytes / 43 characters - links were too long to share). Still unguessable; links made before
+    /// keep working (they are looked up by hash, whatever their length). Sessions, password resets and API keys keep 32.
+    /// </summary>
+    public static string NewLinkToken() => New(16);
+
+    /// <summary>
+    /// Route parameter for a link code: base64url, exactly 22 (new, 128-bit) or 43 characters (links made before 18 Nov 2026).
+    /// Anything else is "not found" at routing - no database lookup, no rate-limit slot used by junk. Braces doubled for the
+    /// route template parser.
+    /// </summary>
+    public const string LinkTokenRoute = "{token:regex(^([A-Za-z0-9_-]{{22}}|[A-Za-z0-9_-]{{43}})$)}";
+
     public static byte[] Hash(string token) => SHA256.HashData(Encoding.UTF8.GetBytes(token));
 
     public static bool FixedTimeEquals(string a, string b) =>

@@ -105,7 +105,7 @@ function NewPasswordFields({ value, onChange, confirm, onConfirm, errors }: {
     <>
       <div>
         <PasswordField label="New password" autoComplete="new-password" leftIcon={<Lock className="size-[18px]" />} value={value} onChange={(e) => onChange(e.target.value)} error={errors.password} />
-        <div className="mt-2.5 flex items-center gap-2" aria-live="polite">
+        <div className="mt-2 flex items-center gap-2" aria-live="polite">
           <div className="grid flex-1 grid-cols-4 gap-1">
             {[1, 2, 3, 4].map((i) => (
               <span key={i} className={cn('h-1.5 rounded-full transition-colors duration-300', i <= strength.score ? barColor : 'bg-line')} />
@@ -113,7 +113,7 @@ function NewPasswordFields({ value, onChange, confirm, onConfirm, errors }: {
           </div>
           <span className="w-20 text-right text-[12px] font-semibold text-ink-secondary">{strength.label}</span>
         </div>
-        <ul className="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+        <ul className="mt-2 grid grid-cols-1 gap-x-3 gap-y-1 sm:grid-cols-2">
           {passwordRules.map((r) => {
             const ok = r.test(value)
             return (
@@ -184,9 +184,9 @@ export function ResetPasswordPage() {
   }
 
   return (
-    <AuthCard>
-      <AuthHeading icon={<KeyRound className="size-6" />} title="Set a new password" description="Choose a strong password you haven't used before." />
-      <form onSubmit={onSubmit} noValidate className="flex flex-col gap-5">
+    <AuthCard compact>
+      <AuthHeading compact title="Set a new password" description="Choose a strong password you haven't used before." />
+      <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
         {formError && (
           <Alert tone="danger">
             {formError}{' '}
@@ -258,13 +258,13 @@ export function ChangePasswordPage() {
   }
 
   return (
-    <AuthCard wide>
+    <AuthCard wide compact>
       <AuthHeading
-        icon={<KeyRound className="size-6" />}
+        compact
         title="Change password"
         description={forced ? 'Your password must be changed before you continue.' : 'Update the password you use to sign in to OneInsure Connect.'}
       />
-      <form onSubmit={onSubmit} noValidate className="flex flex-col gap-5">
+      <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
         {formError && <Alert tone="danger">{formError}</Alert>}
         <PasswordField label="Current password" autoComplete="current-password" leftIcon={<Lock className="size-[18px]" />} value={current} onChange={(e) => setCurrent(e.target.value)} error={errors.current} />
         <NewPasswordFields value={password} onChange={setPassword} confirm={confirm} onConfirm={setConfirm} errors={errors} />

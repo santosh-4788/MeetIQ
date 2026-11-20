@@ -10,8 +10,9 @@ import { formatRange, zoneLabel } from '../../lib/format'
 import { MeetingRoom, type RoomExit } from './MeetingRoom'
 import { PreJoin, type MediaChoices, type PreviewTracks } from './PreJoin'
 import { RoomExitScreen } from './RoomExitScreen'
-import { CanvasButton, RoomCanvas, RoomMessage } from './RoomScreens'
+import { CanvasButton, RoomCanvas, RoomLoading, RoomMessage } from './RoomScreens'
 import type { RoomBackend } from './roomUi'
+import { clearRejoin, dropRejoin, markInMeeting, pendingRejoin } from './rejoin'
 
 type Phase =
   | { name: 'prejoin' }
@@ -49,7 +50,9 @@ export default function GuestRoom({
 }) {
   const [token, setToken] = useState(given)
   const [phase, setPhase] = useState<Phase>({ name: 'prejoin' })
-  const [name, setName] = useState(info.displayName ?? '')
+  // The page was refreshed in the meeting (or its waiting room): go straight back in, with the same choices and name.
+  const [rejoining, setRejoining] = useState(pendingRejoin)
+  const [name, setName] = useState((info.participantType === 'GUEST' && rejoining?.name) || info.displayName || '')
   const [media, setMedia] = useState<MediaChoices | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -63,6 +66,7 @@ export default function GuestRoom({
       postChat: (body) => guestRoomApi.postChat(token, body, isGuest ? name.trim() : undefined),
       hasEnded: () => joinApi.get(token).then((j) => j.status === 'ENDED' || j.status === 'CANCELLED'),
       features: guestFeatureCalls(token),
+      screenCompanion: () => guestRoomApi.screenCompanion(token),
       recording: {
         state: () => guestRecordingApi.state(token),
         consent: (decision, version) => guestRecordingApi.consent(token, decision, version),
@@ -73,6 +77,20 @@ export default function GuestRoom({
   )
 
   const onExit = useCallback((exit: RoomExit) => setPhase({ name: 'exit', exit }), [])
+
+  const rejoinStarted = useRef(false)
+  useEffect(() => {
+    if (!rejoining || rejoinStarted.current) return
+    rejoinStarted.current = true
+    dropRejoin()
+    // Failed (e.g. the meeting ended meanwhile): the normal pre-join screen with the reason.
+    void enter(rejoining.media, {}).finally(() => setRejoining(null))
+  }, [rejoining]) // eslint-disable-line react-hooks/exhaustive-deps -- once per page load
+  // In the meeting or waiting for the host: a refresh comes back here. Left, removed, ended or turned away: it does not.
+  useEffect(() => {
+    if ((phase.name === 'room' || phase.name === 'waiting') && media) markInMeeting(media, isGuest ? name.trim() : undefined)
+    else clearRejoin()
+  }, [phase.name, media]) // eslint-disable-line react-hooks/exhaustive-deps -- the name is fixed once in
   const back = <CanvasButton variant="secondary" leftIcon={<ArrowLeft className="size-4" />} onClick={onClose}>{backLabel}</CanvasButton>
 
   // The preview tracks stay alive through the waiting room (shown there) and are published in the room.
@@ -175,6 +193,7 @@ export default function GuestRoom({
         />
       )
     default:
+      if (rejoining) return <RoomLoading label="Rejoining the meeting…" />
       return (
         <PreJoin
           title={info.title}

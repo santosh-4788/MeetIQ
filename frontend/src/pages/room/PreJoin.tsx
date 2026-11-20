@@ -150,6 +150,7 @@ export function PreJoin({
   const level = useTrackVolume(mic.track ?? undefined)
   const video = useRef<HTMLVideoElement>(null)
   const [nameError, setNameError] = useState<string | null>(null)
+  const [showDevices, setShowDevices] = useState(false)
 
   useEffect(() => {
     const el = video.current
@@ -194,24 +195,27 @@ export function PreJoin({
   }
 
   return (
-    <div className="oic-room-canvas fixed inset-0 z-40 flex flex-col overflow-y-auto text-white">
-      <header className="flex h-16 shrink-0 items-center justify-between px-5 sm:px-8">
-        <ConnectLogo tone="light" size={30} />
+    <div className="oic-room-canvas fixed inset-0 z-40 flex flex-col overflow-y-auto text-white" data-testid="prejoin">
+      {/* 18 Nov 2026 (bugs docx): on phones the page was taller than the screen and the name under the avatar was hidden
+          behind the mic/camera buttons - compact header, preview and card on phones; the name sits above the buttons. */}
+      <header className="flex h-12 shrink-0 items-center justify-between px-4 sm:h-16 sm:px-8">
+        <ConnectLogo tone="light" size={26} />
         <span className="hidden text-[12.5px] text-white/55 sm:inline">Check your camera and microphone before joining</span>
       </header>
-      <form onSubmit={submit} className="mx-auto grid w-full max-w-[1120px] flex-1 grid-cols-1 items-center gap-6 px-4 pb-10 sm:px-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] lg:gap-10">
+      <form onSubmit={submit} className="mx-auto grid w-full max-w-[1120px] flex-1 grid-cols-1 content-start items-center gap-3 px-3 pb-4 sm:content-center sm:gap-6 sm:px-8 sm:pb-10 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] lg:gap-10">
         {/* Preview */}
         <section aria-label="Camera preview" className="animate-fade-up">
           <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-white/10 bg-[linear-gradient(160deg,#17385A,#102A43)] shadow-[0_24px_60px_rgb(0_0_0/0.35)]">
             <video ref={video} muted playsInline autoPlay data-testid="prejoin-preview" className={cn('size-full -scale-x-100 object-cover', !cam.track && 'hidden')} />
             {!cam.track && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-white/70">
-                <span className="oic-tile-avatar !w-24">{initialsOf(name)}</span>
-                <p className="text-[13px]">{!canPublish ? 'You join as a listener' : !cameraAllowed ? 'Audio-only meeting' : choices.videoEnabled ? (cam.problem ? 'Camera unavailable' : 'Starting camera…') : 'Camera is off'}</p>
+              <div className="absolute inset-x-0 top-2 bottom-[66px] flex flex-col items-center justify-center gap-1 text-white/70 sm:top-0 sm:bottom-20 sm:gap-3" data-testid="prejoin-placeholder">
+                <span className="oic-tile-avatar shrink-0 !w-12 !text-[16px] sm:!w-24 sm:!text-[28px]">{initialsOf(name)}</span>
+                {name.trim() && <p className="max-w-[90%] shrink-0 truncate text-[14px] leading-5 font-semibold text-white" data-testid="prejoin-preview-name">{name}</p>}
+                <p className="shrink-0 text-[12px] leading-4 sm:text-[13px]">{!canPublish ? 'You join as a listener' : !cameraAllowed ? 'Audio-only meeting' : choices.videoEnabled ? (cam.problem ? 'Camera unavailable' : 'Starting camera…') : 'Camera is off'}</p>
               </div>
             )}
             {canPublish && (
-              <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-3 bg-gradient-to-t from-black/50 to-transparent p-4">
+              <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-3 bg-gradient-to-t from-black/50 to-transparent p-2.5 sm:p-4">
                 <button
                   type="button"
                   className="oic-ctl"
@@ -249,12 +253,12 @@ export function PreJoin({
         </section>
 
         {/* Details and join */}
-        <section className="animate-fade-up rounded-xl border border-white/10 bg-white/[0.04] p-6 backdrop-blur-md sm:p-7">
+        <section className="animate-fade-up rounded-xl border border-white/10 bg-white/[0.04] p-4 backdrop-blur-md sm:p-7">
           <p className="eyebrow text-cyan-400">Ready to join?</p>
-          <h1 className="mt-2 text-[22px] leading-8 font-bold tracking-[-0.01em] break-words">{title}</h1>
-          <div className="mt-1.5 text-[13.5px] leading-6 text-white/65">{details}</div>
+          <h1 className="mt-1 text-[19px] leading-7 font-bold tracking-[-0.01em] break-words sm:mt-2 sm:text-[22px] sm:leading-8">{title}</h1>
+          <div className="mt-1 text-[12.5px] leading-5 text-white/65 sm:mt-1.5 sm:text-[13.5px] sm:leading-6">{details}</div>
 
-          <div className="mt-6 flex flex-col gap-4">
+          <div className="mt-3 flex flex-col gap-3 sm:mt-6 sm:gap-4">
             <label className="flex flex-col gap-1.5">
               <span className="text-[12.5px] font-semibold text-white/80">Your name</span>
               {nameEditable ? (
@@ -274,8 +278,16 @@ export function PreJoin({
             </label>
             {canPublish && (
               <>
-                {cameraAllowed && <DeviceSelect label="Camera" devices={cams} value={choices.videoDeviceId} onChange={(id) => set({ videoDeviceId: id })} disabled={!choices.videoEnabled} />}
-                <DeviceSelect label="Microphone" devices={mics} value={choices.audioDeviceId} onChange={(id) => set({ audioDeviceId: id })} disabled={!choices.audioEnabled} />
+                {/* Phones: the device lists (default "System default") are folded away so the Join button fits on screen. */}
+                {!showDevices && (
+                  <button type="button" onClick={() => setShowDevices(true)} className="self-start text-[12.5px] font-semibold text-cyan-400 hover:underline sm:hidden" data-testid="prejoin-devices">
+                    Camera and microphone settings
+                  </button>
+                )}
+                <div className={cn('flex-col gap-3 sm:flex sm:gap-4', showDevices ? 'flex' : 'hidden')}>
+                  {cameraAllowed && <DeviceSelect label="Camera" devices={cams} value={choices.videoDeviceId} onChange={(id) => set({ videoDeviceId: id })} disabled={!choices.videoEnabled} />}
+                  <DeviceSelect label="Microphone" devices={mics} value={choices.audioDeviceId} onChange={(id) => set({ audioDeviceId: id })} disabled={!choices.audioEnabled} />
+                </div>
               </>
             )}
           </div>
@@ -286,7 +298,7 @@ export function PreJoin({
               {error}
             </p>
           )}
-          <div className="mt-6 flex flex-col-reverse gap-2.5 sm:flex-row sm:justify-end">
+          <div className="mt-4 flex flex-col-reverse gap-2 sm:mt-6 sm:flex-row sm:justify-end sm:gap-2.5">
             {onCancel && (
               <CanvasButton variant="secondary" onClick={onCancel} disabled={busy}>
                 {cancelLabel}

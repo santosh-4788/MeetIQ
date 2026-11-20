@@ -26,7 +26,7 @@ public static class RecordingRoomEndpoints
         g.MapPost("/consent", Consent);
         g.MapPost("/request/remove", RemoveFromRequest);
 
-        var j = api.MapGroup("/join/{token}/recording");
+        var j = api.MapGroup("/join/" + Tokens.LinkTokenRoute + "/recording");
         j.MapGet("", GuestState).RequireRateLimiting(RoomEndpoints.GuestRateLimit);
         j.MapPost("/consent", GuestConsent).RequireRateLimiting(RoomEndpoints.GuestRateLimit);
         return api;

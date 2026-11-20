@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { useParticipants, useRoomContext } from '@livekit/components-react'
+import { useRoomContext } from '@livekit/components-react'
+import { usePeople } from '../androidApp'
 import { RoomEvent, type RemoteParticipant } from 'livekit-client'
 import { ArrowLeft, LockKeyhole, Send } from 'lucide-react'
 import { CHAT_MAX_LENGTH } from '../../../api/room'
@@ -120,7 +121,7 @@ export function PrivateChatPanel({
   onWith: (identity: string | null) => void
   onClose: () => void
 }) {
-  const participants = useParticipants()
+  const participants = usePeople()
   const others = participants.filter((p) => p.identity !== chat.me)
   const names = new Map<string, string>()
   for (const m of chat.items) {

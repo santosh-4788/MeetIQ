@@ -65,7 +65,7 @@ public static class NotificationEndpoints
         });
 
         // Customers and guests open their e-mailed link. Only non-sensitive facts are returned; joining the call: RoomEndpoints (/join/{token}/enter).
-        api.MapGet("/join/{token}", async (string token, Db db, IClock clock, IOptions<MeetingOptions> mo, IOptions<LiveKitOptions> lk) =>
+        api.MapGet("/join/" + Tokens.LinkTokenRoute, async (string token, Db db, IClock clock, IOptions<MeetingOptions> mo, IOptions<LiveKitOptions> lk) =>
         {
             var invalid = Problems.Create(404, "NOT_FOUND", "This invitation link is invalid, has expired or was withdrawn.");
             if (string.IsNullOrEmpty(token) || token.Length > 200) return invalid;

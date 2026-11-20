@@ -329,7 +329,7 @@ public sealed partial class MeetingTests(ApiFixture fx)
         Assert.Equal("POL-778899", await fx.QueryAsync<string>("SELECT PolicyNumber FROM mtg.Meetings WHERE MeetingId = @mid", new { mid }));
         var mail = await fx.QueryAsync<string>("SELECT BodyHtml FROM app.EmailOutbox WHERE RelatedMeetingId = @mid AND ToAddress = N'ravi.customer@test.invalid'", new { mid });
         var token = Token(mail);
-        Assert.True(token.Length >= 40);
+        Assert.Equal(22, token.Length); // 128-bit link code (18 Nov 2026; was 43 characters)
         Assert.Equal(1, await Count("SELECT COUNT(*) FROM mtg.MeetingInvitations WHERE MeetingId = @mid AND TokenHash = HASHBYTES('SHA2_256', CAST(@token AS VARCHAR(100)))", new { mid, token })); // only the hash is stored
         Assert.Equal(1, await Count("SELECT COUNT(*) FROM mtg.MeetingInvitations i JOIN mtg.Meetings m ON m.MeetingId = i.MeetingId WHERE i.MeetingId = @mid AND i.ExpiresUtc = DATEADD(DAY, 1, m.ScheduledEndUtc)", new { mid }));
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
-import { useLocalParticipant, useMediaDeviceSelect, useParticipants } from '@livekit/components-react'
+import { useLocalParticipant, useMediaDeviceSelect } from '@livekit/components-react'
+import { usePeople } from './androidApp'
 import { ConnectionQuality, supportsAudioOutputSelection, type Participant } from 'livekit-client'
 import { Check, CircleAlert, Crown, Headset, DoorOpen, Hand, Lock, LockOpen, LoaderCircle, Mic, MicOff, PlayCircle, RotateCw, SendHorizontal, UserMinus, Video, VideoOff, X } from 'lucide-react'
 import { CHAT_MAX_LENGTH, type WaitingEntry } from '../../api/room'
@@ -152,7 +153,7 @@ export function PeoplePanel({
   locked?: boolean
   onToggleLocked?: () => Promise<void> | void
 }) {
-  const participants = useParticipants()
+  const participants = usePeople()
   const ui = useRoomUiOptional()
   const host = ui?.backend.host
   const toast = useToast()

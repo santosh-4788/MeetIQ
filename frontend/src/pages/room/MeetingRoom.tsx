@@ -21,7 +21,6 @@ import {
   useEnsureTrackRef,
   useIsMuted,
   useLocalParticipant,
-  useParticipants,
   usePinnedTracks,
   useRoomContext,
   useSpeakingParticipants,
@@ -69,7 +68,11 @@ import { EffectsSettings, useMediaEffects } from './features/MediaEffects'
 import { WhiteboardStage, useWhiteboardState } from './features/Whiteboard'
 import { ToolsButton } from './features/ToolsMenu'
 import { CHANNEL, guardedReconnectPolicy, newClaim, releaseClaim, supersededBy, writeClaim, type Claim } from './oneConnection'
+import { chime, systemNotify, useAttentionTitle } from './hostAlerts'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { DeviceHelpDialog, openDeviceHelp, permissionState, type DeviceKind } from './DeviceHelp'
+import { ScreenShareView, ScreenStageContext, useFullscreenState } from './ScreenShareView'
+import { androidApp, companionOwner, inAndroidApp, isScreenCompanion, useAndroidInMeeting, useAppPresentState, usePeople } from './androidApp'
 
 export type { RoomBackend } from './roomUi'
 
@@ -113,7 +116,9 @@ function roomOptions(): RoomOptions {
       simulcast: true,
       videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360],
       videoEncoding: { ...VideoPresets.h720.encoding, priority: 'low' },
-      screenShareEncoding: { ...ScreenSharePresets.h1080fps15.encoding, priority: 'medium' },
+      // 18 Nov 2026: 3.5 Mbps (was the preset's 2.5) for sharper text at 1080p/15 fps; the video server still lowers it per
+      // viewer on a weak link (simulcast + congestion control), and the smaller layer is unchanged.
+      screenShareEncoding: { ...ScreenSharePresets.h1080fps15.encoding, maxBitrate: 3_500_000, priority: 'medium' },
       audioPreset: { maxBitrate: 32_000, priority: 'high' },
       dtx: true,
       red: true,
@@ -206,13 +211,20 @@ export function MeetingRoom({
         // Errors while connecting end the attempt; later ones (e.g. a failed device switch) are only reported.
         toast.error(errorMessage(e, 'Something went wrong in the meeting room.'))
       }}
-      onMediaDeviceFailure={(failure, kind) => notifyDevice(toast, kind === 'videoinput' ? 'camera' : 'microphone', { name: String(failure ?? '') })}
+      // LiveKit reports every failed attempt here, before our buttons' quiet retry (enableDevice) - so only a blocked
+      // permission is handled here (the steps dialog); the buttons report anything else once all attempts failed. Screen
+      // share failures (kind undefined) were shown as a microphone problem: they are left to the Present button.
+      onMediaDeviceFailure={(failure, kind) => {
+        if (kind !== 'videoinput' && kind !== 'audioinput') return
+        if (deviceReason({ name: String(failure ?? '') }) === 'denied') notifyDevice(toast, kind === 'videoinput' ? 'camera' : 'microphone', { name: String(failure ?? '') })
+      }}
       data-lk-theme="default"
       className="oic-room fixed inset-0 z-40 flex flex-col overflow-hidden"
       data-testid="meeting-room"
     >
       <LayoutContextProvider>
         <LeaveOnPageHide />
+        <BackGuard />
         <KeepScreenOn />
         <BackgroundCallKeeper title={meeting.title} />
         <OneConnectionGuard claim={claim} identityRef={identityRef} onReplaced={onReplaced} />
@@ -398,6 +410,51 @@ function BackgroundCallKeeper({ title }: { title: string }) {
   )
 }
 
+/**
+ * GoodDay #14227 (16 Nov 2026: "if we go back from Chrome or Google from the meeting, after a few seconds the user shows as
+ * exited; only opening the same URL again brings them back"): the phone's Back button/gesture navigated away from the meeting
+ * page, which leaves the call - and returning to the browser showed the previous page, not the meeting. While in the room, one
+ * extra history entry (same address) now catches Back: it is put back at once and the person is asked "Leave the meeting?".
+ * Leave = the normal Leave button. The address never changes, so links and reloads behave as before.
+ */
+function BackGuard() {
+  const room = useRoomContext()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [asking, setAsking] = useState(false)
+  const guarded = (location.state as { oicRoomGuard?: boolean } | null)?.oicRoomGuard === true
+  const armed = useRef(false) // our entry has been the current one at least once
+  const pushing = useRef(false) // an entry was just added (React may run the effect twice in development)
+  useEffect(() => {
+    if (guarded) {
+      armed.current = true
+      pushing.current = false
+      return
+    }
+    if (pushing.current && !armed.current) return
+    if (armed.current) setAsking(true) // Back took us off our entry
+    armed.current = false
+    pushing.current = true
+    navigate(`${location.pathname}${location.search}${location.hash}`, { state: { ...((location.state ?? {}) as object), oicRoomGuard: true } })
+  }, [guarded]) // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <Dialog
+      open={asking}
+      onClose={() => setAsking(false)}
+      title="Leave the meeting?"
+      size="sm"
+      footer={
+        <div className="grid w-full grid-cols-2 gap-2">
+          <Button variant="primary" onClick={() => setAsking(false)} data-testid="back-guard-stay" data-autofocus>Stay in the meeting</Button>
+          <Button variant="danger" onClick={() => (setAsking(false), void room.disconnect())} data-testid="back-guard-leave">Leave meeting</Button>
+        </div>
+      }
+    >
+      <p className="text-[13.5px] leading-[22px] text-ink-secondary">You pressed Back. If you leave, the others will see that you have left the meeting.</p>
+    </Dialog>
+  )
+}
+
 /** Leaves the room when the page is really closed or navigated away (not when a mailto: link opens the mail app). */
 function LeaveOnPageHide() {
   const room = useRoomContext()
@@ -424,14 +481,7 @@ function PublishOnConnect({ media, tracks }: { media: MediaChoices; tracks: Prev
     if (state !== ConnectionState.Connected || done.current) return
     done.current = true
     const lp = room.localParticipant
-    const retry = async (enable: () => Promise<unknown>) => {
-      try {
-        await enable()
-      } catch {
-        await new Promise((r) => setTimeout(r, 1200))
-        await enable()
-      }
-    }
+    const retry = enableDevice
     void (async () => {
       try {
         if (tracks.audio) await lp.publishTrack(tracks.audio, { source: Track.Source.Microphone })
@@ -786,6 +836,15 @@ function RoomShell({
   const hands = useHands()
   const waiting = useWaiting(effectiveBackend.host)
   const recording = useRoomRecording(effectiveBackend.recording)
+  // GoodDay #14230: the recording state (polled every 10 s, re-read on reconnect) carries the meeting's current end. A participant
+  // who missed the "end-changed" message - typically a phone that was reconnecting when the host extended - is corrected from it,
+  // instead of still being told "Scheduled time is up ... unless the host extends it".
+  const polledEnds = recording.state?.ends
+  useEffect(() => {
+    if (!polledEnds?.endUtc) return
+    const next = { endUtc: polledEnds.endUtc, autoEndUtc: polledEnds.autoEndUtc ?? null }
+    setEnds((cur) => (sameInstant(cur.endUtc, next.endUtc) && sameInstant(cur.autoEndUtc, next.autoEndUtc) ? cur : next))
+  }, [polledEnds?.endUtc, polledEnds?.autoEndUtc, setEnds])
 
   // ---- Optional features (13 Nov 2026). With every feature off (the default) none of this renders anything. ----
   const features = useRoomFeatures()
@@ -876,6 +935,7 @@ function RoomShell({
     }
   }, [state, backend])
 
+  useAndroidInMeeting() // Android app: microphone kept alive in the background while this page is open
   const ui = useMemo<RoomUi>(() => ({ connection, hands: hands.hands, backend: effectiveBackend }), [connection, hands.hands, effectiveBackend])
   const toggle = (p: Exclude<Panel, null>) => setPanel((x) => (x === p ? null : p))
 
@@ -1021,7 +1081,7 @@ const qualityLabel: Record<ConnectionQuality, string> = {
 
 function RoomHeader({ meeting, extra }: { meeting: RoomMeetingInfo; extra?: ReactNode }) {
   const elapsed = useElapsed()
-  const participants = useParticipants()
+  const participants = usePeople() // phone-screen connections are not counted
   const { localParticipant } = useLocalParticipant()
   const { quality } = useConnectionQualityIndicator({ participant: localParticipant })
   const tz = meeting.timeZoneId || 'Asia/Kolkata'
@@ -1187,6 +1247,12 @@ function useEndTimes(meeting: RoomMeetingInfo) {
   return [ends, setEnds] as const
 }
 
+/** Same moment, whatever the formatting ("…Z", fraction digits, or a UTC time without a zone suffix from the API). */
+function sameInstant(a: string | null, b: string | null) {
+  if (!a || !b) return a === b
+  return parseUtc(a).getTime() === parseUtc(b).getTime()
+}
+
 function mmss(ms: number) {
   const s = Math.max(0, Math.ceil(ms / 1000))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
@@ -1212,6 +1278,10 @@ function EndTimeBanner({ ends, setEnds, extend, onEndNow, tz }: {
   // when the time is up a host also gets a popup. Shown once per end time: "Keep going" closes it; an extension that runs
   // out brings it back.
   const [promptedFor, setPromptedFor] = useState<string | null>(null)
+  // 16 Nov 2026 (GoodDay #14230 reopened, "no option is coming to the host for extending"): hosts ended their calls a few seconds
+  // before the scheduled end, waiting for a prompt that only came once the time was up. Hosts now also get the popup at the
+  // 5-minute warning ("Keep going" closes it; it comes back when the time is up).
+  const [promptedSoonFor, setPromptedSoonFor] = useState<string | null>(null)
   const end = parseUtc(ends.endUtc).getTime()
   const auto = ends.autoEndUtc ? parseUtc(ends.autoEndUtc).getTime() : null
   const show = now >= end - END_WARNING_MS
@@ -1221,8 +1291,30 @@ function EndTimeBanner({ ends, setEnds, extend, onEndNow, tz }: {
     const t = wait > 1000 ? window.setTimeout(() => setNow(Date.now()), Math.min(wait, 2 ** 31 - 1)) : window.setInterval(() => setNow(Date.now()), 1000)
     return () => (wait > 1000 ? window.clearTimeout(t) : window.clearInterval(t))
   }, [end, show])
-  if (!show) return null
   const over = now >= end
+  const isHost = !!extend
+  const phase: 'soon' | 'up' | null = !show ? null : over ? 'up' : 'soon'
+  const promptUp = isHost && phase === 'up' && promptedFor !== ends.endUtc
+  const promptSoon = isHost && phase === 'soon' && promptedSoonFor !== ends.endUtc && promptedFor !== ends.endUtc
+  const prompt = promptUp || promptSoon
+  // A host who is presenting another window, on another tab/app or minimised never sees the popup: a chime when it opens, a
+  // system notification (if allowed) and a flashing tab title while the page is hidden. Once per end time and phase.
+  const alerted = useRef<string | null>(null)
+  const alertKey = prompt && phase ? `${ends.endUtc}|${phase}` : null
+  useEffect(() => {
+    if (!alertKey || alerted.current === alertKey) return
+    alerted.current = alertKey
+    chime()
+    if (document.hidden)
+      systemNotify(
+        phase === 'up' ? 'Scheduled time is up - extend the meeting?' : 'Your meeting ends in 5 minutes',
+        phase === 'up'
+          ? `The meeting ends automatically${auto ? ` at ${formatTime(new Date(auto).toISOString(), tz)}` : ''} unless you extend it. Open the meeting to extend it or end it.`
+          : `Scheduled to end at ${formatTime(ends.endUtc, tz)}. Open the meeting to extend it.`,
+      )
+  }, [alertKey, phase, auto, ends.endUtc, tz])
+  useAttentionTitle(prompt ? (phase === 'up' ? '⏰ Time is up - extend?' : '⏰ Meeting ends soon') : null)
+  if (!show) return null
   const doExtend = async (minutes: number) => {
     if (!extend) return
     setBusy(true)
@@ -1235,8 +1327,7 @@ function EndTimeBanner({ ends, setEnds, extend, onEndNow, tz }: {
       setBusy(false)
     }
   }
-  const prompt = !!extend && over && promptedFor !== ends.endUtc
-  const closePrompt = () => setPromptedFor(ends.endUtc)
+  const closePrompt = () => (over ? setPromptedFor(ends.endUtc) : setPromptedSoonFor(ends.endUtc))
   const text = !over
     ? `This meeting is scheduled to end at ${formatTime(ends.endUtc, tz)} (in ${mmss(end - now)}).`
     : auto
@@ -1255,7 +1346,7 @@ function EndTimeBanner({ ends, setEnds, extend, onEndNow, tz }: {
       <Dialog
         open={prompt}
         onClose={closePrompt}
-        title="The scheduled time is up"
+        title={over ? 'The scheduled time is up' : 'The meeting ends soon'}
         size="sm"
         dismissible={!busy}
         footer={
@@ -1267,12 +1358,19 @@ function EndTimeBanner({ ends, setEnds, extend, onEndNow, tz }: {
           </div>
         }
       >
-        <p className="text-[13.5px] leading-[22px] text-ink-secondary">
-          This meeting was scheduled to end at <strong className="text-ink">{formatTime(ends.endUtc, tz)}</strong>.{' '}
-          {auto
-            ? <>It ends automatically for everyone in <strong className="tabular-nums text-ink">{mmss(auto - now)}</strong> unless you extend it.</>
-            : 'Extend it, or end it for everyone.'}
-        </p>
+        {over ? (
+          <p className="text-[13.5px] leading-[22px] text-ink-secondary">
+            This meeting was scheduled to end at <strong className="text-ink">{formatTime(ends.endUtc, tz)}</strong>.{' '}
+            {auto
+              ? <>It ends automatically for everyone in <strong className="tabular-nums text-ink">{mmss(auto - now)}</strong> unless you extend it.</>
+              : 'Extend it, or end it for everyone.'}
+          </p>
+        ) : (
+          <p className="text-[13.5px] leading-[22px] text-ink-secondary" data-testid="extend-soon-text">
+            This meeting is scheduled to end at <strong className="text-ink">{formatTime(ends.endUtc, tz)}</strong> (in{' '}
+            <strong className="tabular-nums text-ink">{mmss(end - now)}</strong>). Extend it now, or keep going - you will be asked again when the time is up.
+          </p>
+        )}
       </Dialog>
     </div>
   )
@@ -1281,12 +1379,34 @@ function EndTimeBanner({ ends, setEnds, extend, onEndNow, tz }: {
 // ---- Stage and tiles -------------------------------------------------------------------------------------------------
 
 function Stage({ layout }: { layout: 'grid' | 'speaker' }) {
-  const tracks = useTracks(
+  const allTracks = useTracks(
     [
       { source: Track.Source.Camera, withPlaceholder: true },
       { source: Track.Source.ScreenShare, withPlaceholder: false },
     ],
     { onlySubscribed: false },
+  )
+  // Android app phone screens (19 Nov 2026): a screen-only connection is shown only as its screen ("<name> is presenting"),
+  // never as a camera tile; the presenter's OWN phone screen is not shown back to them (nor downloaded) - a bar says it is on.
+  const me = useLocalParticipant().localParticipant.identity
+  const myPhoneScreen = allTracks.find((t) => t.source === Track.Source.ScreenShare && isScreenCompanion(t.participant) && companionOwner(t.participant) === me)
+  const tracks = useMemo(
+    () => allTracks.filter((t) => isScreenCompanion(t.participant) ? t.source === Track.Source.ScreenShare && t !== myPhoneScreen : true),
+    [allTracks, myPhoneScreen],
+  )
+  useEffect(() => {
+    const pub = myPhoneScreen && isTrackReference(myPhoneScreen) ? myPhoneScreen.publication : undefined
+    if (pub instanceof RemoteTrackPublication && pub.isSubscribed) pub.setSubscribed(false)
+  }, [myPhoneScreen])
+  const phoneBar = myPhoneScreen && (
+    <div className="absolute inset-x-0 top-2 z-10 flex justify-center px-3" data-testid="app-presenting-bar">
+      <div className="inline-flex items-center gap-2.5 rounded-full bg-cyan-500/95 py-1.5 pr-1.5 pl-3.5 text-[12.5px] font-semibold text-white shadow-lg">
+        <MonitorUp className="size-4" aria-hidden /> You're presenting your phone screen
+        <button type="button" onClick={() => androidApp.stopPresent()} className="rounded-full bg-white/20 px-3 py-1 hover:bg-white/30" data-testid="app-presenting-stop">
+          Stop
+        </button>
+      </div>
+    </div>
   )
   const speakers = useSpeakingParticipants()
   const [lastSpeaker, setLastSpeaker] = useState<string | null>(null)
@@ -1306,25 +1426,48 @@ function Stage({ layout }: { layout: 'grid' | 'speaker' }) {
     focus = cams.find((t) => t.participant.identity === lastSpeaker) ?? cams.find((t) => !t.participant.isLocal) ?? cams[0]
   }
 
+  // Screen share on the main area (18 Nov 2026): a narrower participants strip, which the viewer can hide (ScreenShareView).
+  const [thumbsHidden, setThumbsHidden] = useState(false)
+  const beforeFullscreen = useRef<boolean | null>(null)
+  const screenStage = useMemo(() => ({ thumbsHidden, setThumbsHidden, beforeFullscreen }), [thumbsHidden])
+  // Leaving fullscreen (button or Esc) restores the participants strip as it was before - also if the share ended meanwhile.
+  const fullscreen = useFullscreenState()
+  useEffect(() => {
+    if (!fullscreen && beforeFullscreen.current !== null) {
+      setThumbsHidden(beforeFullscreen.current)
+      beforeFullscreen.current = null
+    }
+  }, [fullscreen])
+
   if (focus) {
     const others = tracks.filter((t) => t !== focus)
+    const screenFocus = focus.source === Track.Source.ScreenShare
+    const solo = screenFocus && (thumbsHidden || others.length === 0)
     return (
-      <FocusLayoutContainer className="h-full">
-        <CarouselLayout tracks={others}>
-          <Tile />
-        </CarouselLayout>
-        <Tile trackRef={focus} />
-      </FocusLayoutContainer>
+      <ScreenStageContext.Provider value={screenStage}>
+        {phoneBar}
+        <FocusLayoutContainer className={cn('h-full', screenFocus && 'oic-focus-screen', solo && 'oic-focus-solo')}>
+          {!solo && (
+            <CarouselLayout tracks={others}>
+              <Tile />
+            </CarouselLayout>
+          )}
+          <Tile trackRef={focus} focused />
+        </FocusLayoutContainer>
+      </ScreenStageContext.Provider>
     )
   }
   return (
-    <GridLayout tracks={tracks} className="h-full">
-      <Tile />
-    </GridLayout>
+    <>
+      {phoneBar}
+      <GridLayout tracks={tracks} className="h-full">
+        <Tile />
+      </GridLayout>
+    </>
   )
 }
 
-function Tile({ trackRef: given }: { trackRef?: TrackReferenceOrPlaceholder }) {
+function Tile({ trackRef: given, focused }: { trackRef?: TrackReferenceOrPlaceholder; /** On the main area (not the strip). */ focused?: boolean }) {
   const trackRef = useEnsureTrackRef(given)
   const { hands } = useRoomUi()
   const p = trackRef.participant
@@ -1339,7 +1482,10 @@ function Tile({ trackRef: given }: { trackRef?: TrackReferenceOrPlaceholder }) {
 
   return (
     <ParticipantTile trackRef={trackRef} data-testid={screen ? 'tile-screen' : 'tile'} data-identity={p.identity}>
-      {showVideo ? (
+      {showVideo && screen && focused && !p.isLocal && isTrackReference(trackRef) ? (
+        // Someone else's screen on the main area: sharp full-resolution picture, zoom, fullscreen (ScreenShareView).
+        <ScreenShareView trackRef={trackRef} videoRef={videoEl} />
+      ) : showVideo ? (
         <VideoTrack ref={videoEl} trackRef={trackRef} data-testid={screen ? 'video-screen' : 'video-camera'} />
       ) : (
         <div className="oic-tile-placeholder">
@@ -1417,20 +1563,27 @@ function useScreenShareRecovery(pub: TrackPublication | undefined, el: React.Ref
  */
 const lastDeviceNotice = new Map<string, number>()
 
+function errorName(e: unknown) {
+  return (e as { name?: string } | null)?.name ?? String(e ?? '')
+}
 function deviceReason(e: unknown): 'denied' | 'busy' | 'missing' | 'other' {
-  const name = (e as { name?: string } | null)?.name ?? String(e ?? '')
+  const name = errorName(e)
   if (/NotAllowed|PermissionDenied|Security/i.test(name)) return 'denied'
   if (/NotReadable|TrackStart|DeviceInUse|Abort/i.test(name)) return 'busy'
   if (/NotFound|DevicesNotFound|Overconstrained/i.test(name)) return 'missing'
   return 'other'
 }
-export function deviceMessage(kind: DeviceKind, reason: ReturnType<typeof deviceReason>) {
+export function deviceMessage(kind: DeviceKind, reason: ReturnType<typeof deviceReason>, code?: string) {
   const Dev = kind === 'microphone' ? 'Microphone' : 'Camera'
+  const tail = code ? ` (${code})` : ''
   if (reason === 'denied')
     return `${Dev} access is blocked for this site. Tap the lock icon next to the web address → Permissions → ${Dev} → Allow, then tap the ${kind} button again. On Android also check Settings → Apps → Chrome → Permissions.`
-  if (reason === 'busy') return `Your ${kind} is being used by another app (for example a phone or WhatsApp call). Close that app, then tap the ${kind} button again.`
-  if (reason === 'missing') return `No ${kind} was found on this device.`
-  return `Your ${kind} could not be started. Check that the browser may use it, then tap the ${kind} button again.`
+  // 18 Nov 2026 (bugs docx): shown only after 3 quiet attempts failed - phones often refuse a device for a moment after it was
+  // released or after switching apps, which used to produce this message although nothing else was using it.
+  if (reason === 'busy')
+    return `Your ${kind} could not be started: the phone did not release it. Tap the ${kind} button again. If it still fails, close any app that may be using it (phone or WhatsApp call, camera app, another tab with this meeting), or leave and rejoin.${tail}`
+  if (reason === 'missing') return `No ${kind} was found on this device.${tail}`
+  return `Your ${kind} could not be started. Check that the browser may use it, then tap the ${kind} button again.${tail}`
 }
 function notifyDevice(toast: { error: (t: string) => void }, kind: DeviceKind, e: unknown) {
   const reason = deviceReason(e)
@@ -1440,7 +1593,37 @@ function notifyDevice(toast: { error: (t: string) => void }, kind: DeviceKind, e
   const now = Date.now()
   if (now - (lastDeviceNotice.get(key) ?? 0) < 8000) return
   lastDeviceNotice.set(key, now)
-  toast.error(deviceMessage(kind, reason))
+  const code = errorName(e)
+  toast.error(deviceMessage(kind, reason, code && code !== '[object Object]' ? code : undefined))
+}
+
+/**
+ * Turns the camera/microphone on, retrying quietly when the phone reports the device as busy (NotReadable / TrackStart /
+ * Abort): Android and iOS often refuse it for a moment after it was released, or right after returning from another app.
+ * Up to 3 attempts over ~2 s; a page in the background first waits until it is visible again. Other errors are not retried.
+ */
+async function enableDevice(enable: () => Promise<unknown>) {
+  const waits = [700, 1400]
+  for (let attempt = 0; ; attempt++) {
+    if (typeof document !== 'undefined' && document.hidden) {
+      await new Promise<void>((r) => {
+        const on = () => {
+          if (!document.hidden) {
+            document.removeEventListener('visibilitychange', on)
+            r()
+          }
+        }
+        document.addEventListener('visibilitychange', on)
+      })
+    }
+    try {
+      return await enable()
+    } catch (e) {
+      if (deviceReason(e) !== 'busy' || attempt >= waits.length) throw e
+      console.warn(`[oic] device busy (${errorName(e)}), retrying in ${waits[attempt]} ms`)
+      await new Promise((r) => setTimeout(r, waits[attempt]))
+    }
+  }
 }
 
 // ---- Controls --------------------------------------------------------------------------------------------------------
@@ -1448,23 +1631,35 @@ function notifyDevice(toast: { error: (t: string) => void }, kind: DeviceKind, e
 function MediaToggle({ source, labelOn, labelOff, iconOn, iconOff, testId }: { source: Track.Source.Microphone | Track.Source.Camera; labelOn: string; labelOff: string; iconOn: ReactNode; iconOff: ReactNode; testId: string }) {
   const toast = useToast()
   const kind: DeviceKind = source === Track.Source.Camera ? 'camera' : 'microphone'
+  const { localParticipant } = useLocalParticipant()
   const { enabled, pending, toggle } = useTrackToggle({
     source,
     onDeviceError: (e) => notifyDevice(toast, kind, e),
   })
+  const [starting, setStarting] = useState(false)
   // GoodDay #14222: when the browser already reports the device as blocked, tapping it opens the steps straight away.
   const onClick = async () => {
     if (!enabled && (await permissionState(kind)) === 'denied') return openDeviceHelp(kind)
-    void toggle()
+    if (enabled) return void toggle()
+    // Turning on: retried quietly while the phone reports the device busy (enableDevice); one message only if it still fails.
+    setStarting(true)
+    try {
+      await enableDevice(() => (kind === 'camera' ? localParticipant.setCameraEnabled(true) : localParticipant.setMicrophoneEnabled(true)))
+    } catch (e) {
+      notifyDevice(toast, kind, e)
+    } finally {
+      setStarting(false)
+    }
   }
   return (
-    <button type="button" className="oic-ctl" data-off={!enabled || undefined} aria-pressed={enabled} disabled={pending} onClick={() => void onClick()} aria-label={enabled ? labelOn : labelOff} title={enabled ? labelOn : labelOff} data-testid={testId}>
+    <button type="button" className="oic-ctl" data-off={!enabled || undefined} aria-pressed={enabled} disabled={pending || starting} onClick={() => void onClick()} aria-label={enabled ? labelOn : labelOff} title={enabled ? labelOn : labelOff} data-testid={testId}>
       {enabled ? iconOn : iconOff}
     </button>
   )
 }
 
-/** Phones and tablets: Android and iOS browsers cannot share the screen (no getDisplayMedia), so the control is not offered. */
+/** Screen sharing needs getDisplayMedia: computers, and iPhone/iPad on recent iOS (27.2+). Android phone browsers and older iOS
+ *  do not offer it, so there the control explains why instead. */
 const canShareScreen = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function'
 
 /**
@@ -1476,7 +1671,9 @@ function screenShareUnsupportedMessage(nav: { userAgent: string; maxTouchPoints?
   const ua = nav.userAgent || ''
   // iPadOS 13+ reports itself as a Mac; a "Mac" with a touch screen is an iPad.
   const ios = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && (nav.maxTouchPoints ?? 0) > 1)
-  if (ios) return 'Apple does not let websites share the screen on iPhone or iPad, in Chrome, Safari or any other browser. You can still see screens others present. To present, join from a computer.'
+  // 17 Nov 2026: production logs show presenting from iPhone Safari and iPhone Chrome on iOS 27.2+, never from iOS 26.x -
+  // the browser offers screen sharing only on the latest iOS. Where it is offered, Present is shown (feature detection above).
+  if (ios) return 'Presenting from iPhone or iPad needs the latest iOS. Update it in Settings > General > Software Update (iOS 27.2 or later), then join again: Present will be in the More (⋯) menu. You can still see screens others present.'
   if (/Android/i.test(ua)) return 'Phone browsers on Android cannot share the screen. You can still see screens others present. To present, join from a computer.'
   return 'This browser cannot share the screen. Please update it, or use the latest Chrome, Edge, Firefox or Safari on a computer.'
 }
@@ -1495,11 +1692,46 @@ function useCompact() {
   return compact
 }
 
+/**
+ * Present inside the Android app (19 Nov 2026): the WebView cannot capture the screen, so the app does it - the server gives a
+ * screen-only token for this person, the app asks Android ("Start recording or casting?") and publishes the phone screen.
+ * Pressed while the app is presenting; tapping again (or Stop in the notification / bar) ends it.
+ */
+function AppPresentToggle({ getToken }: { getToken: () => Promise<{ url: string; token: string; name: string }> }) {
+  const toast = useToast()
+  const app = useAppPresentState()
+  const [asking, setAsking] = useState(false)
+  const active = app.state !== 'IDLE'
+  useEffect(() => {
+    if (app.state === 'IDLE' && app.detail?.startsWith('error:')) toast.error('Your screen could not be shared. Please try again.')
+  }, [app, toast])
+  async function onClick() {
+    if (active) return androidApp.stopPresent()
+    setAsking(true)
+    try {
+      const t = await getToken()
+      androidApp.present(resolveLiveKitUrl(t.url), t.token, t.name)
+    } catch (e) {
+      toast.error(errorMessage(e, 'Presenting could not be started.'))
+    } finally {
+      setAsking(false)
+    }
+  }
+  return (
+    <button type="button" className="oic-ctl" data-on={active || undefined} aria-pressed={active} disabled={asking || app.state === 'STARTING'} onClick={() => void onClick()}
+      title={active ? 'Stop presenting' : 'Present your phone screen'} data-testid="ctl-screen-app">
+      {active ? <MonitorX className="size-5" /> : <MonitorUp className="size-5" />}
+      <span className="hidden xl:inline">{active ? 'Stop presenting' : 'Present'}</span>
+    </button>
+  )
+}
+
 function ScreenShareToggle() {
   const toast = useToast()
   const { enabled, pending, toggle } = useTrackToggle({
     source: Track.Source.ScreenShare,
-    captureOptions: { audio: true, selfBrowserSurface: 'exclude', surfaceSwitching: 'include' },
+    // contentHint 'detail' (18 Nov 2026): tells the encoder this is a screen (text, tables) - keep it sharp rather than smooth.
+    captureOptions: { audio: true, selfBrowserSurface: 'exclude', surfaceSwitching: 'include', contentHint: 'detail' },
     onDeviceError: (e) => {
       if (e?.name !== 'NotAllowedError') toast.error('Screen sharing could not be started.')
     },
@@ -1543,14 +1775,16 @@ function ControlBar({
   /** The chat panel is open on either tab (Everyone / Private). */
   chatActive?: boolean
 }) {
-  const { connection } = useRoomUi()
+  const { connection, backend } = useRoomUi()
   const compact = useCompact()
   const toast = useToast()
   const [more, setMore] = useState(false)
   const camera = connection.canPublish && connection.canPublishVideo !== false
+  // Inside the Android app the phone screen is shared by the app itself (AppPresentToggle).
+  const appScreen = !canShareScreen && inAndroidApp() ? backend.screenCompanion : undefined
   // The participant is allowed to present, but this browser/OS can't capture a screen at all (getDisplayMedia
   // missing - common on phones). Say so rather than silently hiding the control with no explanation.
-  const presentUnsupported = connection.canScreenShare && !canShareScreen && (
+  const presentUnsupported = connection.canScreenShare && !canShareScreen && (appScreen ? <AppPresentToggle getToken={appScreen} /> :
     <button
       type="button"
       className="oic-ctl opacity-60"

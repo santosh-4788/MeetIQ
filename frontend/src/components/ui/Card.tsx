@@ -48,6 +48,7 @@ export function StatCard({
   delta,
   footnote,
   to,
+  onClick,
 }: {
   label: string
   value: number
@@ -57,6 +58,8 @@ export function StatCard({
   footnote?: string
   /** Makes the whole card a link (e.g. to the page that explains this number). */
   to?: string
+  /** Makes the whole card a button (e.g. opens a list), when there is no page to link to. */
+  onClick?: () => void
 }) {
   const accents = {
     brand: 'bg-brand-50 text-brand-500',
@@ -101,19 +104,23 @@ export function StatCard({
           </span>
         )}
         {footnote && <span className="text-ink-muted">{footnote}</span>}
-        {to && <ChevronRight className="ml-auto size-3.5 translate-x-0 text-ink-muted opacity-0 transition-[transform,opacity] duration-200 group-hover:translate-x-0.5 group-hover:opacity-100" aria-hidden />}
+        {(to || onClick) && <ChevronRight className="ml-auto size-3.5 translate-x-0 text-ink-muted opacity-0 transition-[transform,opacity] duration-200 group-hover:translate-x-0.5 group-hover:opacity-100" aria-hidden />}
       </div>
     </>
   )
   const className = cn(
     'group relative block h-full overflow-hidden rounded-2xl p-3.5 sm:p-4.5 transition-[box-shadow,transform] duration-200 hover:-translate-y-0.5',
     glows[accent],
-    to && 'cursor-pointer active:scale-[0.98] active:duration-75',
+    (to || onClick) && 'cursor-pointer active:scale-[0.98] active:duration-75',
   )
   return to ? (
     <Link to={to} className={cn(className, 'border border-line bg-surface shadow-card focus-visible:shadow-focus')}>
       {content}
     </Link>
+  ) : onClick ? (
+    <button type="button" onClick={onClick} className={cn(className, 'w-full border border-line bg-surface text-left shadow-card focus-visible:shadow-focus')}>
+      {content}
+    </button>
   ) : (
     <Card as="article" className={className}>
       {content}

@@ -72,17 +72,17 @@ await tc('AD-01', 'Admin: full guide - every section, 13 endpoints with paramete
   return `${sections.length} sections; ${n} endpoints expanded with parameters/examples; keys tab present`
 })
 
-await tc('AD-02', 'Admin: Swagger tab loads the (now private) OpenAPI document; Download OpenAPI works', async () => {
-  await admin.getByRole('tab', { name: 'API reference (Swagger)' }).click()
-  await admin.locator('.opblock').first().waitFor({ timeout: 30_000 })
-  const ops = await admin.locator('.opblock').count()
+await tc('AD-02', 'Admin: API reference tab loads the (now private) OpenAPI document; Download OpenAPI works', async () => {
+  await admin.getByRole('tab', { name: 'API reference' }).click()
+  await admin.getByTestId('api-operation').first().waitFor({ timeout: 30_000 })
+  const ops = await admin.getByTestId('api-operation').count()
   await admin.getByRole('tab', { name: 'Integration guide' }).click()
   const [dl] = await Promise.all([admin.waitForEvent('download'), admin.getByTestId('download-openapi').click()])
   const file = path.join(RESULTS, 'downloaded-openapi.json')
   await dl.saveAs(file)
   const doc = JSON.parse(fs.readFileSync(file, 'utf8'))
   check(doc.openapi?.startsWith('3.') && Object.keys(doc.paths).length >= 10, 'downloaded file is not the OpenAPI document')
-  return `Swagger shows ${ops} operations; downloaded OpenAPI ${doc.openapi} with ${Object.keys(doc.paths).length} paths`
+  return `API reference shows ${ops} operations; downloaded OpenAPI ${doc.openapi} with ${Object.keys(doc.paths).length} paths`
 })
 
 await tc('AD-03', 'Ordinary employee: no menu entry, page refused, OpenAPI file refused (403); not public either (401)', async () => {
@@ -96,7 +96,7 @@ await tc('AD-03', 'Ordinary employee: no menu entry, page refused, OpenAPI file 
   return `menu hidden; /api-docs → access denied; OpenAPI: employee ${s}, anonymous ${anon}`
 })
 
-await tc('AD-04', 'Admin gives the role: "API Documentation Viewer" is offered in Users & roles; with it the employee sees the whole guide + Swagger, but no API keys tab and no admin integration API', async () => {
+await tc('AD-04', 'Admin gives the role: "API Documentation Viewer" is offered in Users & roles; with it the employee sees the whole guide + API reference, but no API keys tab and no admin integration API', async () => {
   // The role is offered to administrators (it comes from the roles API).
   const roles = await admin.evaluate(async () => (await (await fetch('/api/v1/admin/roles')).json()))
   const list = Array.isArray(roles) ? roles : roles.items ?? []
@@ -110,11 +110,11 @@ await tc('AD-04', 'Admin gives the role: "API Documentation Viewer" is offered i
   const adminApi = await status(v, '/api/v1/admin/integrations')
   const spec = await status(v, '/api/ext/openapi/ext-v1.json')
   check(adminApi === 403 && spec === 200, `admin integrations ${adminApi}, OpenAPI ${spec}`)
-  await v.getByRole('tab', { name: 'API reference (Swagger)' }).click()
-  await v.locator('.opblock').first().waitFor({ timeout: 30_000 })
+  await v.getByRole('tab', { name: 'API reference' }).click()
+  await v.getByTestId('api-operation').first().waitFor({ timeout: 30_000 })
   await v.getByRole('tab', { name: 'Integration guide' }).click()
   await v.screenshot({ path: path.join(SHOTS, 'ad-04-viewer-guide.png') })
-  return `role offered; viewer sees 13 endpoints + Swagger; keys tab hidden; /admin/integrations ${adminApi}; OpenAPI ${spec}`
+  return `role offered; viewer sees 13 endpoints + API reference; keys tab hidden; /admin/integrations ${adminApi}; OpenAPI ${spec}`
 })
 
 await tc('AD-05', 'Phone (390 px): the guide is readable - no horizontal page scroll; endpoint cards open', async () => {

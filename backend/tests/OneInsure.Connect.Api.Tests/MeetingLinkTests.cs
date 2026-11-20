@@ -79,6 +79,9 @@ public sealed class MeetingLinkTests(ApiFixture fx)
         // Customer meetings cannot be instant; nonsense durations are refused.
         Assert.Equal("VALIDATION", await Code(await host.PostAsync("/api/v1/meetings/instant", new { category = "CUSTOMER_PLVC" })));
         Assert.Equal("VALIDATION", await Code(await host.PostAsync("/api/v1/meetings/instant", new { durationMinutes = 2 })));
+        // 17 Nov 2026: the portal's instant meeting needs a title (blank or spaces refused).
+        var noTitle = await Json(await host.PostAsync("/api/v1/meetings/instant", new { title = "   ", category = "GROUP" }));
+        Assert.True(noTitle.GetProperty("errors").TryGetProperty("title", out _));
         // Not signed in → 401.
         Assert.Equal(HttpStatusCode.Unauthorized, (await (await fx.NewClientAsync()).PostAsync("/api/v1/meetings/instant", new { })).StatusCode);
     }
@@ -87,12 +90,122 @@ public sealed class MeetingLinkTests(ApiFixture fx)
     public async Task Audio_only_meeting_tokens_do_not_allow_a_camera()
     {
         var host = await SignedIn("rhost@test.invalid");
-        var m = await StartInstant(host, new { audioOnly = true });
+        var m = await StartInstant(host, new { title = "Audio only", audioOnly = true });
         var conn = (await Json(await host.PostAsync($"/api/v1/meetings/{m.Id}/join"))).GetProperty("connection");
         Assert.False(conn.GetProperty("canPublishVideo").GetBoolean());
         var sources = Sources(Claims(conn.GetProperty("token").GetString()!));
         Assert.DoesNotContain("camera", sources);
         Assert.Contains("microphone", sources);
+    }
+
+    [Fact]
+    public async Task Link_codes_are_22_characters_old_43_character_links_still_work_and_junk_is_refused()
+    {
+        // 18 Nov 2026: shorter links - 16 random bytes (128-bit) = 22 base64url characters, was 32 bytes / 43.
+        var host = await SignedIn("rhost@test.invalid");
+        var m = await StartInstant(host, new { title = "Short link test" });
+        Assert.Equal(22, m.Token.Length);
+        Assert.Matches("^[A-Za-z0-9_-]{22}$", m.Token);
+        var guest = await fx.NewClientAsync();
+        Assert.Equal(HttpStatusCode.OK, (await guest.Http.GetAsync($"/api/v1/m/{m.Token}")).StatusCode);
+        var req = await Json(await guest.PostAsync($"/api/v1/m/{m.Token}/request", new { displayName = "Short Link" }));
+        var personal = req.GetProperty("joinToken").GetString()!;
+        Assert.Equal(22, personal.Length); // personal join links too
+        Assert.Equal(HttpStatusCode.OK, (await guest.Http.GetAsync($"/api/v1/join/{personal}")).StatusCode);
+
+        // Two links never share a code.
+        var other = await StartInstant(host, new { title = "Short link test 2" });
+        Assert.NotEqual(m.Token, other.Token);
+
+        // A link made before the change (43 characters) keeps working: codes are looked up by their hash.
+        var legacy = OneInsure.Connect.Api.Security.Tokens.New();
+        Assert.Equal(43, legacy.Length);
+        await Exec("""
+            UPDATE l SET TokenHash = @h FROM mtg.MeetingLinks l JOIN mtg.Meetings mt ON mt.MeetingId = l.MeetingId
+            WHERE mt.PublicId = @id AND l.RevokedUtc IS NULL
+            """, new { h = OneInsure.Connect.Api.Security.Tokens.Hash(legacy), id = other.Id });
+        var old = await Json(await guest.Http.GetAsync($"/api/v1/m/{legacy}"));
+        Assert.Equal("Short link test 2", old.GetProperty("title").GetString());
+
+        // Wrong length or characters: "not found" at routing, before any lookup - for every link endpoint.
+        foreach (var junk in new[] { "abc", m.Token[..21], m.Token + "x", new string('A', 30), m.Token[..21] + "!", "..%2F..%2Fetc" })
+        {
+            Assert.Equal(HttpStatusCode.NotFound, (await guest.Http.GetAsync($"/api/v1/m/{junk}")).StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, (await guest.PostAsync($"/api/v1/m/{junk}/request", new { displayName = "X" })).StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, (await guest.Http.GetAsync($"/api/v1/join/{junk}")).StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, (await guest.PostAsync($"/api/v1/join/{junk}/enter", new { displayName = "X" })).StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, (await guest.Http.GetAsync($"/api/v1/join/{junk}/recording")).StatusCode);
+        }
+        // Same friendly JSON answer as an unknown code, so the link page shows its usual message.
+        Assert.Equal("NOT_FOUND", await Code(await guest.Http.GetAsync("/api/v1/m/abc")));
+        Assert.Equal("NOT_FOUND", await Code(await guest.Http.GetAsync("/api/v1/join/abc")));
+        // A well-formed code that does not exist: still just "not found" (nothing about whether it ever existed).
+        var unknown = OneInsure.Connect.Api.Security.Tokens.NewLinkToken();
+        Assert.Equal(HttpStatusCode.NotFound, (await guest.Http.GetAsync($"/api/v1/m/{unknown}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Android_app_screen_companion_token_may_only_publish_a_screen_for_a_participant_in_a_live_meeting()
+    {
+        // 19 Nov 2026: phone screen sharing from the Android app = a second, screen-only connection "<identity>.screen".
+        var host = await SignedIn("rhost@test.invalid");
+        var m = await StartInstant(host, new { title = "Phone present test" });
+        var url = $"/api/v1/meetings/{m.Id}/room/screen-companion";
+
+        // Not live yet (host has not joined): refused.
+        Assert.Equal(HttpStatusCode.Conflict, (await host.PostAsync(url)).StatusCode);
+        var join = await Json(await host.PostAsync($"/api/v1/meetings/{m.Id}/join"));
+        var hostIdentity = join.GetProperty("connection").GetProperty("identity").GetString()!;
+
+        var r = await Json(await host.PostAsync(url));
+        Assert.Equal(hostIdentity + ".screen", r.GetProperty("identity").GetString());
+        var claims = Claims(r.GetProperty("token").GetString()!);
+        var video = claims.GetProperty("video");
+        Assert.Equal(hostIdentity + ".screen", claims.GetProperty("sub").GetString());
+        Assert.Equal(["screen_share"], Sources(claims));               // no camera, microphone or screen audio
+        Assert.False(video.GetProperty("canSubscribe").GetBoolean());   // sees and hears nothing
+        Assert.False(video.GetProperty("canPublishData").GetBoolean()); // no chat / data messages
+        Assert.False(video.GetProperty("roomAdmin").GetBoolean());
+        Assert.False(video.GetProperty("canUpdateOwnMetadata").GetBoolean());
+        var meta = JsonDocument.Parse(claims.GetProperty("metadata").GetString()!).RootElement;
+        Assert.Equal("SCREEN", meta.GetProperty("role").GetString());
+        Assert.Equal(hostIdentity, meta.GetProperty("owner").GetString());
+        var exp = DateTimeOffset.FromUnixTimeSeconds(claims.GetProperty("exp").GetInt64());
+        Assert.True(exp <= DateTimeOffset.UtcNow.AddMinutes(11)); // short-lived
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE EntityId = @id AND [Action] = 'ROOM_SCREEN_APP_TOKEN_ISSUED'", new { id = m.Id.ToString() }));
+
+        // Not signed in / not a participant: refused.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await (await fx.NewClientAsync()).PostAsync(url)).StatusCode);
+        var outsider = await SignedIn("rout@test.invalid");
+        Assert.NotEqual(HttpStatusCode.OK, (await outsider.PostAsync(url)).StatusCode);
+
+        // A guest from the link: only once admitted.
+        var guest = await fx.NewClientAsync();
+        var req = await Json(await guest.PostAsync($"/api/v1/m/{m.Token}/request", new { displayName = "Phone Guest" }));
+        var personal = req.GetProperty("joinToken").GetString()!;
+        var gurl = $"/api/v1/join/{personal}/screen-companion";
+        Assert.Equal(HttpStatusCode.Forbidden, (await guest.PostAsync(gurl)).StatusCode); // not in the meeting yet
+        var entryId = (await Json(await guest.PostAsync($"/api/v1/join/{personal}/enter", new { displayName = "Phone Guest" }))).GetProperty("entryId").GetString()!;
+        Assert.Equal(HttpStatusCode.Forbidden, (await guest.PostAsync(gurl)).StatusCode); // still waiting
+        var waiting = (await Json(await host.Http.GetAsync($"/api/v1/meetings/{m.Id}/room/waiting"))).GetProperty("items");
+        await host.PostAsync($"/api/v1/meetings/{m.Id}/room/waiting/{waiting[0].GetProperty("id").GetString()}/admit");
+        var admitted = await Json(await guest.Http.GetAsync($"/api/v1/join/{personal}/entry/{entryId}"));
+        var guestIdentity = Claims(admitted.GetProperty("connection").GetProperty("token").GetString()!).GetProperty("sub").GetString()!;
+        var gr = await Json(await guest.PostAsync(gurl));
+        var gclaims = Claims(gr.GetProperty("token").GetString()!);
+        Assert.Equal(guestIdentity + ".screen", gclaims.GetProperty("sub").GetString());
+        Assert.Equal("Phone Guest", gclaims.GetProperty("name").GetString());
+        Assert.Equal(["screen_share"], Sources(gclaims));
+        Assert.False(gclaims.GetProperty("video").GetProperty("canSubscribe").GetBoolean());
+
+        // Removing the guest also removes their phone screen.
+        var room = await fx.QueryAsync<string>("SELECT LiveKitRoomName FROM mtg.Meetings WHERE PublicId = @id", new { id = m.Id });
+        Assert.Equal(HttpStatusCode.NoContent, (await host.PostAsync($"/api/v1/meetings/{m.Id}/room/participants/{guestIdentity}/remove", new { block = true })).StatusCode);
+        Assert.Contains(fx.LiveKit.For(room), c => c.Method == "RemoveParticipant" && c.Body.GetProperty("identity").GetString() == guestIdentity + ".screen");
+        Assert.Equal(HttpStatusCode.Forbidden, (await guest.PostAsync(gurl)).StatusCode); // blocked: no screen token any more
+
+        // The screen connection is not a meeting participant: the host cannot "remove" or mute it as a person.
+        Assert.Equal(HttpStatusCode.NotFound, (await host.PostAsync($"/api/v1/meetings/{m.Id}/room/participants/{hostIdentity}.screen/remove", new { })).StatusCode);
     }
 
     [Fact]
@@ -232,7 +345,8 @@ public sealed class MeetingLinkTests(ApiFixture fx)
             cfg.AddInMemoryCollection(new Dictionary<string, string?> { ["Meetings:JoinPermitPerMinute"] = "3" })));
         var http = factory.CreateClient();
         var codes = new List<HttpStatusCode>();
-        for (var i = 0; i < 5; i++) codes.Add((await http.GetAsync($"/api/v1/m/guess-{i}")).StatusCode);
+        // Well-formed guesses (malformed ones are refused at routing before the limiter, costing nothing).
+        for (var i = 0; i < 5; i++) codes.Add((await http.GetAsync($"/api/v1/m/{OneInsure.Connect.Api.Security.Tokens.NewLinkToken()}")).StatusCode);
         Assert.Equal([HttpStatusCode.NotFound, HttpStatusCode.NotFound, HttpStatusCode.NotFound, (HttpStatusCode)429, (HttpStatusCode)429], codes);
     }
 
@@ -240,7 +354,7 @@ public sealed class MeetingLinkTests(ApiFixture fx)
     public async Task Ended_meeting_links_cannot_be_used()
     {
         var host = await SignedIn("rhost@test.invalid");
-        var m = await StartInstant(host, new { });
+        var m = await StartInstant(host, new { title = "Defaults" });
         Assert.Equal(HttpStatusCode.NoContent, (await host.PostAsync($"/api/v1/meetings/{m.Id}/room/end")).StatusCode);
         var anon = await fx.NewClientAsync();
         Assert.Equal("ENDED", (await Json(await anon.Http.GetAsync($"/api/v1/m/{m.Token}"))).GetProperty("status").GetString());

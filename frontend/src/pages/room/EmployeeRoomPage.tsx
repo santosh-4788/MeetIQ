@@ -1,4 +1,4 @@
-﻿import { useCallback, useMemo, useState, type ReactNode } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, CalendarClock, CircleAlert, RotateCw } from 'lucide-react'
 import { authApi } from '../../api'
@@ -16,6 +16,8 @@ import { PreJoin, type MediaChoices, type PreviewTracks } from './PreJoin'
 import { RoomExitScreen } from './RoomExitScreen'
 import { CanvasButton, RoomLoading, RoomMessage } from './RoomScreens'
 import type { RoomBackend } from './roomUi'
+import { prepareHostAlerts } from './hostAlerts'
+import { clearRejoin, dropRejoin, markInMeeting, pendingRejoin } from './rejoin'
 
 /** /meetings/:id/room — signed-in employees: pre-join → room → exit screen. Lazy-loaded (LiveKit is not in the main bundle). */
 export default function EmployeeRoomPage() {
@@ -54,6 +56,7 @@ function Flow({ m, back, reload }: { m: MeetingDetail; back: ReactNode; reload: 
       postChat: (body) => roomApi.postChat(m.id, body),
       keepAlive: () => authApi.me(),
       features: employeeFeatureCalls(m.id),
+      screenCompanion: () => roomApi.screenCompanion(m.id),
       hasEnded: () => meetingsApi.get(m.id).then((d) => d.status === 'COMPLETED' || d.status === 'CANCELLED'),
       recording: {
         state: () => roomRecordingApi.state(m.id),
@@ -86,9 +89,24 @@ function Flow({ m, back, reload }: { m: MeetingDetail; back: ReactNode; reload: 
   }, [joined, m.id, m.my.canShareLink]) // eslint-disable-line react-hooks/exhaustive-deps -- `entry` is fixed for this visit
 
   const onExit = useCallback((x: RoomExit) => {
+    clearRejoin()
     setExit(x)
     setPhase('exit')
   }, [])
+
+  // The page was refreshed during the meeting: rejoin at once with the same choices, without the "Join now" screen.
+  const [rejoining, setRejoining] = useState(() => (m.join.joinable ? pendingRejoin() : null))
+  const rejoinStarted = useRef(false)
+  useEffect(() => {
+    if (!rejoining || rejoinStarted.current) return
+    rejoinStarted.current = true
+    dropRejoin()
+    // Failed (e.g. the meeting ended meanwhile): the normal "Join now" screen with the reason.
+    void join(rejoining.media, {}, true).finally(() => setRejoining(null))
+  }, [rejoining]) // eslint-disable-line react-hooks/exhaustive-deps -- once per page load
+  useEffect(() => {
+    if (phase === 'room' && media) markInMeeting(media)
+  }, [phase, media])
 
   if (phase === 'room' && joined && media && backend)
     return <MeetingRoom connection={joined.connection} meeting={joined.meeting} media={media} tracks={tracks} backend={backend} onExit={onExit} />
@@ -123,7 +141,9 @@ function Flow({ m, back, reload }: { m: MeetingDetail; back: ReactNode; reload: 
     )
   }
 
-  async function join(choices: MediaChoices, previews: PreviewTracks) {
+  async function join(choices: MediaChoices, previews: PreviewTracks, auto = false) {
+    // Hosts: allow the end-of-meeting alerts (notification permission, chime) - only possible from this click.
+    if (m.my.canHostRoom && !auto) prepareHostAlerts()
     setBusy(true)
     setError(null)
     try {
@@ -140,6 +160,8 @@ function Flow({ m, back, reload }: { m: MeetingDetail; back: ReactNode; reload: 
       setBusy(false)
     }
   }
+
+  if (rejoining) return <RoomLoading label="Rejoining the meeting…" />
 
   return (
     <PreJoin

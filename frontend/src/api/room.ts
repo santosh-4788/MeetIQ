@@ -80,7 +80,12 @@ export const roomApi = {
   transferHost: (id: string, identity: string) => http<void>(`${one(id)}/room/host-transfer/${encodeURIComponent(identity)}`, { method: 'POST' }),
   /** Keeps out anyone who hasn't already attended once; never locks out the host or people already in the room. */
   setLocked: (id: string, locked: boolean) => http<{ locked: boolean }>(`${one(id)}/room/lock`, { method: 'POST', body: { locked } }),
+  /** Android app: a screen-only connection for presenting the phone screen (see ScreenCompanion on the server). */
+  screenCompanion: (id: string) => http<ScreenCompanionToken>(`${one(id)}/room/screen-companion`, { method: 'POST' }),
 }
+
+/** A screen-only LiveKit connection for the same person (Android app phone screen sharing). */
+export type ScreenCompanionToken = { url: string; token: string; identity: string; name: string; expiresUtc: string }
 
 // ---- Customers and guests (anonymous; the invitation token is the credential) ---------------
 
@@ -101,6 +106,7 @@ export const guestRoomApi = {
   chat: (token: string) => http<{ items: ChatItem[] }>(`${tok(token)}/chat`).then((r) => r.items),
   postChat: (token: string, body: string, name?: string) =>
     http<ChatItem>(`${tok(token)}/chat${name ? `?name=${encodeURIComponent(name)}` : ''}`, { method: 'POST', body: { body } }),
+  screenCompanion: (token: string) => http<ScreenCompanionToken>(`${tok(token)}/screen-companion`, { method: 'POST' }),
   /** Leaving the waiting room. `keepalive` lets it finish while the tab is closing. */
   leave: (token: string, entryId: string) => {
     const xsrf = document.cookie.split('; ').find((c) => c.startsWith('XSRF-TOKEN='))?.split('=')[1]

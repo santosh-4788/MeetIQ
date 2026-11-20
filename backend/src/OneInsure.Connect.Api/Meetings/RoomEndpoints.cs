@@ -86,15 +86,53 @@ public static class RoomEndpoints
         g.MapPost("/room/extend", Extend);
         g.MapPost("/room/host-transfer/{identity}", TransferHost);
         g.MapPost("/room/lock", SetLocked);
+        g.MapPost("/room/screen-companion", EmployeeScreenCompanion);
 
         // Customers and guests: the personal invitation token is their credential (no account, no session).
-        var j = api.MapGroup("/join/{token}");
+        var j = api.MapGroup("/join/" + Tokens.LinkTokenRoute);
         j.MapPost("/enter", GuestEnter).RequireRateLimiting(NotificationEndpoints.JoinRateLimit);
         j.MapGet("/entry/{entryId}", GuestPoll).RequireRateLimiting(GuestRateLimit);
         j.MapPost("/entry/{entryId}/leave", GuestLeave).RequireRateLimiting(GuestRateLimit);
         j.MapGet("/chat", GuestChatHistory).RequireRateLimiting(GuestRateLimit);
         j.MapPost("/chat", GuestPostChat).RequireRateLimiting(GuestRateLimit);
+        j.MapPost("/screen-companion", GuestScreenCompanion).RequireRateLimiting(GuestRateLimit);
         return api;
+    }
+
+    // ---- Phone screen sharing (Android app) ------------------------------------------------------------------------
+
+    /// <summary>
+    /// POST /meetings/{id}/room/screen-companion — the Android app's screen-only connection for the signed-in participant
+    /// (see <see cref="ScreenCompanion"/>). Only in a live meeting, only for someone who may present.
+    /// </summary>
+    static async Task<IResult> EmployeeScreenCompanion(Guid id, RoomServices s, HttpContext ctx, CancellationToken ct)
+    {
+        if (!s.LiveKit.IsConfigured) return Unavailable();
+        using var c = await s.Db.OpenAsync(ct);
+        var (caller, error) = await CallerAsync(c, id, ctx, hostOnly: false);
+        if (caller is null) return error!;
+        return await ScreenCompanionAsync(c, s, caller.Meeting, caller.Participant!, ctx, caller.Me.UserId, "USER");
+    }
+
+    /// <summary>POST /join/{token}/screen-companion — the same for a customer or guest who is in the meeting (admitted).</summary>
+    static async Task<IResult> GuestScreenCompanion(string token, RoomServices s, HttpContext ctx, CancellationToken ct)
+    {
+        if (!s.LiveKit.IsConfigured) return Unavailable();
+        using var c = await s.Db.OpenAsync(ct);
+        var g = await AdmittedGuestAsync(c, s, token);
+        if (g is null) return Problems.Create(403, "FORBIDDEN", "Presenting is available once you are in the meeting.");
+        return await ScreenCompanionAsync(c, s, g.Value.M, g.Value.P, ctx, null, "CUSTOMER"); // audit actor type for customers and guests
+    }
+
+    static async Task<IResult> ScreenCompanionAsync(IDbConnection c, RoomServices s, RoomMeeting m, RoomParticipant p, HttpContext ctx, long? userId, string actorType)
+    {
+        if (m.Status != "LIVE") return Problems.Create(409, "CONFLICT", "You can present once the meeting has started.");
+        // Same rule as the browser's Present button (Connection): anyone allowed to speak may present.
+        if (!p.CanPublish) return Problems.Create(403, "FORBIDDEN", "You cannot present in this meeting.");
+        var (token, exp, identity) = s.Tokens.CreateScreenCompanionToken(m.LiveKitRoomName, p.Identity, p.Name, s.Clock.UtcNow);
+        await Audit.WriteAsync(c, actorType, userId, "ROOM_SCREEN_APP_TOKEN_ISSUED", "Meeting", m.PublicId.ToString(),
+            "Phone screen sharing (app) started", ClientInfo.From(ctx).Ip, newValues: new { participantId = p.Identity, screenIdentity = identity });
+        return Results.Ok(new { url = s.LiveKit.PublicUrl, token, identity, name = p.Name, expiresUtc = exp });
     }
 
     /// <summary>Everything the room endpoints need, resolved once per request.</summary>
@@ -393,6 +431,9 @@ public static class RoomEndpoints
         bool removed;
         try { removed = await s.Rooms.RemoveParticipantAsync(caller.Meeting.LiveKitRoomName, identity, ct); }
         catch (LiveKitUnavailableException e) { return Unavailable(e.Message); }
+        // Their phone screen sharing (Android app) goes with them.
+        try { await s.Rooms.RemoveParticipantAsync(caller.Meeting.LiveKitRoomName, ScreenCompanion.IdentityFor(identity), ct); }
+        catch (LiveKitUnavailableException) { /* the person is already removed; the screen connection cannot outlive the meeting */ }
         // A removed customer/guest must ask again: their earlier admission no longer lets them back in.
         await c.ExecuteAsync("UPDATE mtg.WaitingRoomEntries SET [Status] = 'LEFT' WHERE ParticipantId = @p AND [Status] IN ('WAITING', 'ADMITTED')", new { p = target.Value.ParticipantId });
         var block = input?.Block == true;

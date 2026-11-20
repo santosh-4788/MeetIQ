@@ -31,6 +31,9 @@ public static class DashboardEndpoints
             var userId = ctx.User.UserId();
             var allMeetings = ctx.User.HasClaim(SessionClaims.Permission, "meetings.view.all");
             var allRecordings = ctx.User.HasClaim(SessionClaims.Permission, "recordings.view.all");
+            // 17 Nov 2026: "Total Employees" is the whole company only for people who manage employees; everyone else sees their
+            // team (TeamSql: own department, departments they head, people reporting to them).
+            var allEmployees = ctx.User.HasClaim(SessionClaims.Permission, "employees.manage");
 
             using var c = await db.OpenAsync(ct);
             var scope = await c.QuerySingleAsync<Scope>("SELECT EmployeeId, TimeZoneId FROM auth.Users WHERE UserId = @userId", new { userId });
@@ -41,13 +44,13 @@ public static class DashboardEndpoints
             var monthStartLocal = new DateTime(localToday.Year, localToday.Month, 1);
             var p = new
             {
-                emp = scope.EmployeeId, all = allMeetings, recAll = allRecordings, now, weekAhead = now.AddDays(7),
+                emp = scope.EmployeeId, all = allMeetings, recAll = allRecordings, empAll = allEmployees, now, weekAhead = now.AddDays(7),
                 todayStart = Utc(localToday), todayEnd = Utc(localToday.AddDays(1)),
                 weekStart = Utc(localToday.AddDays(-6)), weekAgo = now.AddDays(-7), monthAgo = now.AddDays(-30),
                 monthStart = Utc(monthStartLocal), monthEnd = Utc(monthStartLocal.AddMonths(1)),
             };
 
-            using var multi = await c.QueryMultipleAsync(Sql, p);
+            using var multi = await c.QueryMultipleAsync(Sql.Replace("{{TEAM}}", TeamSql), p);
             var kpis = await multi.ReadSingleAsync<Kpis>();
             var meetings = (await multi.ReadAsync<MeetingRow>()).Select(m => ToSummary(m, now, mo.Value, lk.Value.IsConfigured)).ToList();
             var activity = (await multi.ReadAsync<ActivityRow>()).Select(a => new
@@ -65,6 +68,7 @@ public static class DashboardEndpoints
             var trendRows = (await multi.ReadAsync<TrendRow>()).ToList();
             var attendance = await multi.ReadSingleAsync<AttendanceRow>();
             var recordings = await multi.ReadSingleAsync<RecordingRow>();
+            var employeesScope = allEmployees || scope.EmployeeId is null ? null : await c.ExecuteScalarAsync<string?>(TeamLabelSql, new { emp = scope.EmployeeId });
 
             var weeklyTrend = Enumerable.Range(0, 7).Select(i => localToday.AddDays(i - 6)).Select(day =>
             {
@@ -81,7 +85,7 @@ public static class DashboardEndpoints
                 generatedUtc = nowUtc,
                 kpis = new
                 {
-                    totalEmployees = kpis.TotalEmployees, todaysMeetings = kpis.TodaysMeetings, upcomingMeetings = kpis.UpcomingMeetings,
+                    totalEmployees = kpis.TotalEmployees, employeesScope, todaysMeetings = kpis.TodaysMeetings, upcomingMeetings = kpis.UpcomingMeetings,
                     internalMeetings = kpis.InternalMeetings, customerMeetings = kpis.CustomerMeetings, completedMeetings = kpis.CompletedMeetings,
                     totalRecordings = kpis.TotalRecordings, pendingRecordings = kpis.PendingRecordings,
                 },
@@ -96,8 +100,64 @@ public static class DashboardEndpoints
                 recordingStatus = new { completed = recordings.Completed, processing = recordings.Processing, pending = recordings.Pending, failed = recordings.Failed },
             });
         }).RequirePermission("dashboard.view");
+
+        // The people behind the "My Team" tile (only for users who do not manage employees - they have the Employees page).
+        api.MapGet("/dashboard/team", async (HttpContext ctx, Db db, CancellationToken ct) =>
+        {
+            if (ctx.User.HasClaim(SessionClaims.Permission, "employees.manage")) return Results.Ok(Array.Empty<object>());
+            using var c = await db.OpenAsync(ct);
+            var emp = await c.ExecuteScalarAsync<long?>("SELECT EmployeeId FROM auth.Users WHERE UserId = @userId", new { userId = ctx.User.UserId() });
+            if (emp is null) return Results.Ok(Array.Empty<object>());
+            var rows = await c.QueryAsync<TeamRow>($"""
+                SET NOCOUNT ON;
+                {TeamSql}
+                SELECT e.DisplayName, e.EmployeeCode, g.Name AS Designation, d.Name AS Department,
+                       CAST(CASE WHEN e.EmployeeId = @emp THEN 1 ELSE 0 END AS BIT) AS IsMe,
+                       CAST(CASE WHEN e.ReportingManagerId = @emp THEN 1 ELSE 0 END AS BIT) AS ReportsToMe,
+                       CAST(CASE WHEN d.HeadEmployeeId = e.EmployeeId THEN 1 ELSE 0 END AS BIT) AS IsHead
+                FROM #team t JOIN org.Employees e ON e.EmployeeId = t.EmployeeId
+                JOIN org.Departments d ON d.DepartmentId = e.DepartmentId JOIN org.Designations g ON g.DesignationId = e.DesignationId
+                ORDER BY CASE WHEN d.HeadEmployeeId = e.EmployeeId THEN 0 ELSE 1 END, d.Name, e.DisplayName;
+                """, new { emp });
+            return Results.Ok(rows.Select(r => new
+            {
+                name = r.DisplayName, employeeCode = r.EmployeeCode, designation = r.Designation, department = r.Department,
+                isMe = r.IsMe, reportsToMe = r.ReportsToMe, isHead = r.IsHead,
+            }));
+        }).RequirePermission("dashboard.view");
         return api;
     }
+
+    sealed record TeamRow(string DisplayName, string EmployeeCode, string Designation, string Department, bool IsMe, bool ReportsToMe, bool IsHead);
+
+    /// <summary>
+    /// #team = the active employees a non-admin user may count as "my team": their own department, the departments they head,
+    /// and everyone reporting to them (directly or further down). Expects @emp (the user's employee id).
+    /// </summary>
+    const string TeamSql = """
+        CREATE TABLE #team (EmployeeId BIGINT PRIMARY KEY);
+        IF @emp IS NOT NULL
+        BEGIN
+            WITH reports AS (
+                SELECT EmployeeId, 1 AS depth FROM org.Employees WHERE ReportingManagerId = @emp
+                UNION ALL
+                SELECT e.EmployeeId, r.depth + 1 FROM org.Employees e JOIN reports r ON e.ReportingManagerId = r.EmployeeId WHERE r.depth < 20)
+            INSERT #team (EmployeeId)
+            SELECT x.EmployeeId FROM org.Employees x
+            WHERE x.IsActive = 1 AND (x.EmployeeId = @emp
+               OR x.DepartmentId = (SELECT DepartmentId FROM org.Employees WHERE EmployeeId = @emp)
+               OR x.DepartmentId IN (SELECT DepartmentId FROM org.Departments WHERE HeadEmployeeId = @emp)
+               OR x.EmployeeId IN (SELECT EmployeeId FROM reports))
+            OPTION (MAXRECURSION 50);
+        END
+        """;
+
+    /// <summary>"PLVC" (or "PLVC, Sales" for someone heading two departments): the tile's footnote.</summary>
+    const string TeamLabelSql = """
+        SELECT STRING_AGG(Name, ', ') WITHIN GROUP (ORDER BY Name) FROM (
+            SELECT DISTINCT d.Name FROM org.Departments d
+            WHERE d.DepartmentId = (SELECT DepartmentId FROM org.Employees WHERE EmployeeId = @emp) OR d.HeadEmployeeId = @emp) x
+        """;
 
     sealed record MeetingSummary(string id, string title, string category, DateTime startUtc, DateTime endUtc, string organiser,
         string[] participants, string status, bool recording, string? customerName, bool joinable, DateTime joinOpensUtc);
@@ -143,8 +203,10 @@ public static class DashboardEndpoints
         FROM rec.MeetingRecordings r
         WHERE r.[Status] <> 'PURGED' AND (@recAll = 1 OR r.OwnerEmployeeId = @emp);
 
+        {{TEAM}}
+
         SELECT
-          (SELECT COUNT(*) FROM org.Employees WHERE IsActive = 1) AS TotalEmployees,
+          CASE WHEN @empAll = 1 THEN (SELECT COUNT(*) FROM org.Employees WHERE IsActive = 1) ELSE (SELECT COUNT(*) FROM #team) END AS TotalEmployees,
           (SELECT COUNT(*) FROM #vis WHERE ScheduledStartUtc >= @todayStart AND ScheduledStartUtc < @todayEnd AND [Status] <> 'CANCELLED') AS TodaysMeetings,
           (SELECT COUNT(*) FROM #vis WHERE ScheduledStartUtc > @now AND ScheduledStartUtc < @weekAhead AND [Status] = 'SCHEDULED') AS UpcomingMeetings, -- "Next 7 days" in the UI
           (SELECT COUNT(*) FROM #vis WHERE ScheduledStartUtc >= @monthStart AND ScheduledStartUtc < @monthEnd AND [Status] <> 'CANCELLED' AND Category NOT IN ('CUSTOMER_PLVC', 'CUSTOMER_GENERAL')) AS InternalMeetings,

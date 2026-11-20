@@ -11,6 +11,8 @@ import {
   ConnectionState, DisconnectReason, Participant, RemoteParticipant, RemoteTrack, RemoteTrackPublication, Room, RoomEvent, Track,
   type SimulationScenario,
 } from 'livekit-client'
+// The meeting room's own whiteboard drawing code, so the recording shows the board exactly as participants see it.
+import { BOARD_H, BOARD_W, applyOpTo, mayDrawRole, parseScene, renderBoard, type Op, type Shape } from '../../../frontend/src/pages/room/features/whiteboardRender'
 
 type RecorderConfig = {
   url: string
@@ -115,9 +117,123 @@ room
     emit(ended ? 'room_ended' : 'disconnected', { reason: reason === undefined ? 'unknown' : DisconnectReason[reason] })
     void stopRecording()
   })
+  .on(RoomEvent.DataReceived, onData)
+
+// ---------------------------------------------------------------------------
+// Whiteboard and polls (15 Nov 2026). Topics and trust rules are the meeting room's own: open/close, who may draw, the saved
+// drawing and poll results come only from the server (no sending participant); strokes come from participants and are used
+// only when that participant may draw. The server sends the state from before the recorder joined (RoomFeatureEndpoints).
+
+const TOPIC_WB = 'oic.wb'
+const TOPIC_WB_STATE = 'oic.wb-state'
+const TOPIC_REC_SCENE = 'oic.rec-scene'
+const TOPIC_POLL = 'oic.poll'
+const SCENE_WAIT_MS = 5000 // board opened but no saved drawing arrived: start from what has been drawn live
+const POLL_RESULT_MS = 15_000 // a closed poll's final result stays on screen this long
+
+const board = { open: false, drawMode: 'EVERYONE', allowed: [] as string[], shapes: [] as Shape[], loaded: false, pending: [] as Op[], openedAt: 0, dirty: true, waitTimer: 0 }
+const sceneParts = new Map<string, { parts: number; got: (string | undefined)[]; n: number }>()
+type PollView = { id: string; question: string; closed: boolean; yes: number; no: number; total: number; closedAt: number }
+let poll: PollView | null = null
+const shareStartedAt = new Map<string, number>() // identity -> when their screen share arrived (the newer of share/board is shown)
+const decoder = new TextDecoder()
+
+/** Android app phone screen (19 Nov 2026): a screen-only connection "<identity>.screen" (metadata role SCREEN). Its screen is
+ *  recorded as "<name> is presenting"; it is never drawn as a person tile nor counted as a participant. */
+function isScreenCompanion(p: Participant) {
+  return p.identity.endsWith('.screen') || roleOf(p) === 'SCREEN'
+}
+const realPeople = () => [...room.remoteParticipants.values()].filter((p) => !isScreenCompanion(p))
+
+function roleOf(p: Participant) {
+  try {
+    return (JSON.parse(p.metadata || '{}') as { role?: string }).role ?? 'ATTENDEE'
+  } catch {
+    return 'ATTENDEE'
+  }
+}
+
+function onData(payload: Uint8Array, participant?: RemoteParticipant, _kind?: unknown, topic?: string) {
+  if (topic !== TOPIC_WB && topic !== TOPIC_WB_STATE && topic !== TOPIC_REC_SCENE && topic !== TOPIC_POLL) return
+  let d: unknown
+  try {
+    d = JSON.parse(decoder.decode(payload))
+  } catch {
+    return
+  }
+  if (topic === TOPIC_WB_STATE && !participant) setBoardState(d as { isOpen?: boolean; drawMode?: string; allowed?: unknown })
+  else if (topic === TOPIC_REC_SCENE && !participant) onScenePart(d as { id?: string; part?: number; parts?: number; data?: string })
+  else if (topic === TOPIC_WB && participant && board.open && mayDrawRole(roleOf(participant), participant.identity, board)) {
+    if (board.loaded) applyBoardOp(d as Op)
+    else board.pending.push(d as Op)
+  } else if (topic === TOPIC_POLL && !participant) {
+    const p = (d as { poll?: Omit<PollView, 'closedAt'> | null }).poll
+    if (p && typeof p.question === 'string') setPoll(p)
+  }
+}
+
+function applyBoardOp(op: Op) {
+  board.shapes = applyOpTo(board.shapes, op)
+  board.dirty = true
+}
+
+function finishBoardLoad(shapes: Shape[] | null) {
+  window.clearTimeout(board.waitTimer)
+  if (shapes) {
+    // Already showing live strokes (the saved drawing came late): keep those the saved copy does not have yet.
+    const ids = new Set(shapes.map((s) => s.id))
+    board.shapes = board.loaded ? [...shapes, ...board.shapes.filter((s) => !ids.has(s.id))] : shapes
+  }
+  board.loaded = true
+  board.pending.splice(0).forEach(applyBoardOp)
+  board.dirty = true
+}
+
+function setBoardState(d: { isOpen?: boolean; drawMode?: string; allowed?: unknown }) {
+  const wasOpen = board.open
+  board.open = !!d.isOpen
+  board.drawMode = typeof d.drawMode === 'string' ? d.drawMode : board.drawMode
+  board.allowed = Array.isArray(d.allowed) ? d.allowed.filter((x): x is string => typeof x === 'string') : []
+  if (board.open && !wasOpen) {
+    board.openedAt = performance.now()
+    board.shapes = []
+    board.pending = []
+    board.loaded = false
+    board.waitTimer = window.setTimeout(() => finishBoardLoad(null), SCENE_WAIT_MS)
+  } else if (!board.open && wasOpen) {
+    window.clearTimeout(board.waitTimer)
+    board.shapes = []
+    board.pending = []
+    board.loaded = false
+  }
+  board.dirty = true
+  if (board.open !== wasOpen) emit('whiteboard', { open: board.open })
+}
+
+function onScenePart(d: { id?: string; part?: number; parts?: number; data?: string }) {
+  if (typeof d.id !== 'string' || typeof d.part !== 'number' || typeof d.parts !== 'number' || d.parts < 1 || d.parts > 500 || d.part < 0 || d.part >= d.parts) return
+  const s = sceneParts.get(d.id) ?? { parts: d.parts, got: new Array<string | undefined>(d.parts), n: 0 }
+  sceneParts.set(d.id, s)
+  if (s.got[d.part] === undefined) {
+    s.got[d.part] = typeof d.data === 'string' ? d.data : ''
+    s.n++
+  }
+  if (s.n < s.parts) return
+  sceneParts.delete(d.id)
+  if (board.open) finishBoardLoad(parseScene(s.got.join('')))
+}
+
+function setPoll(p: Omit<PollView, 'closedAt'>) {
+  const seenOpen = poll?.id === p.id && !poll.closed
+  // A poll that was already closed before the recorder saw it open (e.g. the snapshot on joining) is not shown again.
+  const closedAt = p.closed ? (seenOpen ? performance.now() : poll?.id === p.id ? poll.closedAt : 0) : 0
+  poll = { id: p.id, question: p.question, closed: !!p.closed, yes: p.yes | 0, no: p.no | 0, total: p.total | 0, closedAt }
+  emit('poll', { id: p.id, closed: poll.closed, total: poll.total })
+}
 
 function onTrackSubscribed(track: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) {
   emit('track_subscribed', { identity: p.identity, kind: track.kind, source: pub.source })
+  if (pub.source === Track.Source.ScreenShare) shareStartedAt.set(p.identity, performance.now())
   if (track.kind === Track.Kind.Video) {
     const reader = new MediaStreamTrackProcessor({ track: track.mediaStreamTrack }).readable.getReader()
     const src: FrameSource = { frame: null, reader, frames: 0 }
@@ -201,8 +317,9 @@ function videoFor(p: RemoteParticipant, source: Track.Source) {
   return f && f.displayWidth > 0 ? f : undefined
 }
 
-function drawCover(el: VideoFrame, r: Rect, contain = false) {
-  const vw = el.displayWidth, vh = el.displayHeight
+function drawCover(el: VideoFrame | HTMLCanvasElement, r: Rect, contain = false) {
+  const vw = el instanceof HTMLCanvasElement ? el.width : el.displayWidth
+  const vh = el instanceof HTMLCanvasElement ? el.height : el.displayHeight
   const vr = vw / vh
   const rr = r.w / r.h
   let sw = vw, sh = vh, sx = 0, sy = 0
@@ -310,6 +427,105 @@ function hhmmss(ms: number) {
   return [Math.floor(s / 3600), Math.floor((s % 3600) / 60), s % 60].map((x) => String(x).padStart(2, '0')).join(':')
 }
 
+// The whiteboard is painted into its own canvas only when it changes, then scaled into the composite like a screen share.
+const boardCanvas = document.createElement('canvas')
+boardCanvas.width = 1280
+boardCanvas.height = Math.round((1280 * BOARD_H) / BOARD_W)
+const boardCtx = boardCanvas.getContext('2d')!
+
+function boardImage() {
+  if (board.dirty) {
+    renderBoard(boardCtx, board.shapes, boardCanvas.width / BOARD_W)
+    board.dirty = false
+  }
+  return boardCanvas
+}
+
+/** What fills the main area: a screen share or the open whiteboard - whichever started more recently - or nothing. */
+function mainContent(people: RemoteParticipant[]): { image: VideoFrame | HTMLCanvasElement; label: string } | null {
+  const sharer = people.find((p) => videoFor(p, Track.Source.ScreenShare))
+  if (sharer && (!board.open || (shareStartedAt.get(sharer.identity) ?? 0) >= board.openedAt))
+    return { image: videoFor(sharer, Track.Source.ScreenShare)!, label: `${sharer.name || sharer.identity} is presenting` }
+  if (board.open) return { image: boardImage(), label: 'Whiteboard' }
+  return null
+}
+
+function drawMain(content: { image: VideoFrame | HTMLCanvasElement; label: string }, main: Rect) {
+  ctx.fillStyle = '#000'
+  ctx.fillRect(main.x, main.y, main.w, main.h)
+  drawCover(content.image, main, true)
+  ctx.font = '600 13px "Segoe UI", sans-serif'
+  const lw = Math.min(ctx.measureText(content.label).width + 20, main.w)
+  ctx.fillStyle = C.label
+  ctx.fillRect(main.x, main.y, Math.max(lw, Math.min(260, main.w)), 26)
+  ctx.fillStyle = C.text
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(content.label, main.x + 10, main.y + 13, main.w - 20)
+}
+
+/** The current poll as a card (top right of the main area, so it never covers a camera tile): question and live Yes/No counts; the final result for a while after it closes. */
+function drawPoll(area: Rect) {
+  if (!poll || (poll.closed && (!poll.closedAt || performance.now() - poll.closedAt > POLL_RESULT_MS))) return
+  const cw = Math.min(360, Math.round(area.w * 0.46))
+  const x = area.x + area.w - cw - 10
+  const y = area.y + 34 // below the "Whiteboard" / "is presenting" label row
+  ctx.font = '600 15px "Segoe UI", sans-serif'
+  const words = poll.question.split(/\s+/)
+  const lines: string[] = []
+  let line = ''
+  for (const word of words) {
+    const t = line ? `${line} ${word}` : word
+    if (ctx.measureText(t).width > cw - 28 && line) {
+      lines.push(line)
+      line = word
+    } else line = t
+  }
+  if (line) lines.push(line)
+  if (lines.length > 3) lines.splice(3, lines.length - 3, `${lines[2].slice(0, Math.max(0, lines[2].length - 1))}…`)
+  const ch = 40 + lines.length * 20 + 2 * 26 + 26
+  ctx.save()
+  ctx.fillStyle = 'rgba(11,30,49,0.92)'
+  ctx.strokeStyle = poll.closed ? 'rgba(148,163,184,0.6)' : C.cyan
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.roundRect(x, y, cw, ch, 12)
+  ctx.fill()
+  ctx.stroke()
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  ctx.font = '700 12px "Segoe UI", sans-serif'
+  ctx.fillStyle = poll.closed ? C.muted : C.cyan
+  ctx.fillText(poll.closed ? 'POLL · FINAL RESULT' : 'POLL · LIVE', x + 14, y + 18)
+  ctx.font = '600 15px "Segoe UI", sans-serif'
+  ctx.fillStyle = C.text
+  lines.forEach((l, i) => ctx.fillText(l, x + 14, y + 42 + i * 20, cw - 28))
+  const pct = (n: number) => (poll!.total ? Math.round((n / poll!.total) * 100) : 0)
+  ;([['Yes', poll.yes, '#34D399'], ['No', poll.no, '#FB7185']] as const).forEach(([label, n, color], i) => {
+    const by = y + 42 + lines.length * 20 + 4 + i * 26
+    ctx.font = '600 13px "Segoe UI", sans-serif'
+    ctx.fillStyle = 'rgba(255,255,255,0.75)'
+    ctx.fillText(label, x + 14, by)
+    const bx = x + 50, bw = cw - 50 - 86
+    ctx.fillStyle = 'rgba(255,255,255,0.12)'
+    ctx.beginPath()
+    ctx.roundRect(bx, by - 5, bw, 10, 5)
+    ctx.fill()
+    ctx.fillStyle = color
+    ctx.beginPath()
+    ctx.roundRect(bx, by - 5, Math.max(pct(n) ? 6 : 0, (bw * pct(n)) / 100), 10, 5)
+    ctx.fill()
+    ctx.fillStyle = C.text
+    ctx.textAlign = 'right'
+    ctx.fillText(`${n} · ${pct(n)}%`, x + cw - 14, by)
+    ctx.textAlign = 'left'
+  })
+  ctx.font = '500 12px "Segoe UI", sans-serif'
+  ctx.fillStyle = C.muted
+  ctx.fillText(`${poll.total} answer${poll.total === 1 ? '' : 's'}`, x + 14, y + ch - 16)
+  ctx.restore()
+}
+
 function draw() {
   const t0 = performance.now()
   const W = activeWidth, H = activeHeight
@@ -317,42 +533,28 @@ function draw() {
   ctx.fillRect(0, 0, W, H)
   const top = 44, pad = 12
   const stage: Rect = { x: pad, y: top, w: W - pad * 2, h: H - top - 34 }
-  const people = [...room.remoteParticipants.values()].sort((a, b) => (a.joinedAt?.getTime() ?? 0) - (b.joinedAt?.getTime() ?? 0))
-  const sharer = people.find((p) => videoFor(p, Track.Source.ScreenShare))
+  const everyone = [...room.remoteParticipants.values()].sort((a, b) => (a.joinedAt?.getTime() ?? 0) - (b.joinedAt?.getTime() ?? 0))
+  const people = everyone.filter((p) => !isScreenCompanion(p))
+  const content = mainContent(everyone) // a phone screen (screen-only connection) is shown like any presentation
+  let pollArea: Rect = stage
 
-  if (sharer && H > W) {
+  if (content && H > W) {
     // Portrait canvas (a 1:1 call locked portrait because a phone camera was portrait, before anyone presented): a
     // side strip left the 16:9 screen at ~3/4 of an already narrow width. Give the screen the full width at the top and
     // put the cameras side by side underneath.
     const shareH = Math.round(stage.w * 9 / 16)
     const main: Rect = { x: stage.x, y: stage.y, w: stage.w, h: shareH }
-    ctx.fillStyle = '#000'
-    ctx.fillRect(main.x, main.y, main.w, main.h)
-    drawCover(videoFor(sharer, Track.Source.ScreenShare)!, main, true)
-    ctx.fillStyle = C.label
-    ctx.fillRect(main.x, main.y, Math.min(260, main.w), 26)
-    ctx.fillStyle = C.text
-    ctx.font = '600 13px "Segoe UI", sans-serif'
-    ctx.textAlign = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(`${sharer.name || sharer.identity} is presenting`, main.x + 10, main.y + 13, main.w - 20)
+    drawMain(content, main)
+    pollArea = main
     const below: Rect = { x: stage.x, y: main.y + main.h + 10, w: stage.w, h: stage.h - main.h - 10 }
     const n = Math.max(people.length, 1)
     const tw = (below.w - 10 * (n - 1)) / n
     people.forEach((p, i) => drawTile(p, { x: below.x + i * (tw + 10), y: below.y, w: tw, h: below.h }, true))
-  } else if (sharer) {
+  } else if (content) {
     const stripW = Math.round(stage.w * 0.22)
     const main: Rect = { x: stage.x, y: stage.y, w: stage.w - stripW - 10, h: stage.h }
-    ctx.fillStyle = '#000'
-    ctx.fillRect(main.x, main.y, main.w, main.h)
-    drawCover(videoFor(sharer, Track.Source.ScreenShare)!, main, true)
-    ctx.fillStyle = C.label
-    ctx.fillRect(main.x, main.y, 260, 26)
-    ctx.fillStyle = C.text
-    ctx.font = '600 13px "Segoe UI", sans-serif'
-    ctx.textAlign = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(`${sharer.name || sharer.identity} is presenting`, main.x + 10, main.y + 13)
+    drawMain(content, main)
+    pollArea = main
     const strip: Rect = { x: main.x + main.w + 10, y: stage.y, w: stripW, h: stage.h }
     const th = Math.min((strip.h - 8 * (people.length - 1)) / Math.max(people.length, 1), strip.w * 9 / 16)
     people.forEach((p, i) => drawTile(p, { x: strip.x, y: strip.y + i * (th + 8), w: strip.w, h: th }, true))
@@ -365,6 +567,7 @@ function draw() {
   } else {
     gridRects(people.length, stage).forEach((r, i) => drawTile(people[i], r))
   }
+  drawPoll(pollArea)
 
   // Header: product + meeting title (left), REC + elapsed (right)
   ctx.textBaseline = 'middle'
@@ -455,18 +658,19 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 async function decideCanvasSize() {
   const deadline = performance.now() + ORIENTATION_DETECT_MS
   for (;;) {
-    if (room.remoteParticipants.size > 2) return // group call: keep the configured landscape size
-    const people = [...room.remoteParticipants.values()]
+    if (realPeople().length > 2) return // group call: keep the configured landscape size
+    const everyone = [...room.remoteParticipants.values()]
+    const people = everyone.filter((p) => !isScreenCompanion(p))
     const frames = people.map((p) => videoFor(p, Track.Source.Camera)).filter((f): f is VideoFrame => !!f)
     const cameraOn = people.filter((p) => { const pub = p.getTrackPublication(Track.Source.Camera); return !!pub && !pub.isMuted }).length
     const allReported = frames.length >= cameraOn
     if (allReported || performance.now() >= deadline) {
-      if (room.remoteParticipants.size > 2) return // someone joined mid-wait, making this a group call after all
+      if (realPeople().length > 2) return // someone joined mid-wait, making this a group call after all
       // Portrait only when EVERY participant is on a portrait camera (in practice: everyone on a phone). A desktop/laptop
       // participant - landscape camera, or camera off - can present at any moment, and MediaRecorder cannot change the
       // canvas size later, so a desktop + phone call that locked portrait recorded the desktop's screen share squeezed
       // into a phone-shaped frame. Already presenting at lock time: landscape as well.
-      const presenting = people.some((p) => videoFor(p, Track.Source.ScreenShare))
+      const presenting = board.open || everyone.some((p) => videoFor(p, Track.Source.ScreenShare))
       const portraitFrames = frames.filter((f) => f.displayHeight > f.displayWidth).length
       if (!presenting && people.length > 0 && portraitFrames === people.length) applyCanvasSize(cfg.height, cfg.width)
       return

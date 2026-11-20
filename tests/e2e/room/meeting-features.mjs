@@ -275,8 +275,8 @@ ok.reactions = ok.join && await tc('MF-03', 'Reactions reach the other participa
   return `employee saw "${txt.replace(/\s+/g, ' ')}" and it disappeared`
 })
 
-ok.polls = ok.join && await tc('MF-04', 'Yes/No poll: one answer each, live results for the host, results for all after closing',
-  'Host starts a poll; employee sees the "!" badge and answers Yes in the UI; guest answers No through the API; second answer 409; host sees 1/1 live; employee sees results only after the host closes', async () => {
+ok.polls = ok.join && await tc('MF-04', 'Yes/No poll: one answer each, live results for everyone (15 Nov 2026), final results after closing',
+  'Host starts a poll; employee sees the "!" badge and answers Yes in the UI; guest answers No through the API; second answer 409; host sees 1/1 live; employee sees live results before the host closes', async () => {
     await openTools(host)
     await host.getByTestId('tools-polls').click()
     await host.getByTestId('poll-question').fill('Have you understood the policy benefits?')
@@ -288,10 +288,10 @@ ok.polls = ok.join && await tc('MF-04', 'Yes/No poll: one answer each, live resu
     await emp.getByTestId('tools-polls').click()
     await emp.getByTestId('poll-vote-yes').click()
     await emp.getByTestId('poll-my-answer').waitFor()
-    check(!(await emp.getByTestId('poll-results').isVisible()), 'employee sees results before the poll is closed')
+    await emp.getByTestId('poll-results').waitFor({ timeout: 10_000 }) // live results for everyone, not only after closing
     // Guest (API, personal token) answers No; a second answer is refused.
     const list = await guestApi.req('GET', `/join/${guestToken}/polls`)
-    check(list.status === 200 && list.data.items.length === 1 && list.data.items[0].results === null, `guest list ${JSON.stringify(list.data)}`)
+    check(list.status === 200 && list.data.items.length === 1 && list.data.items[0].results?.total >= 1, `guest list ${JSON.stringify(list.data)}`)
     const pollId = list.data.items[0].id
     const v1 = await guestApi.req('POST', `/join/${guestToken}/polls/${pollId}/vote`, { answer: 'NO' })
     const v2 = await guestApi.req('POST', `/join/${guestToken}/polls/${pollId}/vote`, { answer: 'YES' })
@@ -349,13 +349,18 @@ ok.private = ok.join && await tc('MF-05', 'Private messages reach only the recip
     return 'delivered both ways live; host unread badge 1; guest list empty; outside identity 404; self 400; 2 rows stored, first marked read'
   })
 
-ok.board = ok.join && await tc('MF-06', 'Whiteboard: host opens, employee view-only until granted, strokes sync both ways, PNG/PDF download',
+ok.board = ok.join && await tc('MF-06', 'Whiteboard: host opens (everyone may draw by default), host can restrict to hosts, strokes sync both ways, PNG/PDF download',
   'Host opens from Tools; both see the board; employee "View only"; host draws a rectangle → employee canvas inked; host grants Everyone → employee draws → host canvas gains ink; scene saved; PNG and PDF download', async () => {
     await openTools(host)
     await host.getByTestId('tools-whiteboard').click()
     await host.getByTestId('whiteboard').waitFor({ timeout: 10_000 })
     await emp.getByTestId('whiteboard').waitFor({ timeout: 10_000 })
-    await emp.getByTestId('wb-view-only').waitFor()
+    await emp.getByTestId('wb-tool-pen').waitFor({ timeout: 10_000 }) // 15 Nov 2026: drawing for everyone by default
+    await host.getByTestId('wb-access').click()
+    await host.getByTestId('wb-mode-hosts').click()
+    await until(() => host.getByTestId('wb-mode-hosts').isChecked(), 'restriction not confirmed', 10_000)
+    await host.getByTestId('wb-access').click()
+    await emp.getByTestId('wb-view-only').waitFor({ timeout: 10_000 })
     await host.getByTestId('wb-tool-rect').click()
     await drag(host, [0.15, 0.2], [0.45, 0.6])
     await until(async () => (await inked(emp)) > 500, 'rectangle not shown at the employee', 10_000)

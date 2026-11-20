@@ -91,12 +91,17 @@ export function NewMeetingDialog({ open, onClose }: { open: boolean; onClose: ()
   /** "Skip details & start meeting" (PLVC): an UNIDENTIFIED meeting - nothing typed in the PLVC block is used, no e-mails;
    *  the host shares the meeting link and admits people from the waiting room. Recorded as normal. */
   async function doSkip() {
+    if (!title.trim()) {
+      setFieldErrors({ title: 'Title is required.' })
+      setError('Please enter a meeting title.')
+      return
+    }
     setFieldErrors({})
     setBusy(true)
     setError(null)
     try {
       const r = await meetingsApi.instant({
-        title: title.trim() || undefined, category, durationMinutes: minutes, audioOnly, waitingRoomEnabled: waitingRoom, recordingPolicy: recording, skipPlvcDetails: true,
+        title: title.trim(), category, durationMinutes: minutes, audioOnly, waitingRoomEnabled: waitingRoom, recordingPolicy: recording, skipPlvcDetails: true,
       })
       const state: RoomEntryState = { video: video && !audioOnly, invite: true, customer: null, guests: [], noCustomer: true }
       navigate(`/meetings/${r.id}/room`, { state })
@@ -107,13 +112,18 @@ export function NewMeetingDialog({ open, onClose }: { open: boolean; onClose: ()
   }
 
   async function doStart() {
+    const titleErr: Record<string, string> = title.trim() ? {} : { title: 'Title is required.' }
     if (plvc) {
-      const errs = validatePlvc(prarambh, rows)
+      const errs = { ...titleErr, ...validatePlvc(prarambh, rows) }
       setFieldErrors(errs)
       if (Object.keys(errs).length) {
         setError('Please correct the highlighted fields.')
         return
       }
+    } else if (titleErr.title) {
+      setFieldErrors(titleErr)
+      setError('Please enter a meeting title.')
+      return
     } else if (customerMeeting && !customer) {
       setError('Select the customer for a customer meeting.')
       return
@@ -122,7 +132,7 @@ export function NewMeetingDialog({ open, onClose }: { open: boolean; onClose: ()
     setError(null)
     try {
       const r = await meetingsApi.instant({
-        title: title.trim() || undefined, category, durationMinutes: minutes, audioOnly, waitingRoomEnabled: waitingRoom, recordingPolicy: recording,
+        title: title.trim(), category, durationMinutes: minutes, audioOnly, waitingRoomEnabled: waitingRoom, recordingPolicy: recording,
         customerId: customerMeeting && !plvc ? customer?.id : undefined,
         prarambhMainId: plvc ? prarambh.trim() : undefined,
         participants: plvc ? participantsPayload(rows) : undefined,
@@ -152,7 +162,9 @@ export function NewMeetingDialog({ open, onClose }: { open: boolean; onClose: ()
     >
       <form id="new-meeting" onSubmit={start} className="flex flex-col gap-4">
         {error && <Alert tone="danger">{error}</Alert>}
-        <TextField label="Title (optional)" value={title} maxLength={200} placeholder={`${user?.displayName ?? 'My'}'s meeting`} onChange={(e) => setTitle(e.target.value)} />
+        <TextField label="Title" aria-required value={title} maxLength={200} placeholder={`e.g. ${user?.displayName ?? 'Team'} – policy discussion`}
+          error={fieldErrors.title || undefined} data-testid="instant-title"
+          onChange={(e) => { setTitle(e.target.value); setFieldErrors((x) => ({ ...x, title: '' })) }} />
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <SelectField label="Type" value={category} onChange={(e) => setCategory(e.target.value as DbMeetingCategory)} data-testid="instant-type">
             <optgroup label="Internal">

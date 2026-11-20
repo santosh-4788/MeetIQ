@@ -38,7 +38,15 @@ public static class RoomFeatureEndpoints
         public const string CameraFlip = "CAMERA_FLIP";
         /// <summary>Minutes of meeting written by people (V027, no AI). Not a room control: it shows on the meeting page.</summary>
         public const string MeetingMinutes = "MEETING_MINUTES";
-        public static readonly string[] Features = [Reactions, Polls, PrivateChat, Whiteboard, BackgroundEffects, NoiseSuppression, CameraFlip, MeetingMinutes];
+        /// <summary>Chat workspace for employees (V028, 20 Nov 2026). Not a room control: it shows as "Chat" in the menu.</summary>
+        public const string Chat = "CHAT";
+        /// <summary>Audio calls from Chat (V029, 20 Nov 2026); needs CHAT on as well.</summary>
+        public const string ChatCalls = "CHAT_CALLS";
+        /// <summary>Personal notes, tasks, reminders and My Day in Chat (V030, 20 Nov 2026); needs CHAT on as well.</summary>
+        public const string ChatTasks = "CHAT_TASKS";
+        /// <summary>Advanced chat: scheduled / saved / pinned messages, @mentions, favourites, quiet hours (V031, 20 Nov 2026); needs CHAT on as well.</summary>
+        public const string ChatAdvanced = "CHAT_ADVANCED";
+        public static readonly string[] Features = [Reactions, Polls, PrivateChat, Whiteboard, BackgroundEffects, NoiseSuppression, CameraFlip, MeetingMinutes, Chat, ChatCalls, ChatTasks, ChatAdvanced];
     }
 
     sealed record SettingRow(string FeatureKey, bool IsEnabled, DateTime ModifiedUtc, string? ModifiedBy);
@@ -87,7 +95,7 @@ public static class RoomFeatureEndpoints
         e.MapPost("/whiteboard/state", (Guid id, BoardStateInput input, RoomServices s, HttpContext ctx) => Employee(id, s, ctx, Keys.Whiteboard, (c, w) => SetBoardState(c, s, w, input, ctx)));
         e.MapPut("/whiteboard/scene", (Guid id, SceneInput input, RoomServices s, HttpContext ctx) => Employee(id, s, ctx, Keys.Whiteboard, (c, w) => SaveScene(c, w, input)));
 
-        var g = api.MapGroup("/join/{token}").RequireRateLimiting(GuestRateLimit);
+        var g = api.MapGroup("/join/" + Tokens.LinkTokenRoute).RequireRateLimiting(GuestRateLimit);
         g.MapGet("/polls", (string token, RoomServices s, HttpContext ctx) => Guest(token, s, Keys.Polls, (c, w) => ListPolls(c, w)));
         g.MapPost("/polls/{pollId:guid}/vote", (string token, Guid pollId, VoteInput input, RoomServices s, HttpContext ctx) => Guest(token, s, Keys.Polls, (c, w) => Vote(c, s, w, pollId, input)));
         g.MapGet("/private", (string token, RoomServices s) => Guest(token, s, Keys.PrivateChat, (c, w) => ListPrivate(c, w)));
@@ -182,20 +190,32 @@ public static class RoomFeatureEndpoints
                    (SELECT v.Answer FROM mtg.MeetingPollVotes v WHERE v.PollId = p.PollId AND v.ParticipantId = @me) AS Mine
             FROM mtg.MeetingPolls p WHERE p.MeetingId = @m ORDER BY p.PollId DESC
             """, new { m = w.M.MeetingId, me = w.P.ParticipantId });
-        // Live results for hosts; everyone else sees the result once the host closes the poll.
+        // Live results for everyone in the meeting (15 Nov 2026; until then only hosts saw them before the poll closed).
         return Results.Ok(new
         {
             canCreate = w.IsHost,
             items = rows.Select(r => new
             {
                 id = r.PublicId, question = r.Question, createdUtc = r.CreatedUtc, closed = r.ClosedUtc is not null, myAnswer = r.Mine,
-                results = w.IsHost || r.ClosedUtc is not null ? new { yes = r.Yes, no = r.No, total = r.Yes + r.No } : null,
+                results = new { yes = r.Yes, no = r.No, total = r.Yes + r.No },
             }),
         });
     }
 
-    static async Task SignalPollAsync(RoomServices s, Who w, IReadOnlyCollection<string>? to) =>
-        await s.Rooms.TrySendDataAsync(w.M.LiveKitRoomName, PollTopic, new { type = "poll-changed" }, to, CancellationToken.None);
+    /// <summary>The newest poll of a meeting with its counts - carried in every poll signal so the recorder can draw it.</summary>
+    static async Task<object?> PollSnapshotAsync(IDbConnection c, long meetingId)
+    {
+        var r = await c.QuerySingleOrDefaultAsync<(Guid PublicId, string Question, DateTime? ClosedUtc, int Yes, int No)?>("""
+            SELECT TOP (1) p.PublicId, p.Question, p.ClosedUtc,
+                   (SELECT COUNT(*) FROM mtg.MeetingPollVotes v WHERE v.PollId = p.PollId AND v.Answer = 'YES') AS Yes,
+                   (SELECT COUNT(*) FROM mtg.MeetingPollVotes v WHERE v.PollId = p.PollId AND v.Answer = 'NO') AS No
+            FROM mtg.MeetingPolls p WHERE p.MeetingId = @meetingId ORDER BY p.PollId DESC
+            """, new { meetingId });
+        return r is null ? null : new { id = r.Value.PublicId, question = r.Value.Question, closed = r.Value.ClosedUtc is not null, yes = r.Value.Yes, no = r.Value.No, total = r.Value.Yes + r.Value.No };
+    }
+
+    static async Task SignalPollAsync(IDbConnection c, RoomServices s, Who w) =>
+        await s.Rooms.TrySendDataAsync(w.M.LiveKitRoomName, PollTopic, new { type = "poll-changed", poll = await PollSnapshotAsync(c, w.M.MeetingId) }, null, CancellationToken.None);
 
     static async Task<IResult> CreatePoll(IDbConnection c, RoomServices s, Who w, PollInput input, HttpContext ctx)
     {
@@ -213,7 +233,7 @@ public static class RoomFeatureEndpoints
             """, new { m = w.M.MeetingId, q, p = w.P.ParticipantId });
         await Audit.WriteAsync(c, "USER", w.UserId, "MEETING_POLL_CREATED", "Meeting", w.M.PublicId.ToString(), "Yes/No poll started", ClientInfo.From(ctx).Ip,
             newValues: new { pollId = id, question = q });
-        await SignalPollAsync(s, w, null);
+        await SignalPollAsync(c, s, w);
         return Results.Json(new { id }, statusCode: 201);
     }
 
@@ -224,7 +244,7 @@ public static class RoomFeatureEndpoints
             new { pollId, m = w.M.MeetingId });
         if (n == 0) return Db_.Conflict("This poll is already closed or does not belong to this meeting.");
         await Audit.WriteAsync(c, "USER", w.UserId, "MEETING_POLL_CLOSED", "Meeting", w.M.PublicId.ToString(), "Yes/No poll closed", ClientInfo.From(ctx).Ip, newValues: new { pollId });
-        await SignalPollAsync(s, w, null);
+        await SignalPollAsync(c, s, w);
         return Results.NoContent();
     }
 
@@ -241,7 +261,7 @@ public static class RoomFeatureEndpoints
             await c.ExecuteAsync("INSERT mtg.MeetingPollVotes (PollId, ParticipantId, Answer) VALUES (@poll, @p, @answer)", new { poll = poll.Value.PollId, p = w.P.ParticipantId, answer });
         }
         catch (SqlException e) when (e.Number is 2627 or 2601) { return Db_.Conflict("You have already answered this poll."); }
-        await SignalPollAsync(s, w, await HostIdentitiesAsync(c, w.M.MeetingId));
+        await SignalPollAsync(c, s, w); // everyone sees live results now, so everyone (and the recorder) is told
         return Results.NoContent();
     }
 
@@ -328,7 +348,10 @@ public static class RoomFeatureEndpoints
 
     static async Task<BoardRow> BoardAsync(IDbConnection c, long meetingId) =>
         await c.QuerySingleOrDefaultAsync<BoardRow>("SELECT IsOpen, DrawMode, AllowedJson, SceneJson, [Version] FROM mtg.MeetingWhiteboards WHERE MeetingId = @meetingId", new { meetingId })
-        ?? new BoardRow(false, "HOSTS", null, null, 0);
+        ?? new BoardRow(false, DefaultDrawMode, null, null, 0);
+
+    /// <summary>15 Nov 2026: a board opens with drawing for everyone in the meeting; the host can still restrict it.</summary>
+    const string DefaultDrawMode = "EVERYONE";
 
     static async Task<IResult> GetBoard(IDbConnection c, Who w)
     {
@@ -357,7 +380,60 @@ public static class RoomFeatureEndpoints
         }, ClientInfo.From(ctx).Ip, newValues: new { isOpen = next.IsOpen, drawMode = next.DrawMode, allowed = Allowed(next.AllowedJson) });
         // Sent by the server, so clients can trust who may draw (a participant cannot forge a server message).
         await s.Rooms.TrySendDataAsync(w.M.LiveKitRoomName, WhiteboardStateTopic, new { isOpen = next.IsOpen, drawMode = next.DrawMode, allowed = Allowed(next.AllowedJson) }, null, CancellationToken.None);
+        // A recording in progress draws the board too: on (re)opening, hand the recorder the saved drawing (participants load it themselves).
+        if (next.IsOpen && !b.IsOpen)
+        {
+            var recorders = await RecorderIdentitiesAsync(s.Rooms, w.M.LiveKitRoomName);
+            if (recorders.Length > 0) await SendSceneAsync(s.Rooms, w.M.LiveKitRoomName, next, recorders, CancellationToken.None);
+        }
         return Results.NoContent();
+    }
+
+    // ---- Recorder (15 Nov 2026: the recording shows the whiteboard and polls) -------------------------------------------------
+    // The hidden recorder (identity "oic-recorder-<job>") hears live strokes and poll signals like everyone else. What it cannot
+    // hear is the state from before it joined - so the server sends it that state, only to the recorder's identity, whenever it starts
+    // a segment (RecorderWorker) and when the board is reopened. Server-sent data has no participant, so nobody in the meeting can forge it.
+
+    public const string RecorderIdentityPrefix = "oic-recorder-";
+    public const string RecorderSceneTopic = "oic.rec-scene";
+    const int SceneChunkChars = 12_000; // keeps each LiveKit data message well under its packet limit
+
+    static async Task<string[]> RecorderIdentitiesAsync(LiveKitRoomService rooms, string room)
+    {
+        try { return [.. (await rooms.ListParticipantIdentitiesAsync(room, CancellationToken.None)).Where(i => i.StartsWith(RecorderIdentityPrefix, StringComparison.Ordinal))]; }
+        catch (LiveKitUnavailableException) { return []; }
+    }
+
+    static async Task SendSceneAsync(LiveKitRoomService rooms, string room, BoardRow b, string[] to, CancellationToken ct)
+    {
+        var scene = b.SceneJson ?? "";
+        var parts = Math.Max(1, (scene.Length + SceneChunkChars - 1) / SceneChunkChars);
+        var id = Guid.NewGuid().ToString("N")[..12];
+        for (var i = 0; i < parts; i++)
+        {
+            var from = i * SceneChunkChars;
+            var data = from >= scene.Length ? "" : scene.Substring(from, Math.Min(SceneChunkChars, scene.Length - from));
+            await rooms.TrySendDataAsync(room, RecorderSceneTopic, new { id, part = i, parts, data }, to, ct);
+        }
+    }
+
+    /// <summary>Called when a recorder starts a segment (the first, and after every restart): the current board and poll, to that recorder only.</summary>
+    internal static async Task SendRecorderSnapshotAsync(Db db, LiveKitRoomService rooms, string room, string identity, CancellationToken ct)
+    {
+        using var c = await db.OpenAsync(ct);
+        var on = await EnabledAsync(c);
+        if (!on.Contains(Keys.Whiteboard) && !on.Contains(Keys.Polls)) return;
+        var meetingId = await c.QuerySingleOrDefaultAsync<long?>("SELECT MeetingId FROM mtg.Meetings WHERE LiveKitRoomName = @room", new { room });
+        if (meetingId is null) return;
+        string[] to = [identity];
+        if (on.Contains(Keys.Whiteboard))
+        {
+            var b = await BoardAsync(c, meetingId.Value);
+            await rooms.TrySendDataAsync(room, WhiteboardStateTopic, new { isOpen = b.IsOpen, drawMode = b.DrawMode, allowed = Allowed(b.AllowedJson) }, to, ct);
+            if (b.IsOpen) await SendSceneAsync(rooms, room, b, to, ct);
+        }
+        if (on.Contains(Keys.Polls) && await PollSnapshotAsync(c, meetingId.Value) is { } poll)
+            await rooms.TrySendDataAsync(room, PollTopic, new { type = "poll-changed", poll }, to, ct);
     }
 
     /// <summary>Saves the latest scene for late joiners and reconnects (the live strokes travel browser-to-browser over LiveKit).</summary>

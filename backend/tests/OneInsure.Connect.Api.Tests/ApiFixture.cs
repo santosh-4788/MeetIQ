@@ -72,6 +72,12 @@ public sealed class ApiFixture : IAsyncLifetime
         Environment.SetEnvironmentVariable("Recording__FfprobePath", Path.Combine(FfmpegDir, "ffprobe.exe"));
         Environment.SetEnvironmentVariable("Recording__PollSeconds", "3600");
         Environment.SetEnvironmentVariable("Recording__RetentionEnabled", "false");
+        Environment.SetEnvironmentVariable("Chat__StorageRoot", Path.Combine(RecordingRoot, "chat"));
+        Environment.SetEnvironmentVariable("Chat__ScanEnabled", "false");   // tests drive ChatFileScanWorker.RunOnceAsync (no antivirus dependency)
+        Environment.SetEnvironmentVariable("Chat__ScanPollSeconds", "3600");
+        Environment.SetEnvironmentVariable("Chat__SendPermitPer10Seconds", "1000");
+        Environment.SetEnvironmentVariable("Chat__ReminderPollSeconds", "1"); // Phase 4: reminders fire within a second (ChatWorkTests wait for the worker)
+        Environment.SetEnvironmentVariable("Chat__ScheduledPollSeconds", "1"); // Phase 5: scheduled messages are sent within a second (ChatAdvancedTests)
         Factory = new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
         {
             b.UseEnvironment("Testing");
@@ -143,6 +149,19 @@ public sealed class ApiFixture : IAsyncLifetime
             INSERT auth.UserRoles (UserId, RoleId)
             SELECT u.UserId, r.RoleId FROM auth.Users u JOIN auth.Roles r ON r.Code = 'Employee'
             WHERE u.Email IN (N'rhost@test.invalid', N'rpeer@test.invalid', N'rout@test.invalid');
+            """, new { hash });
+
+        // Chat (V028): four colleagues; C-DAN is the outsider in most tests.
+        await c.ExecuteAsync("""
+            INSERT org.Employees (EmployeeCode, FirstName, DisplayName, OfficialEmail, DepartmentId, DesignationId)
+            SELECT v.Code, v.Name, v.Name, v.Email, (SELECT DepartmentId FROM org.Departments WHERE Code = 'TST'), (SELECT DesignationId FROM org.Designations WHERE Code = 'TEX')
+            FROM (VALUES ('C-ANA', N'Ana Chat', N'cana@test.invalid'), ('C-BEN', N'Ben Chat', N'cben@test.invalid'),
+                         ('C-CAT', N'Cat Chat', N'ccat@test.invalid'), ('C-DAN', N'Dan Chat', N'cdan@test.invalid')) v (Code, Name, Email);
+            INSERT auth.Users (Email, PasswordHash, EmployeeId)
+            SELECT e.OfficialEmail, @hash, e.EmployeeId FROM org.Employees e WHERE e.EmployeeCode LIKE 'C-%';
+            INSERT auth.UserRoles (UserId, RoleId)
+            SELECT u.UserId, r.RoleId FROM auth.Users u JOIN auth.Roles r ON r.Code = 'Employee'
+            WHERE u.Email IN (N'cana@test.invalid', N'cben@test.invalid', N'ccat@test.invalid', N'cdan@test.invalid');
             """, new { hash });
 
         // Stand-in for OneInsure's mail procedure: identical parameter list to Util_SendEmail2; records instead of sending.

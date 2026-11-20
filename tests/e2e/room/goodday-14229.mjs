@@ -25,13 +25,13 @@ if (created.status !== 201) throw new Error(`meeting not created: ${created.stat
 const meetingId = created.data.id
 
 /** A phone page: its user agent and touch points as on the device, and no getDisplayMedia (as on iOS / Android browsers). */
-async function phone(ua, touch = 5, size = { width: 390, height: 844 }) {
+async function phone(ua, touch = 5, size = { width: 390, height: 844 }, canCapture = false) {
   const p = await newPage({ ...size, mobile: true })
-  await p.addInitScript(([u, t]) => {
+  await p.addInitScript(([u, t, c]) => {
     Object.defineProperty(navigator, 'userAgent', { get: () => u, configurable: true })
     Object.defineProperty(navigator, 'maxTouchPoints', { get: () => t, configurable: true })
-    if (navigator.mediaDevices) delete Object.getPrototypeOf(navigator.mediaDevices).getDisplayMedia
-  }, [ua, touch])
+    if (!c && navigator.mediaDevices) delete Object.getPrototypeOf(navigator.mediaDevices).getDisplayMedia
+  }, [ua, touch, canCapture])
   return p
 }
 async function enter(page, email, button) {
@@ -54,10 +54,10 @@ async function tapPresent(page, shot) {
 
 const ok = {}
 let host = await phone(IPHONE_CHROME)
-ok.ios = await tc('GD14229-01', 'iPhone Chrome: tapping Present explains the Apple restriction', 'Toast names iPhone/iPad and Apple, says others\' screens can still be seen, and does not suggest Chrome', async () => {
+ok.ios = await tc('GD14229-01', 'iPhone on older iOS (no screen capture): tapping Present says to update iOS', 'Toast names iPhone/iPad, the latest iOS and Software Update, says others\' screens can still be seen, and does not suggest Chrome', async () => {
   await enter(host, HOST.email, /Start meeting|Join|Rejoin/)
   const t = await tapPresent(host, 'iphone-chrome')
-  check(/Apple/.test(t) && /iPhone or iPad/.test(t) && /see screens others present/.test(t) && /join from a computer/.test(t), `toast: ${t}`)
+  check(/iPhone or iPad/.test(t) && /latest iOS/.test(t) && /Software Update/.test(t) && /see screens others present/.test(t), `toast: ${t}`)
   check(!/such as Chrome/.test(t), `old text still shown: ${t}`)
   return t
 })
@@ -66,17 +66,30 @@ let emp = await phone(ANDROID_CHROME, 5, { width: 412, height: 860 })
 ok.android = await tc('GD14229-02', 'Android Chrome: tapping Present explains the Android limit', 'Toast names Android and says to join from a computer', async () => {
   await enter(emp, EMP.email, /Join now|Join|Rejoin/)
   const t = await tapPresent(emp, 'android-chrome')
-  check(/Android/.test(t) && /join from a computer/.test(t) && !/Apple/.test(t), `toast: ${t}`)
+  check(/Android/.test(t) && /join from a computer/.test(t) && !/iOS/.test(t), `toast: ${t}`)
   return t
 })
 await closePage(emp)
 
 emp = await phone(IPAD_SAFARI, 5, { width: 820, height: 1180 })
-ok.ipad = await tc('GD14229-03', 'iPad (reports itself as a Mac with touch): the Apple message is shown', 'Toast names Apple', async () => {
+ok.ipad = await tc('GD14229-03', 'iPad (reports itself as a Mac with touch): the iOS update message is shown', 'Toast says the latest iOS', async () => {
   await enter(emp, EMP.email, /Join now|Join|Rejoin/)
   const t = await tapPresent(emp, 'ipad-safari')
-  check(/Apple/.test(t), `toast: ${t}`)
+  check(/latest iOS/.test(t), `toast: ${t}`)
   return t
+})
+await closePage(emp)
+
+// 17 Nov 2026: production logs show iPhone Safari / Chrome on iOS 27.2+ presenting. Where the browser offers screen capture,
+// the working Present button must be offered (in More on a phone), not the "update iOS" message.
+emp = await phone('Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Mobile/15E148 Safari/604.1', 5, { width: 390, height: 844 }, true)
+ok.iosNew = await tc('GD14229-06', 'iPhone on iOS 27.2+ (browser offers screen capture): Present is offered in More', 'ctl-screen in the More sheet; no unavailable button', async () => {
+  await enter(emp, EMP.email, /Join now|Join|Rejoin/)
+  await emp.getByTestId('ctl-more').click()
+  await emp.getByTestId('ctl-screen').waitFor({ timeout: 5000 })
+  check(await emp.getByTestId('ctl-present-unsupported').count() === 0, 'unavailable button shown although screen capture exists')
+  await emp.screenshot({ path: path.join(SHOTS, 'gd14229-iphone-ios27-more.png') })
+  return 'Present offered in More'
 })
 await closePage(emp)
 

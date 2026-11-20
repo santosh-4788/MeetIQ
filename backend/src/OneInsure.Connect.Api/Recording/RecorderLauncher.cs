@@ -8,6 +8,8 @@ public sealed record RecorderLaunch(string Mode, string JobKey, string JobDir, s
 {
     /// <summary>Called (on a thread-pool thread) when the recorder reports a state change or exits, so the worker reacts at once instead of on its next poll.</summary>
     public Action? OnChange { get; init; }
+    /// <summary>Called (on a thread-pool thread) each time the recorder starts recording a segment - the first and after every restart.</summary>
+    public Action? OnSegmentStarted { get; init; }
 }
 
 /// <summary>A running (or finished) recorder process.</summary>
@@ -69,7 +71,7 @@ public sealed class ProcessRecorderLauncher(RecordingPaths paths, ILogger<Proces
             psi.Environment["DOTNET_ROOT"] = Path.GetDirectoryName(host)!;
         var p = Process.Start(psi) ?? throw new InvalidOperationException("The recorder process could not be started.");
         log.LogInformation("Recorder {Mode} started for job {Job} (pid {Pid})", l.Mode, l.JobKey, p.Id);
-        return new ProcessRun(p, l.JobDir, log, l.OnChange);
+        return new ProcessRun(p, l.JobDir, log, l.OnChange, l.OnSegmentStarted);
     }
 
     public IRecorderRun? Adopt(int processId, string jobDir)
@@ -106,7 +108,7 @@ public sealed class ProcessRecorderLauncher(RecordingPaths paths, ILogger<Proces
         volatile bool started;
         volatile bool captureEnded;
 
-        public ProcessRun(Process p, string jobDir, ILogger log, Action? onChange)
+        public ProcessRun(Process p, string jobDir, ILogger log, Action? onChange, Action? onSegmentStarted = null)
         {
             this.p = p;
             this.jobDir = jobDir;
@@ -117,7 +119,11 @@ public sealed class ProcessRecorderLauncher(RecordingPaths paths, ILogger<Proces
             p.OutputDataReceived += (_, e) =>
             {
                 if (e.Data is not { } line) return;
-                if (!started && line.Contains("\"attempt_started\"", StringComparison.Ordinal)) { started = true; Notify(); }
+                if (line.Contains("\"attempt_started\"", StringComparison.Ordinal))
+                {
+                    try { onSegmentStarted?.Invoke(); } catch (Exception ex) { log.LogWarning(ex, "Recorder segment callback failed"); }
+                    if (!started) { started = true; Notify(); }
+                }
                 else if (!captureEnded && line.Contains("\"recording_finished\"", StringComparison.Ordinal)) { captureEnded = true; Notify(); }
             };
             p.EnableRaisingEvents = true;

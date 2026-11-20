@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { BellRing, CalendarClock, CalendarPlus, CalendarX2, UserCheck } from 'lucide-react'
+import { AtSign, BellRing, CalendarClock, CalendarPlus, CalendarX2, ListTodo, PhoneMissed, StickyNote, UserCheck, UsersRound } from 'lucide-react'
 import type { NotificationType } from '../../api/notifications'
 
 /** Icon and tint per notification type (unknown future types fall back to the bell). */
@@ -11,6 +11,16 @@ export function notificationIcon(type: NotificationType): { icon: ReactNode; cls
       return { icon: <CalendarClock className="size-4" />, cls: 'bg-warning-soft text-warning-ink' }
     case 'CANCELLED':
       return { icon: <CalendarX2 className="size-4" />, cls: 'bg-danger-soft text-danger' }
+    case 'MISSED_CALL':
+      return { icon: <PhoneMissed className="size-4" />, cls: 'bg-danger-soft text-danger' }
+    case 'CHAT_MENTION':
+      return { icon: <AtSign className="size-4" />, cls: 'bg-brand-50 text-brand-500' }
+    case 'GROUP_ADDED':
+      return { icon: <UsersRound className="size-4" />, cls: 'bg-success-soft text-success' }
+    case 'TASK_REMINDER':
+      return { icon: <ListTodo className="size-4" />, cls: 'bg-warning-soft text-warning-ink' }
+    case 'NOTE_REMINDER':
+      return { icon: <StickyNote className="size-4" />, cls: 'bg-warning-soft text-warning-ink' }
     case 'RESPONSE':
       return { icon: <UserCheck className="size-4" />, cls: 'bg-success-soft text-success' }
     default:

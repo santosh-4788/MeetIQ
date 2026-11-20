@@ -188,10 +188,9 @@ function PollCard({ poll, host, onVote, onClose }: { poll: Poll; host: boolean; 
               <span className="w-14 text-right tabular-nums text-white/80">{n} · {pct(n)}%</span>
             </div>
           ))}
-          <span className="text-[11.5px] text-white/50">{r.total} answer{r.total === 1 ? '' : 's'}{!poll.closed && host ? ' · live' : ''}</span>
+          <span className="text-[11.5px] text-white/50">{r.total} answer{r.total === 1 ? '' : 's'}{!poll.closed ? ' · live' : ''}</span>
         </div>
       )}
-      {!poll.closed && !host && poll.myAnswer && <p className="text-[11.5px] text-white/50">Results are shown when the host closes the poll.</p>}
       {host && !poll.closed && (
         <button type="button" onClick={() => onClose(poll.id)} className="h-9 rounded-lg bg-white/[0.1] text-[13px] font-semibold hover:bg-white/[0.18]" data-testid="poll-close">
           Close poll and show results

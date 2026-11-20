@@ -75,6 +75,37 @@ public sealed class LiveKitTokens(IOptions<LiveKitOptions> options)
         return (token, exp);
     }
 
+    /// <summary>
+    /// Phone screen sharing from the Android app (19 Nov 2026): a SECOND connection for the same person that may publish
+    /// ONLY a screen - it cannot subscribe (sees/hears nothing), send data/chat, publish a camera or microphone, or
+    /// administer. Identity "<owner>.screen" (not a meeting participant, so attendance ignores it); metadata marks it so
+    /// the room UI and the recorder show it as "<name> is presenting", never as an extra person.
+    /// </summary>
+    internal (string Token, DateTime ExpiresUtc, string Identity) CreateScreenCompanionToken(string room, string ownerIdentity, string name, DateTime nowUtc)
+    {
+        var identity = ScreenCompanion.IdentityFor(ownerIdentity);
+        var exp = nowUtc.AddMinutes(Math.Clamp(O.TokenTtlMinutes, 1, 10));
+        var token = Sign(new JsonObject
+        {
+            ["sub"] = identity,
+            ["jti"] = identity + ":" + Guid.NewGuid().ToString("N"),
+            ["name"] = name,
+            ["metadata"] = JsonSerializer.Serialize(new { role = ScreenCompanion.Role, type = ScreenCompanion.Role, owner = ownerIdentity }),
+            ["video"] = new JsonObject
+            {
+                ["room"] = room,
+                ["roomJoin"] = true,
+                ["canSubscribe"] = false,
+                ["canPublish"] = true,
+                ["canPublishData"] = false,
+                ["canPublishSources"] = new JsonArray("screen_share"),
+                ["canUpdateOwnMetadata"] = false,
+                ["roomAdmin"] = false,
+            },
+        }, nowUtc, exp);
+        return (token, exp, identity);
+    }
+
     /// <summary>Short-lived server token for RoomService calls on one room.</summary>
     internal string CreateAdminToken(string room, DateTime nowUtc) => Sign(new JsonObject
     {

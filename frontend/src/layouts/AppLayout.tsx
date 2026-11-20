@@ -5,6 +5,9 @@ import { cn } from '../lib/cn'
 import { Header } from './Header'
 import { MobileTabBar } from './MobileTabBar'
 import { Sidebar } from './Sidebar'
+import { ChatProvider } from '../pages/chat/ChatProvider'
+import { CallProvider } from '../pages/chat/CallProvider'
+import { ReminderGate } from '../pages/chat/ReminderGate'
 
 const COLLAPSE_KEY = 'oic.sidebar.collapsed'
 
@@ -29,6 +32,10 @@ export function AppLayout() {
   }, [collapsed])
 
   return (
+    // Chat's live connection (does nothing unless the CHAT switch is on and the user has chat.use).
+    <ChatProvider>
+    {/* Audio calls (ringing popup, call panel) on every page; nothing unless CHAT_CALLS is on. */}
+    <CallProvider>
     <div className="flex min-h-dvh bg-canvas">
       {/* Desktop sidebar */}
       <aside
@@ -76,7 +83,11 @@ export function AppLayout() {
           </motion.div>
         </main>
         <MobileTabBar />
+        {/* Task and note reminder popups (Phase 4); nothing unless CHAT_TASKS is on. */}
+        <ReminderGate />
       </div>
     </div>
+    </CallProvider>
+    </ChatProvider>
   )
 }

@@ -35,6 +35,9 @@ await loginUI(host, HOST.email)
 await host.goto(`/meetings/${meetingId}/room`)
 await host.getByRole('button', { name: /Start meeting|Join/ }).first().click()
 await host.locator('[data-testid="meeting-room"]').waitFor({ timeout: 30_000 })
+// Since #14208 (14 Nov evening) the host of a meeting past its booked end gets the "time is up" popup: "Keep going" closes it.
+const keepGoing = host.getByTestId('extend-prompt-later')
+if (await keepGoing.waitFor({ timeout: 8000 }).then(() => true, () => false)) await keepGoing.click()
 
 let guest = await newPage({ width: 390, height: 844, mobile: true }); watch(guest, 'guest')
 await guest.goto(`/join/${guestToken}`)

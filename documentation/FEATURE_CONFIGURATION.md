@@ -7,9 +7,9 @@
 | Switch (`app.FeatureSettings.FeatureKey`) | Default | Effect when on |
 |---|---|---|
 | `REACTIONS` | Off | Six reaction bubbles (Tools menu). Peer-to-peer, not stored. |
-| `POLLS` | Off | Host Yes/No polls; one answer each; stored in `mtg.MeetingPolls` / `mtg.MeetingPollVotes`. |
+| `POLLS` | Off | Host Yes/No polls; one answer each; live results for everyone in the meeting (15 Nov 2026); shown in recordings; stored in `mtg.MeetingPolls` / `mtg.MeetingPollVotes`. |
 | `PRIVATE_CHAT` | Off | "Private" tab in Chat; stored in `mtg.PrivateMessages`. See `PRIVATE_CHAT_SECURITY.md`. |
-| `WHITEBOARD` | Off | Host can open the whiteboard; stored in `mtg.MeetingWhiteboards`. See `WHITEBOARD_FEATURE.md`. |
+| `WHITEBOARD` | Off | Host can open the whiteboard; everyone may draw by default (the host can restrict it); shown in recordings; stored in `mtg.MeetingWhiteboards`. See `WHITEBOARD_FEATURE.md`. |
 | `BACKGROUND_EFFECTS` | Off | Blur and background pictures, processed in the browser. |
 | `NOISE_SUPPRESSION` | Off | Shows the noise-suppression switch. Suppression itself stays on by default either way. |
 | `CAMERA_FLIP` | Off | "Switch camera" button on devices with 2 or more cameras. |

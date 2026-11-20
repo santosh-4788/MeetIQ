@@ -192,12 +192,36 @@ export function ShareLinkDialog({ open, onClose, meetingId, title, customer, gue
   /** Instant PLVC meeting: the other participants' personal join links (shown once, right after starting). */
   guests?: CustomerJoinLink[]
 }) {
+  // GoodDay #14231: a customer meeting showed the customer's personal link AND the general meeting link one under the other,
+  // both with "Copy link" - two different links, unclear which to send. With personal links, those are the only links shown;
+  // the general meeting link (for a colleague or someone extra) is folded away under "Invite someone else".
+  const personal = !!customer || (guests?.length ?? 0) > 0 || !!customerMeeting
+  const [showGeneral, setShowGeneral] = useState(false)
+  useEffect(() => {
+    if (!open) setShowGeneral(false)
+  }, [open])
   return (
-    <Dialog open={open} onClose={onClose} title="Invite people" description="Share this link. Everyone who uses it waits until a host lets them in." size="md">
+    <Dialog open={open} onClose={onClose} title="Invite people" size="md"
+      description={personal
+        ? 'Send each person their own link below. Personal links let them join as the person named in this meeting.'
+        : 'Share this link. Everyone who uses it waits until a host lets them in.'}>
       {(customer?.email || guests?.some((g) => g.email)) && <InvitationEmails meetingId={meetingId} active={open} />}
       {customer ? <CustomerLink customer={customer} title={title} /> : customerMeeting ? <SendToCustomer meetingId={meetingId} title={title} /> : null}
       {guests?.map((g) => <CustomerLink key={g.joinUrl} customer={g} title={title} />)}
-      <LinkBody meetingId={meetingId} title={title} active={open} />
+      {!personal ? (
+        <LinkBody meetingId={meetingId} title={title} active={open} />
+      ) : showGeneral ? (
+        <div className="flex flex-col gap-2 border-t border-line pt-3" data-testid="general-link-section">
+          <p className="text-[13px] font-semibold text-ink">Invite someone else</p>
+          <p className="text-[12px] text-ink-secondary">For a colleague or an extra person. Not for the customer: anyone using this link waits until you let them in.</p>
+          <LinkBody meetingId={meetingId} title={title} active={open} />
+        </div>
+      ) : (
+        <button type="button" onClick={() => setShowGeneral(true)} data-testid="show-general-link"
+          className="inline-flex cursor-pointer items-center gap-1.5 self-start text-[13px] font-medium text-brand-600 hover:underline">
+          <Link2 className="size-3.5" /> Invite someone else (colleague or extra person)
+        </button>
+      )}
     </Dialog>
   )
 }

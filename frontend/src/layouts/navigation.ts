@@ -1,6 +1,6 @@
 import type { LucideIcon } from 'lucide-react'
 import {
-  Bell, Building, CalendarDays, CalendarPlus, ChartColumn, Clapperboard, FileCode2, Handshake, IdCard, LayoutDashboard, ScrollText, Settings, ShieldCheck, Sparkles, Users, Video,
+  Bell, Building, CalendarDays, CalendarPlus, ChartColumn, Clapperboard, FileCode2, Handshake, IdCard, LayoutDashboard, MessagesSquare, ScrollText, Settings, ShieldCheck, Sparkles, Users, Video,
 } from 'lucide-react'
 
 export type NavItem = {
@@ -11,6 +11,8 @@ export type NavItem = {
   /** Delivery phase for modules not yet built; drives the honest "planned" page (and the planned areas on /admin). */
   phase?: number
   planned?: string[]
+  /** Shown only while this optional module is switched on (Chat: the CHAT feature switch). */
+  feature?: 'chat'
 }
 
 export type NavSection = { title: string; items: NavItem[] }
@@ -29,6 +31,11 @@ export const navigation: NavSection[] = [
       { to: '/internal', label: 'Internal Meetings', icon: Users, permission: 'meetings.view.own' },
       { to: '/customer-meetings', label: 'Customer Meetings', icon: Handshake, permission: 'customer.meetings.view' },
     ],
+  },
+  {
+    // 20 Nov 2026: Chat, directly below Meetings (documentation/CHAT_MODULE_PHASE1.md).
+    title: 'Communication',
+    items: [{ to: '/chat', label: 'Chat', icon: MessagesSquare, permission: 'chat.use', feature: 'chat' }],
   },
   {
     title: 'Library',

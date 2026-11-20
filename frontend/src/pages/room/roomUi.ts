@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react'
 import type { Participant } from 'livekit-client'
 import type { CustomerJoinLink } from '../../api/meetings'
-import type { ChatItem, EndTimes, MuteSource, RoomConnection, WaitingEntry } from '../../api/room'
+import type { ChatItem, EndTimes, MuteSource, RoomConnection, ScreenCompanionToken, WaitingEntry } from '../../api/room'
 import type { RecordingBackend } from './RecordingControls'
 import type { FeatureCalls } from '../../api/roomFeatures'
 
@@ -19,6 +19,8 @@ export type RoomBackend = {
   /** Hosts/organiser: the meeting's shareable link (Invite button). `openOnStart` for a meeting just started. */
   /** Optional meeting features (polls, private messages, whiteboard). Used only for the features an administrator switched on. */
   features?: FeatureCalls
+  /** Android app: a screen-only connection token for presenting the phone screen. */
+  screenCompanion?: () => Promise<ScreenCompanionToken>
   share?: { meetingId: string; openOnStart?: boolean; customer?: CustomerJoinLink | null; customerMeeting?: boolean; /** PLVC instant: the other participants' personal links. */ guests?: CustomerJoinLink[]; /** Unidentified PLVC: no customer to send a link to. */ noCustomer?: boolean }
   host?: {
     waiting: () => Promise<WaitingEntry[]>

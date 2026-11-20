@@ -100,7 +100,7 @@ export async function until(fn, msg, ms = 20_000, every = 500) {
 // Fake camera: the same small Y4M clip as room.mjs (generated there on first run).
 const CAM = path.join(RESULTS, 'fake-camera.y4m')
 const browsers = []
-export async function newPage({ width = 1366, height = 820, mobile = false } = {}) {
+export async function newPage({ width = 1366, height = 820, mobile = false, userAgent, deviceScaleFactor } = {}) {
   if (!fs.existsSync(CAM)) throw new Error('results/fake-camera.y4m missing: run room.mjs once first.')
   const browser = await chromium.launch({
     executablePath: EDGE,
@@ -109,7 +109,7 @@ export async function newPage({ width = 1366, height = 820, mobile = false } = {
       '--autoplay-policy=no-user-gesture-required', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'],
   })
   browsers.push(browser)
-  const context = await browser.newContext({ baseURL: WEB, viewport: { width, height }, isMobile: mobile, hasTouch: mobile, locale: 'en-IN', timezoneId: 'Asia/Kolkata', permissions: ['camera', 'microphone'] })
+  const context = await browser.newContext({ baseURL: WEB, viewport: { width, height }, isMobile: mobile, hasTouch: mobile, ...(userAgent ? { userAgent } : {}), ...(deviceScaleFactor ? { deviceScaleFactor } : {}), locale: 'en-IN', timezoneId: 'Asia/Kolkata', permissions: ['camera', 'microphone'] })
   const page = await context.newPage()
   page.setDefaultTimeout(15_000)
   await page.addInitScript(() => {

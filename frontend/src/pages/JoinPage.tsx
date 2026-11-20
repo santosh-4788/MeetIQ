@@ -10,6 +10,7 @@ import { AuthCard, AuthHeading } from '../layouts/AuthLayout'
 import { formatRange, formatTime, formatDayDate, zoneLabel } from '../lib/format'
 import { useLoader } from '../lib/useLoader'
 import { RoomLoading } from './room/RoomScreens'
+import { pendingRejoin } from './room/rejoin'
 
 // The video room (LiveKit) is downloaded only when the customer/guest actually joins.
 const GuestRoom = lazy(() => import('./room/GuestRoom'))
@@ -20,7 +21,8 @@ const GuestRoom = lazy(() => import('./room/GuestRoom'))
  */
 export function JoinPage() {
   const { token = '' } = useParams()
-  const [entering, setEntering] = useState(false)
+  // Refreshed during the meeting: straight back to the room (see room/rejoin.ts), not this page.
+  const [entering, setEntering] = useState(() => !!pendingRejoin())
   // 404 = unknown, expired or withdrawn link: a friendly dead end, not a retryable error.
   const info = useLoader(
     () => joinApi.get(token).catch((e: unknown) => {

@@ -581,7 +581,7 @@ public sealed class RecordingTests(ApiFixture fx)
             """);
         Assert.Equal(HttpStatusCode.BadRequest, (await host.PostAsync("/api/v1/meetings/instant", new { category = "CUSTOMER_PLVC" })).StatusCode); // customer required
 
-        var created = await host.PostAsync("/api/v1/meetings/instant", new { category = "CUSTOMER_PLVC", customerId, recordingPolicy = "REQUIRED", waitingRoomEnabled = false, prarambhMainId = "900800700" });
+        var created = await host.PostAsync("/api/v1/meetings/instant", new { title = "PLVC call", category = "CUSTOMER_PLVC", customerId, recordingPolicy = "REQUIRED", waitingRoomEnabled = false, prarambhMainId = "900800700" });
         Assert.True(created.StatusCode == HttpStatusCode.Created, await created.Content.ReadAsStringAsync());
         var body = await Json(created);
         var id = body.GetProperty("id").GetGuid();
@@ -625,7 +625,7 @@ public sealed class RecordingTests(ApiFixture fx)
         Assert.Equal(HttpStatusCode.OK, (await anon.Http.GetAsync($"/api/v1/join/{token2}/recording")).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await anon.Http.GetAsync($"/api/v1/join/{token}/recording")).StatusCode);
         Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE EntityId = @e AND [Action] = 'MEETING_CUSTOMER_LINK_ISSUED'", new { e = id.ToString() }));
-        var internalMeeting = await Json(await host.PostAsync("/api/v1/meetings/instant", new { category = "GROUP" }));
+        var internalMeeting = await Json(await host.PostAsync("/api/v1/meetings/instant", new { title = "Internal", category = "GROUP" }));
         Assert.Equal(HttpStatusCode.NotFound, (await host.PostAsync($"/api/v1/meetings/{internalMeeting.GetProperty("id").GetGuid()}/link/customer")).StatusCode);
 
         Assert.Equal(HttpStatusCode.NoContent, (await host.PostAsync($"/api/v1/meetings/{id}/room/end")).StatusCode);
@@ -636,7 +636,7 @@ public sealed class RecordingTests(ApiFixture fx)
     {
         await SeedAsync();
         var host = await SignedIn("xhost@test.invalid");
-        var created = await Json(await host.PostAsync("/api/v1/meetings/instant", new { category = "GROUP", durationMinutes = 15 }));
+        var created = await Json(await host.PostAsync("/api/v1/meetings/instant", new { title = "Short", category = "GROUP", durationMinutes = 15 }));
         var id = created.GetProperty("id").GetGuid();
         var join = await Json(await host.PostAsync($"/api/v1/meetings/{id}/join"));
         var end = join.GetProperty("meeting").GetProperty("endUtc").GetDateTime();

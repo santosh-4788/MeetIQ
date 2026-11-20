@@ -114,6 +114,8 @@ export type DashboardSummary = {
   generatedUtc: string
   kpis: {
     totalEmployees: number
+    /** Set when the count is the user's team (no employees.manage): the department name(s), e.g. "PLVC". */
+    employeesScope?: string | null
     todaysMeetings: number
     upcomingMeetings: number
     internalMeetings: number
@@ -132,8 +134,12 @@ export type DashboardSummary = {
   recordingStatus: { completed: number; processing: number; pending: number; failed: number }
 }
 
+export type TeamMember = { name: string; employeeCode: string; designation: string; department: string; isMe: boolean; reportsToMe: boolean; isHead: boolean }
+
 export interface DashboardApi {
   getSummary(): Promise<DashboardSummary>
+  /** The people behind the "My Team" tile (users without employees.manage). */
+  getTeam?(): Promise<TeamMember[]>
 }
 
 // ---- Shared ----------------------------------------------------------------

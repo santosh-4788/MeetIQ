@@ -42,7 +42,7 @@ internal sealed record StartResult(Guid? RecordingId, int Status, string Code, s
 /// participant over LiveKit (room metadata for late joiners + a data message on topic "oic.recording").
 /// </summary>
 public sealed partial class RecordingService(Db db, IClock clock, LiveKitRoomService rooms, RecorderHealth health, RecorderWorker worker,
-    IOptions<RecordingOptions> options, IOptions<LiveKitOptions> liveKit, ILogger<RecordingService> log)
+    IOptions<RecordingOptions> options, IOptions<LiveKitOptions> liveKit, IOptions<MeetingOptions> meetingOptions, ILogger<RecordingService> log)
 {
     public const string Topic = "oic.recording";
     internal Db Db => db;
@@ -123,8 +123,12 @@ public sealed partial class RecordingService(Db db, IClock clock, LiveKitRoomSer
         var last = active is null ? await c.QuerySingleOrDefaultAsync<(Guid PublicId, string Status, string? FailureReason, string? StopReason)?>("""
             SELECT TOP (1) PublicId, [Status], FailureReason, StopReason FROM rec.MeetingRecordings WHERE MeetingId = @m ORDER BY RecordingId DESC
             """, new { m = m.MeetingId }) : null;
+        // GoodDay #14230: the meeting's current scheduled/automatic end travels with this state, which every participant (guests too)
+        // re-reads every 10 s and on reconnect. A participant who missed the one-off "end-changed" message (a phone reconnecting when
+        // the host extended) is corrected within seconds instead of counting down to the old end.
+        var ends = new { endUtc = m.EndUtc, autoEndUtc = MeetingAutoEnd.AutoEndUtc(m.EndUtc, meetingOptions.Value) };
         if (mp is null)
-            return new { available = false, unavailableReason = "No recording policy is mapped to this meeting category.", policy = (object?)null, recording = (object?)null };
+            return new { available = false, unavailableReason = "No recording policy is mapped to this meeting category.", policy = (object?)null, recording = (object?)null, ends };
         var p = mp.Policy;
         var rows = await ConsentRowsAsync(c, m.MeetingId, p.NoticeVersion);
         var mine = me is null ? null : rows.FirstOrDefault(r => r.ParticipantId == me.ParticipantId)?.Decision;
@@ -170,6 +174,7 @@ public sealed partial class RecordingService(Db db, IClock clock, LiveKitRoomSer
             canCancelRequest = isHost && request is not null,
             canStop = isHost && active is not null && !active.Stopping && mp.EffectiveRequirement != "MANDATORY",
             consent,
+            ends,
         };
     }
 

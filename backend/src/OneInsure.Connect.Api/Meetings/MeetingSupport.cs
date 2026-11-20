@@ -222,7 +222,7 @@ public sealed class MeetingMessaging(IOptions<PublicEndpointOptions> pub, IOptio
                     """, new { now, p = r.ParticipantId, reason = kind == MessageKind.Rescheduled ? "Re-issued after reschedule" : kind == MessageKind.Removed ? "Participant removed" : kind == MessageKind.Cancelled ? "Meeting cancelled" : "Re-issued" }, tx);
                 if (kind is MessageKind.Invited or MessageKind.Rescheduled && r.Email is not null)
                 {
-                    var token = Tokens.New();
+                    var token = Tokens.NewLinkToken();
                     await c.ExecuteAsync("""
                         INSERT mtg.MeetingInvitations (MeetingId, ParticipantId, TokenHash, CreatedUtc, ExpiresUtc) VALUES (@meetingId, @p, @hash, @now, @exp)
                         """, new { meetingId = m.MeetingId, p = r.ParticipantId, hash = Tokens.Hash(token), now, exp = m.EndUtc.AddDays(meetingOptions.Value.InvitationGraceDays) }, tx);

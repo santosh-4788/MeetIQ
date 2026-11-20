@@ -17,7 +17,10 @@ const ok = {}
 ok.start = await tc('IL-01', 'Host starts an instant meeting from the dashboard', '"Instant meeting" → dialog → Start → pre-join (no schedule) → room; Invite dialog shows the link; meeting INSTANT and LIVE', async () => {
   await loginUI(host, HOST.email)
   await host.getByTestId('new-meeting').click()
-  await host.getByLabel('Title (optional)').fill('Instant E2E')
+  await host.getByTestId('start-instant').click()
+  await host.getByText('Title is required.').waitFor()
+  console.log('PASS  blank title blocked')
+  await host.getByTestId('instant-title').fill('Instant E2E')
   await view(host, 'il-new-meeting-dialog')
   await host.getByTestId('start-instant').click()
   await host.waitForURL(/\/meetings\/[0-9a-f-]{36}\/room/)
@@ -29,7 +32,8 @@ ok.start = await tc('IL-01', 'Host starts an instant meeting from the dashboard'
   await box.waitFor({ timeout: 15_000 })
   linkUrl = await box.inputValue()
   await view(host, 'il-invite-dialog')
-  check(/\/m\/[A-Za-z0-9_-]{40,}$/.test(linkUrl), `link "${linkUrl}"`)
+  // 18 Nov 2026: link codes are 22 characters (128-bit), were 43.
+  check(/\/m\/[A-Za-z0-9_-]{22}$/.test(linkUrl), `link "${linkUrl}"`)
   const row = sql(`SELECT MeetingId, MeetingKind, [Status] FROM mtg.Meetings WHERE PublicId = '${meetingId}'`)[0]
   mid = row.MeetingId
   check(row.MeetingKind === 'INSTANT', `kind ${row.MeetingKind}`)

@@ -35,13 +35,28 @@ public sealed class WebhookWorker(Db db, IClock clock, IHttpClientFactory http, 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await Task.Yield();
+        var nextCleanup = DateTime.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
             try { await RunOnceAsync(stoppingToken); }
             catch (Exception e) when (e is not OperationCanceledException) { log.LogError(e, "Webhook run failed"); }
+            if (clock.UtcNow >= nextCleanup)
+            {
+                nextCleanup = clock.UtcNow.AddHours(1);
+                try { await CleanupIdempotencyAsync(stoppingToken); }
+                catch (Exception e) when (e is not OperationCanceledException) { log.LogWarning(e, "Idempotency-key cleanup failed"); }
+            }
             try { await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, O.WebhookPollSeconds)), stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
+    }
+
+    /// <summary>Hourly: forgets Idempotency-Keys older than IdempotencyHours (they are also released one by one when reused).</summary>
+    public async Task<int> CleanupIdempotencyAsync(CancellationToken ct)
+    {
+        using var c = await db.OpenAsync(ct);
+        return await c.ExecuteAsync("DELETE TOP (5000) app.ApiIdempotency WHERE CreatedUtc < DATEADD(HOUR, -@hours, SYSUTCDATETIME())",
+            new { hours = O.IdempotencyHoursClamped });
     }
 
     public async Task<(int Detected, int Delivered, int Failed)> RunOnceAsync(CancellationToken ct)

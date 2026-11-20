@@ -10,6 +10,7 @@ import { AuthCard, AuthHeading } from '../layouts/AuthLayout'
 import { formatDayDate, formatRange, formatTime, zoneLabel } from '../lib/format'
 import { useLoader } from '../lib/useLoader'
 import { RoomLoading } from './room/RoomScreens'
+import { pendingRejoin } from './room/rejoin'
 
 const GuestRoom = lazy(() => import('./room/GuestRoom'))
 
@@ -43,7 +44,8 @@ function storeToken(linkToken: string, personalToken: string | null) {
 export function LinkJoinPage() {
   const { token = '' } = useParams()
   const navigate = useNavigate()
-  const [entering, setEntering] = useState(false)
+  // Refreshed during the meeting: straight back to the room (see room/rejoin.ts), not this page.
+  const [entering, setEntering] = useState(() => !!pendingRejoin())
   // One waiting-room place per visit: asking again after leaving reuses the personal token instead of creating a new guest.
   // Seeded from localStorage so a reconnect (reload, closed tab, locked phone) reuses the same guest identity - the
   // server already lets an already-admitted guest straight back in (RoomEndpoints.GuestEnter) once it sees this token.

@@ -22,7 +22,8 @@ export default defineConfig(({ command }) => ({
     allowedHosts,
     proxy: {
       // '^/api/' (not '/api'): a plain prefix would also proxy the app's own /api-docs page to the API.
-      '^/api/': { target: apiTarget, changeOrigin: true, secure: false },
+      // ws: the Chat live channel (/api/v1/hubs/chat) is a WebSocket under /api (in production IIS proxies it the same way).
+      '^/api/': { target: apiTarget, changeOrigin: true, secure: false, ws: true },
       '/hubs': { target: apiTarget, ws: true, secure: false },
       // LiveKit signalling through the site's own host/port (API setting LiveKit:PublicUrl = "/"), so browsers on
       // other machines reach the video server via the same HTTPS address; only the media ports need the firewall.

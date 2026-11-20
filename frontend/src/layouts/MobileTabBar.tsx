@@ -1,31 +1,36 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Bell, CalendarDays, LayoutDashboard, Plus, Video } from 'lucide-react'
+import { Bell, CalendarDays, LayoutDashboard, MessagesSquare, Plus, Video } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { cn } from '../lib/cn'
 import { NewMeetingDialog } from '../pages/meetings/QuickMeetingDialogs'
+import { useChat } from '../pages/chat/ChatProvider'
 
 /**
  * Phones (Android / iOS): bottom tab bar with the most used places and a central "New meeting" button, like a native app.
  * Only destinations the user may open are shown; everything else stays in the menu (top left).
+ * While Chat is switched on it takes Calendar's place (approved decision D2; Calendar stays in the menu).
  */
 export function MobileTabBar() {
   const { can } = useAuth()
+  const chat = useChat()
   const [starting, setStarting] = useState(false)
   const tabs = [
     can('dashboard.view') && { to: '/dashboard', label: 'Home', icon: LayoutDashboard },
     can('meetings.view.own') && { to: '/meetings', label: 'Meetings', icon: Video },
     can('meetings.create') && { to: '', label: 'New', icon: Plus },
-    can('calendar.view') && { to: '/calendar', label: 'Calendar', icon: CalendarDays },
+    chat.enabled
+      ? { to: '/chat', label: 'Chat', icon: MessagesSquare, badge: chat.unread }
+      : can('calendar.view') && { to: '/calendar', label: 'Calendar', icon: CalendarDays },
     can('notifications.view') && { to: '/notifications', label: 'Alerts', icon: Bell },
-  ].filter((t): t is { to: string; label: string; icon: typeof Plus } => !!t)
+  ].filter((t): t is { to: string; label: string; icon: typeof Plus; badge?: number } => !!t)
   if (tabs.length < 2) return null
 
   return (
     <>
       <nav aria-label="Quick navigation" className="oic-tabbar fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 backdrop-blur md:hidden" data-testid="mobile-tabbar">
         <ul className="mx-auto flex max-w-[560px] items-stretch justify-around">
-          {tabs.map(({ to, label, icon: Icon }) =>
+          {tabs.map(({ to, label, icon: Icon, badge }) =>
             to ? (
               <li key={to} className="flex-1">
                 <NavLink
@@ -33,8 +38,16 @@ export function MobileTabBar() {
                   className={({ isActive }) =>
                     cn('flex h-14 flex-col items-center justify-center gap-0.5 text-[11px] font-semibold transition-colors', isActive ? 'text-brand-600' : 'text-ink-muted')
                   }
+                  data-testid={to === '/chat' ? 'tab-chat' : undefined}
                 >
-                  <Icon className="size-[22px]" aria-hidden />
+                  <span className="relative">
+                    <Icon className="size-[22px]" aria-hidden />
+                    {!!badge && badge > 0 && (
+                      <span className="absolute -top-1.5 -right-2.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[9.5px] font-bold text-white ring-2 ring-surface">
+                        {badge > 99 ? '99+' : badge}
+                      </span>
+                    )}
+                  </span>
                   {label}
                 </NavLink>
               </li>

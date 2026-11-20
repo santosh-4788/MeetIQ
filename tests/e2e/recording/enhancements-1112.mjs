@@ -1,6 +1,6 @@
 // 12 Nov 2026 enhancement batch, end to end in Microsoft Edge (headless, fake camera/microphone/screen) with the REAL R2 recorder:
 // PLVC participant rows + Prarambh Main ID (instant and scheduled), the instant-meeting blank screen (chunk failure → one reload / error card,
-// never white), screen share in an audio-only meeting, the API Documentation page (endpoint list from OpenAPI, Swagger UI, integrations,
+// never white), screen share in an audio-only meeting, the API Documentation page (endpoint list from OpenAPI, built-in API reference, integrations,
 // one-time API key, revocation), the external API driving a real PLVC recording (date-wise IST folder, file name starting with the Prarambh ID,
 // completion report, signed download) and signed webhooks, and the no-idle-timeout session.
 //
@@ -233,7 +233,7 @@ await tc('EN-04', 'Screen share in an AUDIO-ONLY meeting: Present button availab
   return `audio-only meeting: Present available, camera control absent; sharing started (${cam} video element(s) = the screen only)`
 })
 
-const ok5 = await tc('EN-05', 'Organisation → System → API Documentation: endpoint list from OpenAPI, Swagger UI, create integration (key shown once), use it, revoke it', async () => {
+const ok5 = await tc('EN-05', 'Organisation → System → API Documentation: endpoint list from OpenAPI, built-in API reference, create integration (key shown once), use it, revoke it', async () => {
   admin = await newPage()
   await login(admin, ADMIN)
   await admin.getByRole('link', { name: 'API Documentation' }).click()
@@ -243,8 +243,8 @@ const ok5 = await tc('EN-05', 'Organisation → System → API Documentation: en
   const dl = await fetch(`${WEB}${await admin.getByTestId('download-openapi').getAttribute('href')}`)
   check(dl.status === 200 && (await dl.json()).openapi?.startsWith('3.'), 'OpenAPI download failed')
   await admin.getByRole('tab', { name: /API reference/ }).click()
-  const ops = await until(async () => { const n = await admin.locator('[data-testid="swagger-ui"] .opblock').count(); return n >= 10 && n }, 'Swagger UI did not render operations', 30_000)
-  await shot(admin, 'en05-swagger')
+  const ops = await until(async () => { const n = await admin.getByTestId('api-operation').count(); return n >= 10 && n }, 'API reference did not render operations', 30_000)
+  await shot(admin, 'en05-api-reference')
   await admin.getByRole('tab', { name: /Integrations/ }).click()
   await admin.getByTestId('integration-new').click()
   await admin.getByTestId('integration-name').fill(`E2E Portal ${Date.now().toString(36)}`)
@@ -260,7 +260,7 @@ const ok5 = await tc('EN-05', 'Organisation → System → API Documentation: en
   check(scalar(`SELECT COUNT(*) AS v FROM app.ApiKeys WHERE KeyPrefix = '${apiKey.slice(0, 25)}'`) === 1, 'key prefix not stored')
   // Employees do not see the module.
   check(!(await host.getByRole('link', { name: 'API Documentation' }).count()), 'an employee sees API Documentation')
-  return `${endpoints} endpoints listed from OpenAPI; Swagger UI rendered ${ops} operations; integration ${integrationCode} created, key shown once and accepted by /me`
+  return `${endpoints} endpoints listed from OpenAPI; API reference rendered ${ops} operations; integration ${integrationCode} created, key shown once and accepted by /me`
 })
 
 ok5 && await tc('EN-06', 'External API → real PLVC recording: IST date folder, file name starts with the Prarambh ID; completion report; signed download; signed webhooks', async () => {

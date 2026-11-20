@@ -23,6 +23,7 @@ import { SettingsPage } from './pages/settings/SettingsPage'
 import { CalendarPage } from './pages/calendar/CalendarPage'
 import { JoinPage } from './pages/JoinPage'
 import { LinkJoinPage } from './pages/LinkJoinPage'
+import { AppDownloadPage } from './pages/AppDownloadPage'
 import { ScheduleMeetingPage } from './pages/meetings/MeetingForm'
 import { CustomerMeetingsPage, InternalMeetingsPage, MeetingsRoutes } from './pages/meetings/MeetingsPages'
 import { NotificationsPage } from './pages/notifications/NotificationsPage'
@@ -32,6 +33,8 @@ import { ErrorBoundary, PageErrorCard } from './components/ErrorBoundary'
 
 // Phase 4: the video room (LiveKit client + components) is a separate chunk, downloaded only when someone joins.
 const EmployeeRoomPage = lazy(() => import('./pages/room/EmployeeRoomPage'))
+// Chat workspace (20 Nov 2026): its own chunk, downloaded only when someone opens Chat.
+const ChatPage = lazy(() => import('./pages/chat/ChatPage'))
 
 function LegacyRoomRedirect() {
   const { id = '' } = useParams()
@@ -55,6 +58,13 @@ const builtPages: Record<string, ReactNode> = {
   '/recordings': <RecordingsRoutes />,
   '/reports': <ReportsPage />,
   '/settings': <SettingsPage />,
+  '/chat': (
+    <ErrorBoundary fallback={() => <PageErrorCard onRetry={() => window.location.reload()} />}>
+      <Suspense fallback={<div className="oic-chat animate-pulse rounded-xl border border-line bg-surface" aria-busy="true" aria-label="Loading Chat" />}>
+        <ChatPage />
+      </Suspense>
+    </ErrorBoundary>
+  ),
 }
 
 export default function App() {
@@ -78,6 +88,8 @@ export default function App() {
               <Route path="/join/:token" element={<JoinPage />} />
               {/* Public: the shareable meeting link (anyone can ask to join; a host admits them). */}
               <Route path="/m/:token" element={<LinkJoinPage />} />
+              {/* Public: the Android app download (APK from our own server). */}
+              <Route path="/get-app" element={<AppDownloadPage />} />
             </Route>
 
             <Route element={<RequireAuth />}>

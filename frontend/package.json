@@ -15,6 +15,7 @@
     "@livekit/components-react": "2.9.24",
     "@livekit/components-styles": "1.2.0",
     "@livekit/track-processors": "0.8.2",
+    "@microsoft/signalr": "10.0.11",
     "clsx": "2.1.1",
     "jspdf": "4.2.1",
     "livekit-client": "2.23.0",
@@ -23,8 +24,7 @@
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-router-dom": "7.18.5",
-    "recharts": "3.10.1",
-    "swagger-ui-dist": "5.17.14"
+    "recharts": "3.10.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.3",

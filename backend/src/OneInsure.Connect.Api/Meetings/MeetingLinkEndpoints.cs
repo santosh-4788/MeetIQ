@@ -50,8 +50,12 @@ public static class MeetingLinkEndpoints
         inv.MapGet("", InvitationStatus);
         inv.MapPost("/resend", ResendInvitation);
 
-        api.MapGet("/m/{token}", LinkInfo).RequireRateLimiting(NotificationEndpoints.JoinRateLimit);
-        api.MapPost("/m/{token}/request", LinkRequest).RequireRateLimiting(NotificationEndpoints.JoinRateLimit);
+        // Malformed link codes (wrong length or characters) never reach a handler (Tokens.LinkTokenRoute); they get the same
+        // "invalid link" answer as an unknown code, without a database lookup. Lowest route precedence: real routes win.
+        api.Map("/m/{**rest}", () => Problems.Create(404, "NOT_FOUND", "This meeting link is invalid."));
+        api.Map("/join/{**rest}", () => Problems.Create(404, "NOT_FOUND", "This invitation link is invalid, has expired or was withdrawn."));
+        api.MapGet("/m/" + Tokens.LinkTokenRoute, LinkInfo).RequireRateLimiting(NotificationEndpoints.JoinRateLimit);
+        api.MapPost("/m/" + Tokens.LinkTokenRoute + "/request", LinkRequest).RequireRateLimiting(NotificationEndpoints.JoinRateLimit);
         return api;
     }
 
@@ -95,7 +99,7 @@ public static class MeetingLinkEndpoints
             }
             return (s.Protector.Unprotect(row.TokenProtected), row);
         }
-        var token = Tokens.New();
+        var token = Tokens.NewLinkToken();
         var protectedToken = s.Protector.Protect(token);
         var exp = expires > now ? expires : now.AddMinutes(1); // a link made after joining closed works for nothing anyway
         var id = await c.QuerySingleAsync<long>("""
@@ -119,7 +123,9 @@ public static class MeetingLinkEndpoints
         var me = await Actor.LoadAsync(c, ctx.User);
         if (me.EmployeeId is null)
             return Problems.Create(400, "VALIDATION", "Your user account is not linked to an employee record, so you cannot start meetings. Ask an administrator to link it.");
-        var (error, r) = await CreateInstantAsync(c, s, i, me, ClientInfo.From(ctx).Ip, null, sendInvitations: true);
+        // 17 Nov 2026: the portal's instant meeting needs a title (every user, every type, also "Skip details"). The external
+        // API keeps its documented default title ("<host name>'s meeting") so calling portals are not broken.
+        var (error, r) = await CreateInstantAsync(c, s, i, me, ClientInfo.From(ctx).Ip, null, sendInvitations: true, requireTitle: true);
         if (error is not null) return error;
         return Results.Json(new
         {
@@ -143,13 +149,13 @@ public static class MeetingLinkEndpoints
     /// customer/guest gets a personal join link (instant meetings send no e-mail; the host or the calling portal shares it).
     /// </summary>
     internal static async Task<(IResult? Error, InstantResult? Result)> CreateInstantAsync(IDbConnection c, LinkServices s, InstantInput i, Actor me, string? ip,
-        long? integrationId, string? externalReference = null, bool sendInvitations = false)
+        long? integrationId, string? externalReference = null, bool sendInvitations = false, bool requireTitle = false)
     {
         var o = s.Meetings;
         var now = s.Clock.UtcNow;
 
         var v = new Validator();
-        var title = v.Optional("title", i.Title, 200, "Title") ?? Shorten($"{me.EmployeeName ?? "Instant"}'s meeting", 200);
+        var title = (requireTitle ? v.Required("title", i.Title, 200, "Title") : v.Optional("title", i.Title, 200, "Title")) ?? Shorten($"{me.EmployeeName ?? "Instant"}'s meeting", 200);
         var category = MeetingEndpoints.Upper(i.Category) ?? "GROUP";
         var isCustomer = MeetingEndpoints.IsCustomerCategory(category);
         if (!MeetingEndpoints.Categories.Contains(category)) v.Add("category", "Unknown meeting category.");
@@ -226,7 +232,7 @@ public static class MeetingLinkEndpoints
                 OUTPUT inserted.ParticipantId
                 VALUES (@meetingId, @type, @customerId, @guestName, @guestEmail, 'ATTENDEE', 'PENDING', @identity, 1, @user)
                 """, new { meetingId, type = customerId is null ? "GUEST" : "CUSTOMER", customerId, guestName, guestEmail, identity = MeetingMessaging.NewOpaqueId("p_", 12), user = me.UserId }, tx);
-            var personal = Tokens.New();
+            var personal = Tokens.NewLinkToken();
             await c.ExecuteAsync("""
                 INSERT mtg.MeetingInvitations (MeetingId, ParticipantId, TokenHash, CreatedUtc, ExpiresUtc) VALUES (@meetingId, @participantId, @hash, @now, @exp)
                 """, new { meetingId, participantId, hash = Tokens.Hash(personal), now, exp = s.Expiry(end) }, tx);
@@ -329,7 +335,7 @@ public static class MeetingLinkEndpoints
         await c.ExecuteAsync("UPDATE mtg.MeetingInvitations SET RevokedUtc = @now, RevokeReason = 'Re-issued (invitation e-mailed again)' WHERE ParticipantId = @p AND RevokedUtc IS NULL",
             new { now, p = p.Value.ParticipantId }, tx);
         var info = await MeetingMessaging.LoadAsync(c, tx, m.Value.MeetingId);
-        var personal = Tokens.New();
+        var personal = Tokens.NewLinkToken();
         await c.ExecuteAsync("INSERT mtg.MeetingInvitations (MeetingId, ParticipantId, TokenHash, CreatedUtc, ExpiresUtc) VALUES (@meetingId, @participantId, @hash, @now, @exp)",
             new { meetingId = m.Value.MeetingId, participantId = p.Value.ParticipantId, hash = Tokens.Hash(personal), now, exp = s.Expiry(info.EndUtc) }, tx);
         await QueueInstantInvitationAsync(c, tx, s, info, p.Value.Name, email, s.JoinUrl(personal));
@@ -403,7 +409,7 @@ public static class MeetingLinkEndpoints
             return Problems.Create(403, "FORBIDDEN", "Only the host, a co-host or the organiser can send the customer's link.");
         if (m.Status is not ("SCHEDULED" or "LIVE")) return Db_.Conflict("This meeting is not scheduled or in progress.");
 
-        var token = Tokens.New();
+        var token = Tokens.NewLinkToken();
         var now = s.Clock.UtcNow;
         using var tx = c.BeginTransaction();
         await c.ExecuteAsync("""
@@ -604,7 +610,7 @@ public static class MeetingLinkEndpoints
         if (mine is not null)
             await c.ExecuteAsync("UPDATE mtg.MeetingInvitations SET RevokedUtc = @now, RevokeReason = 'Replaced (asked to join again)' WHERE ParticipantId = @p AND RevokedUtc IS NULL",
                 new { now, p = mine.ParticipantId }, tx);
-        var personal = Tokens.New();
+        var personal = Tokens.NewLinkToken();
         var exp = s.Expiry(l.EndUtc);
         await c.ExecuteAsync("""
             INSERT mtg.MeetingInvitations (MeetingId, ParticipantId, TokenHash, CreatedUtc, ExpiresUtc) VALUES (@m, @p, @hash, @now, @exp)

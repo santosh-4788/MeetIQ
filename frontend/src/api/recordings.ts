@@ -50,6 +50,8 @@ export type RoomRecordingState = {
     declined: string[]
     decisions: { identity: string; name: string; decision: ConsentDecision | 'PENDING' | 'DISCONNECTED' }[]
   } | null
+  /** The meeting's current scheduled and automatic end (GoodDay #14230): re-read with this state, so an extension is never missed. */
+  ends?: { endUtc: string; autoEndUtc: string | null }
 }
 
 export type ConsentRequestStatus = 'OPEN' | 'STARTED' | 'DECLINED' | 'CANCELLED' | 'EXPIRED' | 'FAILED'

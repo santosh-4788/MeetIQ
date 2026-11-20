@@ -69,7 +69,7 @@
           "OneInsure Connect integration API"
         ],
         "summary": "Create an instant or scheduled meeting and get its links.",
-        "description": "Send an Idempotency-Key header to make retries safe: a repeated key with the same body returns the original response; with a different body, 422.",
+        "description": "Send an Idempotency-Key header with a new value for every meeting you create (for example your case ID plus a GUID; never your Integration ID - 400 IDEMPOTENCY_KEY_INVALID). Retrying with the same key and body within 24 hours returns the original response; with a different body, 422; if that meeting has since ended, expired or been cancelled, 409 IDEMPOTENCY_KEY_USED.",
         "operationId": "CreateMeeting",
         "parameters": [
           {

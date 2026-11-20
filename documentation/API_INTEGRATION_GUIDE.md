@@ -75,7 +75,7 @@ POST /meetings/{meetingId}/recordings/{recordingId}/download-link → short-live
 POST /meet/api/ext/v1/meetings
 Authorization: Bearer <API key>
 Content-Type: application/json
-Idempotency-Key: YOUR-REF-001
+Idempotency-Key: CASE-1042-7f3c9b2e-6a1d-4c2b-9e5f-3d8a1b7c0e44
 
 {
   "category": "Customer-PLVC",
@@ -134,6 +134,9 @@ The response is `201 Created`:
 **Idempotency.**
 - The same `Idempotency-Key` with the same body returns the original response (header `Idempotent-Replayed: true`). It never creates a second meeting.
 - The same key with a different body returns `422 IDEMPOTENCY_KEY_REUSED`.
+- Send a **new key for every meeting you create** (for example your case ID plus a GUID) and the **same key only to retry** that request after a timeout. Never send your Integration ID as the key: it is refused with `400 IDEMPOTENCY_KEY_INVALID`. A fixed key would replay the first meeting (with its old date) on every later create.
+- A key is remembered for **24 hours**; after that it is free again and creates a new meeting.
+- If the meeting a key created has since ended, expired or been cancelled, the same key returns `409 IDEMPOTENCY_KEY_USED` (never the old response).
 - While the first request is still running, a repeat returns `409 REQUEST_IN_PROGRESS`.
 
 ### Meeting completion report
@@ -181,6 +184,8 @@ All errors are `application/problem+json`:
 | 409 | `CONFLICT` | Calendar conflict, or the meeting already started (cancel) |
 | 409 | `RECORDING_NOT_READY`, `RECORDING_FAILED`, `REQUEST_IN_PROGRESS` | See above |
 | 410 | `RECORDING_DELETED` | Deleted by an authorised user |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | The Idempotency-Key was your Integration ID |
+| 409 | `IDEMPOTENCY_KEY_USED` | The key already created a meeting that has ended, expired or been cancelled |
 | 422 | `IDEMPOTENCY_KEY_REUSED` | Same key, different body |
 | 429 | `RATE_LIMITED` | Over the integration's per-minute limit. Wait `Retry-After` (60) seconds. |
 

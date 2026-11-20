@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Android app binary (built from mobile/android, published by mobile/android/publish-apk.ps1)
+public/app/*.apk

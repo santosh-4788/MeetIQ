@@ -1,0 +1,398 @@
+/* Chat workspace (pages/chat): fills the space between the header and the bottom of the window (and the phone tab bar). */
+.oic-chat {
+  height: calc(100dvh - 4rem - 3rem);
+  min-height: 420px;
+}
+@media (max-width: 767px) {
+  /* Phones: edge to edge; main has 1.25rem (1.5rem from 640px) on top and room for the tab bar below. */
+  .oic-chat {
+    height: calc(100dvh - 4rem - 1.25rem - 5.5rem - var(--sab));
+    min-height: 360px;
+  }
+}
+@media (min-width: 640px) and (max-width: 767px) {
+  .oic-chat {
+    height: calc(100dvh - 4rem - 1.5rem - 5.5rem - var(--sab));
+  }
+}
+
+/* In the components layer so Tailwind utilities on the same element still win. */
+@layer components {
+/* ---- iOS-style look (20 Nov 2026) --------------------------------------------------------------------------------
+   Chat, calls, notes and tasks follow the iPhone look: system font (San Francisco on Apple devices, Segoe UI / Roboto
+   elsewhere; no font files are downloaded), iOS system colours, translucent bars, grouped lists, bubble tails. */
+.ios {
+  --ios-blue: #007aff;
+  --ios-blue-press: #0062cc;
+  --ios-green: #34c759;
+  --ios-red: #ff3b30;
+  --ios-orange: #ff9500;
+  --ios-yellow: #ffcc00;
+  --ios-purple: #af52de;
+  --ios-gray: #8e8e93;
+  --ios-gray2: #aeaeb2;
+  --ios-gray4: #d1d1d6;
+  --ios-gray5: #e5e5ea;
+  --ios-gray6: #f2f2f7;
+  --ios-label: #000;
+  --ios-label2: rgb(60 60 67 / 0.6);
+  --ios-label3: rgb(60 60 67 / 0.3);
+  --ios-fill: rgb(118 118 128 / 0.12);
+  --ios-fill2: rgb(118 118 128 / 0.2);
+  --ios-sep: rgb(60 60 67 / 0.2);
+  --ios-bubble-in: #e9e9eb;
+  --ios-bg: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'Segoe UI', Roboto, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  letter-spacing: -0.008em;
+  color: var(--ios-label);
+}
+
+/* Translucent navigation / tool bars */
+.ios-bar {
+  background: rgb(249 249 249 / 0.88);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+}
+.ios-hairline-b { box-shadow: inset 0 -0.5px 0 var(--ios-sep); }
+.ios-hairline-t { box-shadow: inset 0 0.5px 0 var(--ios-sep); }
+
+.ios-large-title {
+  font-size: 30px;
+  line-height: 36px;
+  font-weight: 700;
+  letter-spacing: -0.022em;
+}
+@media (min-width: 768px) {
+  .ios-large-title { font-size: 26px; line-height: 32px; }
+}
+
+/* Search field */
+.ios-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--ios-fill);
+  color: var(--ios-gray);
+}
+.ios-search input {
+  min-width: 0;
+  flex: 1;
+  background: transparent;
+  outline: none;
+  font-size: 16px; /* 16px stops iPhone Safari from zooming in on focus */
+  color: var(--ios-label);
+}
+.ios-search input::placeholder { color: var(--ios-gray); }
+@media (min-width: 768px) {
+  .ios-search input { font-size: 14px; }
+}
+
+/* Segmented control */
+.ios-seg {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--ios-fill);
+}
+.ios-seg > button {
+  position: relative;
+  height: 30px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ios-label);
+  white-space: nowrap;
+  transition: background-color 0.2s, box-shadow 0.2s;
+}
+.ios-seg > button[aria-selected='true'] { font-weight: 600; }
+/* The white thumb slides between segments (motion layout animation, IosSegmented.tsx). */
+.ios-seg-thumb {
+  position: absolute;
+  inset: 0;
+  border-radius: 7px;
+  background: #fff;
+  box-shadow: 0 3px 8px rgb(0 0 0 / 0.12), 0 3px 1px rgb(0 0 0 / 0.04), 0 0 0 0.5px rgb(0 0 0 / 0.04);
+}
+
+/* Lists with inset separators (iOS "plain" and "inset grouped" lists) */
+.ios-list > * + * .ios-sep-top { box-shadow: inset 0 0.5px 0 var(--ios-sep); }
+.ios-group {
+  overflow: hidden;
+  border-radius: 12px;
+  background: #fff;
+}
+.ios-group:not(.ios-list) > * + * { box-shadow: inset 0 0.5px 0 var(--ios-sep); }
+.ios-group-title {
+  padding: 0 16px 6px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  color: var(--ios-label2);
+}
+.ios-pressable { transition: background-color 0.15s; }
+.ios-pressable:active { background-color: var(--ios-gray5); }
+@media (hover: hover) {
+  .ios-pressable:hover { background-color: rgb(0 0 0 / 0.035); }
+}
+
+/* Message bubbles with tails (the tail sits on the last bubble of a run) */
+.ios-bubble {
+  position: relative;
+  border-radius: 18px;
+  padding: 7px 12px;
+  font-size: 16px;
+  line-height: 21px;
+  overflow-wrap: anywhere;
+}
+@media (min-width: 768px) {
+  .ios-bubble { font-size: 15px; line-height: 20px; }
+}
+.ios-bubble-out { background: var(--ios-blue); color: #fff; }
+.ios-bubble-in { background: var(--ios-bubble-in); color: var(--ios-label); }
+.ios-bubble-out.ios-tail::before,
+.ios-bubble-in.ios-tail::before {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  width: 20px;
+  height: 20px;
+}
+.ios-bubble-out.ios-tail::after,
+.ios-bubble-in.ios-tail::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  width: 10px;
+  height: 20px;
+  background: var(--ios-bg);
+}
+.ios-bubble-out.ios-tail::before { right: -7px; background: var(--ios-blue); border-bottom-left-radius: 16px 14px; }
+.ios-bubble-out.ios-tail::after { right: -10px; border-bottom-left-radius: 10px; }
+.ios-bubble-in.ios-tail::before { left: -7px; background: var(--ios-bubble-in); border-bottom-right-radius: 16px 14px; }
+.ios-bubble-in.ios-tail::after { left: -10px; border-bottom-right-radius: 10px; }
+.ios-bubble > * { position: relative; z-index: 1; }
+
+/* The composer pill shows focus by its caret (as on iOS), not the site-wide focus ring */
+.ios .ios-noring:focus, .ios .ios-noring:focus-visible, .ios .ios-field:focus-visible, .ios .ios-search input:focus-visible { outline: none; box-shadow: none; }
+
+/* Buttons */
+.ios-tint { color: var(--ios-blue); }
+.ios-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  color: var(--ios-blue);
+  transition: background-color 0.15s, opacity 0.15s;
+}
+.ios-icon-btn:active { opacity: 0.45; }
+@media (hover: hover) {
+  .ios-icon-btn:hover { background: var(--ios-fill); }
+}
+.ios-icon-btn:disabled { opacity: 0.35; }
+.ios-icon-btn[aria-pressed='true'] { background: rgb(0 122 255 / 0.12); }
+
+.ios-btn-filled {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 12px;
+  background: var(--ios-blue);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+}
+.ios-btn-filled:active { background: var(--ios-blue-press); }
+.ios-btn-filled:disabled { opacity: 0.4; }
+.ios-btn-tinted {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: rgb(0 122 255 / 0.12);
+  color: var(--ios-blue);
+  font-size: 15px;
+  font-weight: 600;
+}
+.ios-btn-tinted:active { background: rgb(0 122 255 / 0.2); }
+
+/* Action sheet (phones) */
+.ios-sheet-backdrop { background: rgb(0 0 0 / 0.32); }
+.ios-sheet {
+  background: rgb(242 242 247 / 0.94);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  backdrop-filter: saturate(180%) blur(24px);
+}
+.ios-sheet-group {
+  overflow: hidden;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 0.97);
+}
+.ios-sheet-group > * + * { box-shadow: inset 0 0.5px 0 var(--ios-sep); }
+.ios-sheet-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  padding: 0 18px;
+  font-size: 17px;
+  color: var(--ios-label);
+  text-align: left;
+}
+.ios-sheet-item:active { background: var(--ios-gray5); }
+
+/* Context menu (computers) */
+.ios-menu {
+  overflow: hidden;
+  border-radius: 13px;
+  background: rgb(250 250 250 / 0.92);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  backdrop-filter: saturate(180%) blur(24px);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.18), 0 0 0 0.5px rgb(0 0 0 / 0.08);
+}
+.ios-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  font-size: 15px;
+  text-align: left;
+  color: var(--ios-label);
+}
+.ios-menu-item + .ios-menu-item { box-shadow: inset 0 0.5px 0 var(--ios-sep); }
+.ios-menu-item:hover { background: rgb(0 0 0 / 0.05); }
+.ios-menu-item:active { background: var(--ios-gray5); }
+
+/* Toggle switch */
+.ios-switch {
+  position: relative;
+  width: 51px;
+  height: 31px;
+  flex-shrink: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 999px;
+  background: var(--ios-fill2);
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+.ios-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 27px;
+  height: 27px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 3px 8px rgb(0 0 0 / 0.15), 0 3px 1px rgb(0 0 0 / 0.06);
+  transition: transform 0.2s;
+}
+.ios-switch:checked { background: var(--ios-green); }
+.ios-switch:checked::after { transform: translateX(20px); }
+.ios-switch:focus-visible { outline: 2px solid var(--ios-blue); outline-offset: 2px; }
+
+/* Form fields inside grouped lists */
+.ios-field {
+  width: 100%;
+  min-height: 44px;
+  padding: 11px 16px;
+  background: transparent;
+  font-size: 16px;
+  color: var(--ios-label);
+  outline: none;
+}
+.ios-field::placeholder { color: var(--ios-label3); }
+@media (min-width: 768px) {
+  .ios-field { font-size: 15px; }
+}
+
+/* Calls: dark full-screen / card background */
+.ios-call-bg {
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgb(74 98 138 / 0.95) 0%, transparent 60%),
+    radial-gradient(90% 70% at 100% 100%, rgb(36 52 84 / 0.95) 0%, transparent 70%),
+    linear-gradient(180deg, #2b3a55 0%, #121a2a 100%);
+  color: #fff;
+}
+.ios-call-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.16);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  color: #fff;
+  transition: background-color 0.15s, color 0.15s, transform 0.1s;
+}
+.ios-call-btn:active { transform: scale(0.95); }
+.ios-call-btn[aria-pressed='true'] { background: #fff; color: #1c1c1e; }
+.ios-call-btn:disabled { opacity: 0.35; }
+.ios-call-label { font-size: 12px; font-weight: 500; color: rgb(255 255 255 / 0.85); }
+
+@keyframes ios-sheet-up {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+.ios-sheet-up { animation: ios-sheet-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+/* New message bubbles, reactions and badges pop in from their corner. */
+@keyframes ios-pop {
+  0% { transform: scale(0.82); opacity: 0; }
+  60% { transform: scale(1.03); opacity: 1; }
+  100% { transform: none; opacity: 1; }
+}
+.ios-pop { animation: ios-pop 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.1) both; }
+.ios-pop-right { transform-origin: bottom right; }
+.ios-pop-left { transform-origin: bottom left; }
+
+/* Section changes fade up a little. */
+@keyframes ios-fade {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.ios-fade { animation: ios-fade 0.24s ease-out both; }
+
+/* Phones: an opened conversation slides in from the right, as an iOS push. */
+@keyframes ios-push {
+  from { opacity: 0.4; transform: translateX(28%); }
+  to { opacity: 1; transform: none; }
+}
+@media (max-width: 767px) {
+  .ios-push { animation: ios-push 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+}
+
+/* A ticked task bounces. */
+@keyframes ios-check-pop {
+  0% { transform: scale(0.8); }
+  55% { transform: scale(1.18); }
+  100% { transform: none; }
+}
+.ios-check-pop { animation: ios-check-pop 0.32s ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ios-seg > button, .ios-switch, .ios-switch::after, .ios-call-btn { transition: none; }
+  .ios-sheet-up, .ios-pop, .ios-fade, .ios-push, .ios-check-pop { animation: none; }
+}
+}

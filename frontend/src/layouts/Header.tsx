@@ -12,6 +12,7 @@ import { cn } from '../lib/cn'
 import { formatRelative } from '../lib/format'
 import { notificationIcon, safeLink } from '../pages/notifications/notificationMeta'
 import { allNavItems } from './navigation'
+import { useChat } from '../pages/chat/ChatProvider'
 
 function useOutsideClose<T extends HTMLElement>(open: boolean, close: () => void) {
   const ref = useRef<T>(null)
@@ -94,14 +95,15 @@ export function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
 function GlobalSearch() {
   const navigate = useNavigate()
   const { can } = useAuth()
+  const chatOn = useChat().enabled
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
   const ref = useOutsideClose<HTMLDivElement>(open, () => setOpen(false))
   const inputRef = useRef<HTMLInputElement>(null)
   // Phase 1: searches pages/modules. Phase 3 extends this to meetings, employees and customers via /api/v1/search.
   const results = useMemo(
-    () => allNavItems.filter((i) => (!i.permission || can(i.permission)) && i.label.toLowerCase().includes(q.trim().toLowerCase())).slice(0, 6),
-    [q, can],
+    () => allNavItems.filter((i) => (!i.permission || can(i.permission)) && (!i.feature || chatOn) && i.label.toLowerCase().includes(q.trim().toLowerCase())).slice(0, 6),
+    [q, can, chatOn],
   )
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

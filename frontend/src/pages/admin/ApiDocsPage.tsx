@@ -9,13 +9,13 @@ import { useAuth } from '../../auth/AuthContext'
 import { ApiGuide } from './ApiGuide'
 import { IntegrationsPanel } from './IntegrationsPanel'
 
-const SwaggerPanel = lazy(() => import('./SwaggerPanel'))
+const ApiReferencePanel = lazy(() => import('./ApiReferencePanel'))
 
 type Tab = 'guide' | 'reference' | 'integrations'
 
 /**
  * Organisation → System → API Documentation. Visible only with api.docs.view (Admin and Super Admin; anyone else when an administrator
- * adds the "API Documentation Viewer" role - V025). The guide is complete on its own; the Swagger tab is generated from the API itself.
+ * adds the "API Documentation Viewer" role - V025). The guide is complete on its own; the API reference tab is generated from the API itself.
  * Creating integrations and API keys stays with integrations.manage.
  */
 export function ApiDocsPage() {
@@ -25,7 +25,7 @@ export function ApiDocsPage() {
   const baseUrl = absoluteUrl(EXT_API_BASE)
   const tabs: { id: Tab; label: string; icon: ReactNode }[] = [
     { id: 'guide', label: 'Integration guide', icon: <BookOpen className="size-4" /> },
-    { id: 'reference', label: 'API reference (Swagger)', icon: <Code2 className="size-4" /> },
+    { id: 'reference', label: 'API reference', icon: <Code2 className="size-4" /> },
     ...(canManageKeys ? [{ id: 'integrations' as Tab, label: 'Integrations & API keys', icon: <KeyRound className="size-4" /> }] : []),
   ]
   return (
@@ -52,7 +52,7 @@ export function ApiDocsPage() {
         {tab === 'guide' && <ApiGuide baseUrl={baseUrl} openApiUrl={absoluteUrl(OPENAPI_URL)} canManageKeys={canManageKeys} onOpenKeys={() => setTab('integrations')} />}
         {tab === 'reference' && (
           <Suspense fallback={<Skeleton className="h-96" />}>
-            <SwaggerPanel url={OPENAPI_URL} />
+            <ApiReferencePanel url={OPENAPI_URL} />
           </Suspense>
         )}
         {tab === 'integrations' && canManageKeys && <IntegrationsPanel />}

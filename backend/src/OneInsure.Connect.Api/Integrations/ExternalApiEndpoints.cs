@@ -96,7 +96,7 @@ public static partial class ExternalApiEndpoints
         g.MapGet("/me", Me).WithName("GetIntegration").WithSummary("Who am I: the calling integration, its scopes and rate limit.").Produces<ExtMe>();
         g.MapPost("/meetings", CreateMeeting).RequireScope(IntegrationScopes.MeetingCreate).WithName("CreateMeeting")
             .WithSummary("Create an instant or scheduled meeting and get its links.")
-            .WithDescription("Send an Idempotency-Key header to make retries safe: a repeated key with the same body returns the original response; with a different body, 422.")
+            .WithDescription("Send an Idempotency-Key header with a new value for every meeting you create (for example your case ID plus a GUID; never your Integration ID - 400 IDEMPOTENCY_KEY_INVALID). Retrying with the same key and body within 24 hours returns the original response; with a different body, 422; if that meeting has since ended, expired or been cancelled, 409 IDEMPOTENCY_KEY_USED.")
             .Produces<ExtMeeting>(201).ProducesProblem(400).ProducesProblem(409).ProducesProblem(422);
         g.MapGet("/meetings", ListMeetings).RequireScope(IntegrationScopes.MeetingRead).WithName("ListMeetings")
             .WithSummary("List this integration's meetings (newest first), optionally by externalReference or status.").Produces<ExtMeetingList>();
@@ -195,6 +195,21 @@ public static partial class ExternalApiEndpoints
 
     static IResult NotFound() => Problems.Create(404, "NOT_FOUND", "Meeting not found for this integration.");
 
+    /// <summary>The meeting code ("meetingId") inside a stored create response, or null when it cannot be read.</summary>
+    static string? ReplayedMeetingCode(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        try
+        {
+            using var d = JsonDocument.Parse(json);
+            if (d.RootElement.ValueKind != JsonValueKind.Object) return null;
+            foreach (var p in d.RootElement.EnumerateObject())
+                if (p.Name.Equals("meetingId", StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.String) return p.Value.GetString();
+        }
+        catch (JsonException) { }
+        return null;
+    }
+
     static ExtMeetingSummary Summary(MeetingRow m) => new(m.MeetingCode, m.Id, m.ExternalReference, m.Title, m.Category, m.MeetingKind, m.PrarambhMainId,
         MeetingStatus(m.Status), ToIst(m.StartUtc), ToIst(m.EndUtc));
 
@@ -242,7 +257,16 @@ public static partial class ExternalApiEndpoints
         if (!string.IsNullOrWhiteSpace(idempotencyKey))
         {
             if (idempotencyKey.Length > 100) return Problems.Create(400, "VALIDATION", "Idempotency-Key must be at most 100 characters.");
+            // 16 Nov 2026: a portal sent its own Integration ID as the key on every create, so every later create replayed the first
+            // meeting (with that day's date) or was refused. The Integration ID never identifies one request - refuse it outright.
+            if (string.Equals(idempotencyKey.Trim(), i.Code, StringComparison.OrdinalIgnoreCase))
+                return Problems.Create(400, "IDEMPOTENCY_KEY_INVALID",
+                    "Idempotency-Key must be a new value for each meeting you create (for example your case ID plus a GUID). Do not send your Integration ID.");
             requestHash = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(input));
+            // A key is remembered for IdempotencyHours (retries of one request); after that it is free again and creates a new meeting.
+            await c.ExecuteAsync("""
+                DELETE app.ApiIdempotency WHERE IntegrationId = @id AND IdempotencyKey = @key AND CreatedUtc < DATEADD(HOUR, -@hours, SYSUTCDATETIME())
+                """, new { id = i.IntegrationId, key = idempotencyKey, hours = s.Options.IdempotencyHoursClamped });
             try
             {
                 await c.ExecuteAsync("INSERT app.ApiIdempotency (IntegrationId, IdempotencyKey, RequestHash, StatusCode) VALUES (@id, @key, @hash, 0)",
@@ -255,6 +279,13 @@ public static partial class ExternalApiEndpoints
                 if (!prior.RequestHash.AsSpan().SequenceEqual(requestHash))
                     return Problems.Create(422, "IDEMPOTENCY_KEY_REUSED", "This Idempotency-Key was already used with a different request body.");
                 if (prior.StatusCode == 0) return Problems.Create(409, "REQUEST_IN_PROGRESS", "A request with this Idempotency-Key is still being processed. Retry shortly.");
+                // Never hand back a stale snapshot ("Scheduled", an old date) for a meeting that has already ended, expired or been cancelled.
+                if (ReplayedMeetingCode(prior.ResponseJson) is { } code
+                    && await c.ExecuteScalarAsync<string?>("SELECT [Status] FROM mtg.Meetings WHERE IntegrationId = @id AND MeetingCode = @code",
+                        new { id = i.IntegrationId, code }) is { } status
+                    && status is not ("SCHEDULED" or "LIVE" or "DRAFT"))
+                    return Problems.Create(409, "IDEMPOTENCY_KEY_USED",
+                        $"This Idempotency-Key already created meeting {code}, which is now {MeetingStatus(status)}. Send a new Idempotency-Key to create a new meeting.");
                 ctx.Response.Headers["Idempotent-Replayed"] = "true";
                 return Results.Content(prior.ResponseJson ?? "{}", "application/json", Encoding.UTF8, prior.StatusCode);
             }
@@ -650,4 +681,7 @@ public sealed class IntegrationOptions
     public bool AllowPrivateWebhookTargets { get; set; }
     public int WebhookPollSeconds { get; set; } = 5;
     public int WebhookMaxAttempts { get; set; } = 8;
+    /// <summary>How long an Idempotency-Key is remembered (retries of the same create). After that the key is free again. 1-720 h.</summary>
+    public int IdempotencyHours { get; set; } = 24;
+    internal int IdempotencyHoursClamped => Math.Clamp(IdempotencyHours, 1, 720);
 }

@@ -173,6 +173,121 @@
   object-fit: contain;
 }
 
+/* ---- Someone else's screen on the main area (ScreenShareView, 18 Nov 2026) ------------------------------------- */
+
+/* LiveKit's pin icon on the shared screen did nothing (the share is already on the main area): the screen toolbar
+   has a real Fullscreen button instead. Camera tiles keep their pin icon. */
+.oic-room .lk-participant-tile[data-lk-source="screen_share"] .lk-focus-toggle-button {
+  display: none;
+}
+.oic-screen-view {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: var(--oic-midnight);
+  border-radius: 24px;
+}
+.oic-screen-view[data-zoomed] {
+  overflow: auto;
+  cursor: grab;
+  touch-action: pan-x pan-y;
+}
+.oic-screen-view[data-zoomed]:active {
+  cursor: grabbing;
+}
+.oic-screen-canvas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.oic-screen-frame {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+}
+/* The element keeps the share's full size so the video server sends the full-resolution layer; a transform shows it at
+   the size on screen. Preflight's max-width/height:auto on <video> must not shrink the layout box. */
+.oic-screen-frame > video.lk-participant-media-video {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  max-height: none;
+  transform-origin: 0 0;
+  border-radius: 0;
+  object-fit: contain;
+  background: transparent;
+}
+.oic-screen-tools {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: calc(100% - 20px);
+  overflow-x: auto;
+  padding: 3px;
+  border-radius: 9999px;
+  background: rgb(8 21 37 / 0.78);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgb(255 255 255 / 0.1);
+  box-shadow: 0 10px 26px -10px rgb(0 0 0 / 0.6);
+  scrollbar-width: none;
+  animation: oic-fade-in 160ms var(--ease-out) both;
+}
+/* Closed: one small, faint button (bugs docx 18 Nov 2026: the controls must not stay over the picture). */
+.oic-screen-tools-toggle {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  color: #fff;
+  background: rgb(8 21 37 / 0.6);
+  border: 1px solid rgb(255 255 255 / 0.12);
+  backdrop-filter: blur(8px);
+  opacity: 0.55;
+  cursor: pointer;
+  transition: opacity 160ms var(--ease-out), background-color 160ms var(--ease-out);
+}
+.oic-screen-tools-toggle:hover,
+.oic-screen-tools-toggle:focus-visible,
+.oic-room .lk-participant-tile:hover .oic-screen-tools-toggle {
+  opacity: 1;
+}
+.oic-screen-tools-toggle:focus-visible {
+  outline: 2px solid var(--oic-cyan);
+  outline-offset: 2px;
+}
+@media (pointer: coarse) {
+  .oic-screen-tools-toggle {
+    width: 40px;
+    height: 40px;
+  }
+}
+.oic-screen-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: rgb(255 255 255 / 0.15);
+}
+/* Shared screen on the main area: a compact participants strip (wide screens), or none at all when hidden. */
+@media (min-width: 601px) {
+  .oic-room .lk-focus-layout.oic-focus-screen {
+    grid-template-columns: clamp(120px, 13%, 200px) minmax(0, 1fr);
+  }
+}
+.oic-room .lk-focus-layout.oic-focus-solo {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .oic-tile-placeholder {
   position: absolute;
   inset: 0;

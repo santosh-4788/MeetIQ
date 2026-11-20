@@ -9,7 +9,7 @@ import { cn } from '../../lib/cn'
 /**
  * The complete, self-explanatory integration guide (13 Nov 2026, owner: "anyone I give this access gets all the details on this page -
  * no need to explain anything"). Everything here matches the implemented API (ExternalApiEndpoints.cs, IntegrationCore.cs,
- * WebhookWorker.cs); the interactive Swagger tab is generated from the same code.
+ * WebhookWorker.cs); the interactive API reference tab is generated from the same code.
  */
 
 // ---- Small building blocks ------------------------------------------------------------------------------------------------
@@ -98,7 +98,9 @@ const ERRORS: [string, string, string][] = [
   ['409', 'RECORDING_NOT_READY', 'The recording is still being processed. Try again later or wait for recording.completed.'],
   ['409', 'RECORDING_FAILED', 'The recording failed and cannot be downloaded.'],
   ['409', 'REQUEST_IN_PROGRESS', 'The same Idempotency-Key is still being processed.'],
+  ['409', 'IDEMPOTENCY_KEY_USED', 'This Idempotency-Key already created a meeting that has since ended, expired or been cancelled. Send a new key.'],
   ['410', 'RECORDING_DELETED', 'The recording was deleted by an authorised user.'],
+  ['400', 'IDEMPOTENCY_KEY_INVALID', 'The Idempotency-Key was your Integration ID. Send a new value for every meeting you create.'],
   ['411', '(web server)', 'A POST without a body must send Content-Length: 0 (normal HTTP clients do this).'],
   ['422', 'IDEMPOTENCY_KEY_REUSED', 'The Idempotency-Key was used before with a different body.'],
   ['429', 'RATE_LIMITED', 'Over the integration\'s per-minute limit. Wait Retry-After (60) seconds.'],
@@ -171,7 +173,7 @@ const ENDPOINTS: Endpoint[] = [
   {
     id: 'create', method: 'POST', path: '/meetings', scope: 'meeting.create (+ meeting.schedule for SCHEDULED, + meeting.plvc.unidentified for UNIDENTIFIED)', status: '201',
     summary: 'Create an instant or scheduled meeting. Returns the meeting ID, the personal join link of every participant (instant), the shareable meeting link and the host link.',
-    notes: <>Send an {c('Idempotency-Key')} header (max 100 characters, e.g. your own reference): a retry with the same key and body returns the original response (header {c('Idempotent-Replayed: true')}) and never creates a second meeting.</>,
+    notes: <>Send an {c('Idempotency-Key')} header (max 100 characters): a <strong>new value for every meeting you create</strong> - for example your case ID plus a GUID - never your Integration ID and never a fixed value. A retry with the same key and body within 24 hours returns the original response (header {c('Idempotent-Replayed: true')}) and never creates a second meeting.</>,
     body: [
       ['category', 'string', 'Yes', <>{c('CUSTOMER_PLVC')} (also {c('Customer-PLVC')}, {c('PLVC')}), {c('CUSTOMER_GENERAL')}, {c('INTERNAL')}, {c('TRAINING')}, {c('TEAM')}</>],
       ['meetingType', 'string', 'No', <>{c('INSTANT')} (default, starts now) or {c('SCHEDULED')}</>],
@@ -191,7 +193,7 @@ const ENDPOINTS: Endpoint[] = [
     request: (b) => `curl -X POST ${b}/meetings \\
   -H "Authorization: Bearer ${KEY}" \\
   -H "Content-Type: application/json" \\
-  -H "Idempotency-Key: YOUR-REF-001" \\
+  -H "Idempotency-Key: CASE-1042-7f3c9b2e-6a1d-4c2b-9e5f-3d8a1b7c0e44" \\
   -d '{
     "category": "CUSTOMER_PLVC",
     "meetingType": "INSTANT",
@@ -225,7 +227,7 @@ const ENDPOINTS: Endpoint[] = [
       "joinUrl": "https://www.oneinsure.com/meet/join/…" }
   ]
 }`,
-    errors: '400 VALIDATION, 403 INSUFFICIENT_SCOPE / HOST_NOT_PERMITTED, 409 CONFLICT / REQUEST_IN_PROGRESS, 422 IDEMPOTENCY_KEY_REUSED',
+    errors: '400 VALIDATION, 403 INSUFFICIENT_SCOPE / HOST_NOT_PERMITTED, 400 IDEMPOTENCY_KEY_INVALID, 409 CONFLICT / REQUEST_IN_PROGRESS / IDEMPOTENCY_KEY_USED, 422 IDEMPOTENCY_KEY_REUSED',
   },
   {
     id: 'list', method: 'GET', path: '/meetings', scope: 'meeting.read', status: '200',
@@ -486,7 +488,7 @@ export function ApiGuide({ baseUrl, openApiUrl, canManageKeys, onOpenKeys }: { b
 
         <Section id="limits" title="Rate limits & idempotency">
           <p><strong className="text-ink">Rate limit:</strong> each integration has its own per-minute limit (see {c('rateLimitPerMinute')} in {c('GET /me')}; default 60). Over it you get {c('429 RATE_LIMITED')} with {c('Retry-After: 60')}. Other portals are never affected.</p>
-          <p><strong className="text-ink">Idempotency</strong> on {c('POST /meetings')}: send {c('Idempotency-Key')} (max 100). Same key + same body → the original response ({c('Idempotent-Replayed: true')}); same key + different body → {c('422 IDEMPOTENCY_KEY_REUSED')}; while the first call is still running → {c('409 REQUEST_IN_PROGRESS')}. Safe to retry on timeouts.</p>
+          <p><strong className="text-ink">Idempotency</strong> on {c('POST /meetings')}: send {c('Idempotency-Key')} (max 100). Same key + same body → the original response ({c('Idempotent-Replayed: true')}); same key + different body → {c('422 IDEMPOTENCY_KEY_REUSED')}; while the first call is still running → {c('409 REQUEST_IN_PROGRESS')}; the meeting it created has ended, expired or been cancelled → {c('409 IDEMPOTENCY_KEY_USED')}. A key is remembered for 24 hours, then it is free again. Use a <strong>new key for every new meeting</strong> (your case ID plus a GUID) and the <strong>same key only to retry</strong> the same request after a timeout - never your Integration ID ({c('400 IDEMPOTENCY_KEY_INVALID')}).</p>
         </Section>
 
         <Section id="webhooks" title="Webhooks" lead="We call your HTTPS endpoint when something happens, so you do not have to poll.">
@@ -539,7 +541,7 @@ def verify(raw_body: bytes, header: str, secret: str) -> bool:
             <li>In Postman: <em>Import</em> → choose the file → <em>OpenAPI 3.1</em>.</li>
             <li>On the collection: <em>Authorization</em> → <em>Bearer Token</em> → paste your API key; set the base URL to {c(baseUrl)}.</li>
           </ol>
-          <p>The <strong className="text-ink">API reference (Swagger)</strong> tab shows the same document interactively.</p>
+          <p>The <strong className="text-ink">API reference</strong> tab shows the same document interactively.</p>
         </Section>
 
         <Section id="checklist" title="Go-live checklist">
