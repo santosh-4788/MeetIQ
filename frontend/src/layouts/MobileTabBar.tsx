@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Bell, CalendarDays, LayoutDashboard, MessagesSquare, Plus, Sun, Video } from 'lucide-react'
+import { Bell, CalendarDays, LayoutDashboard, MessagesSquare, Plus, Sun } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { cn } from '../lib/cn'
 import { NewMeetingDialog } from '../pages/meetings/QuickMeetingDialogs'
@@ -17,11 +17,11 @@ export function MobileTabBar() {
   const [starting, setStarting] = useState(false)
   const tabs = [
     can('dashboard.view') && { to: '/dashboard', label: 'Home', icon: LayoutDashboard },
-    can('meetings.view.own') && { to: '/meetings', label: 'Meetings', icon: Video },
-    can('meetings.create') && { to: '', label: 'New', icon: Plus },
     chat.enabled
       ? { to: '/chat', label: 'Chat', icon: MessagesSquare, badge: chat.unread }
       : can('calendar.view') && { to: '/calendar', label: 'Calendar', icon: CalendarDays },
+    // 21 Nov 2026: Meetings left the bar (it stays in the menu); the + sits in the middle of the four tabs.
+    can('meetings.create') && { to: '', label: 'New', icon: Plus },
     // V033: My Day (tasks, Top 3, reviews) one tap away on phones when Notes & tasks is on for this person.
     chat.status?.enabled && chat.status.tasks && { to: '/my-day', label: 'My Day', icon: Sun },
     can('notifications.view') && { to: '/notifications', label: 'Alerts', icon: Bell },

@@ -1,5 +1,15 @@
 # Changelog
 
+## 21 Nov 2026, 18:42 IST — PUBLISHED: Android app 1.2.1 (versionCode 5); phone bottom bar without Meetings
+
+- **Bottom bar (phones and the Android app):** Meetings removed from the bar; it stays in the menu (top left). The bar is now Home, Chat (or Calendar while Chat is off), the + (new meeting) in the middle, My Day and Alerts. File: `frontend/src/layouts/MobileTabBar.tsx`.
+- **Android app 1.2.1:** version raised so the app offers the update. The app itself is unchanged and shows the live site, so the new bar also reaches 1.2.0 users without updating.
+- **Tests:**
+  - gradle unit tests, lint and assembleRelease passed;
+  - e2e android-app-chat 3/3, chat-phone-view 4/4, task-collab 15/15; app-sized screenshot shows Home | Chat | + | My Day | Alerts;
+  - downloaded APK sha256 `fac880cc…4990` = published.
+- **Backup:** website files in `deploy\_backup-20261121-184228` (the 1.2.0 APK is inside at `frontend-dist\app`). Undo: copy it back to `frontend\dist`.
+
 ## 21 Nov 2026, 17:32–17:36 IST — DEPLOYED: assign an existing task to a colleague
 
 - **Problem reported:** "assigned to someone not working, assigned user not getting any notification and not showing tasks". "Assign to" was only offered when creating a task. On an existing task, the user set "Related to → Employee", which is only a reference, so nothing was assigned, no notification went out and the colleague saw no task.
