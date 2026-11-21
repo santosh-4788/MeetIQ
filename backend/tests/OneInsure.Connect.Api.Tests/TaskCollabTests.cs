@@ -342,6 +342,40 @@ public sealed class TaskCollabTests(ApiFixture fx)
     }
 
     [Fact]
+    public async Task An_existing_own_task_can_be_assigned_later()
+    {
+        await Reset();
+        var ana = await SignedIn("cana@test.invalid");
+        var ben = await SignedIn("cben@test.invalid");
+        var benId = await UserId(ana, "Ben Chat");
+        var title = Unique("Sales data for Vinayak");
+        var own = await Ok(ana.PostAsync($"{Api}/tasks", new
+        {
+            title, priority = "HIGH", dueUtc = DateTime.UtcNow.AddDays(1), reminderUtc = DateTime.UtcNow.AddHours(20),
+            checklist = new object[] { new { text = "Pull the report", isRequired = true } },
+        }));
+        var ownId = own.GetProperty("id").GetGuid();
+        // Ben cannot pass on Ana's task; Ana cannot assign to nobody.
+        await Fails(ben.PostAsync($"{Api}/tasks/{ownId}/assign", new { assigneeIds = new[] { benId } }), HttpStatusCode.NotFound);
+        await Fails(ana.PostAsync($"{Api}/tasks/{ownId}/assign", new { assigneeIds = Array.Empty<Guid>() }), HttpStatusCode.BadRequest);
+
+        var copy = await Ok(ana.PostAsync($"{Api}/tasks/{ownId}/assign", new { assigneeIds = new[] { benId }, requiresReview = true }));
+        Assert.Equal("assigner", copy.GetProperty("role").GetString());
+        Assert.Equal("HIGH", copy.GetProperty("priority").GetString());
+        Assert.True(copy.GetProperty("requiresReview").GetBoolean());
+        Assert.Equal(1, copy.GetProperty("checklist").GetProperty("requiredOpen").GetInt32());
+        // The personal task is gone (reminder cancelled); Ben has the task, was told and e-mailed.
+        await Fails(ana.Http.GetAsync($"{Api}/tasks/{ownId}"), HttpStatusCode.NotFound);
+        Assert.Equal(0, await fx.QueryAsync<int>("SELECT COUNT(*) FROM chat.TRN_ChatReminder r JOIN chat.TRN_ChatTask t ON t.TaskId = r.TaskId WHERE t.PublicId = @ownId AND r.[State] = 'PENDING'", new { ownId }));
+        var bens = await Find(ben, "assigned", title);
+        Assert.Equal("assignee", bens.GetProperty("role").GetString());
+        Assert.Equal(1, await Notifications("cben@test.invalid", "TASK_ASSIGNED", title));
+        Assert.Contains(await List(ana, "delegated"), t => t.GetProperty("title").GetString() == title);
+        // An assigned task cannot be passed on again by its owner.
+        await Fails(ben.PostAsync($"{Api}/tasks/{bens.GetProperty("id").GetGuid()}/assign", new { assigneeIds = new[] { benId } }), HttpStatusCode.Conflict);
+    }
+
+    [Fact]
     public async Task Links_must_be_visible_to_both_people_and_a_failed_assignment_leaves_nothing_behind()
     {
         await Reset();

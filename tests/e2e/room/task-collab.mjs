@@ -316,6 +316,31 @@ ok.appNotify = await tc('TC-14', 'Android app 1.2.0: a task alert in the backgro
   return m.link.replace(/^https?:\/\/[^/]+/, '')
 })
 
+ok.assignExisting = await tc('TC-15', 'Hema opens one of her EXISTING tasks and assigns it (the 21 Nov production report)', '"Assign to" in the existing task; Esha gets the copy, a bell entry and it shows in her lists; Hema sees it under Assigned by me; the reference field is labelled "About (colleague)"', async () => {
+  const title = `Sales Data For Vinayak ${tag}`
+  const own = await hemaApi2.req('POST', '/chat/tasks', { title, dueUtc: new Date(Date.now() + 86400_000).toISOString() })
+  check(own.status === 200, 'own task')
+  await hema.goto(`/tasks?filter=all&task=${own.data.id}`)
+  const ed = hema.getByTestId('task-editor')
+  await ed.getByText('About (colleague)').waitFor()
+  await ed.getByTestId('task-assign').click()
+  const pick = hema.getByTestId('assignee-picker')
+  await pick.getByTestId('assignee-search').fill('Esha')
+  await pick.getByTestId('assignee-option').filter({ hasText: 'Esha' }).first().click()
+  await pick.getByTestId('sheet-done').click()
+  await ed.getByTestId('task-requires-review').check()
+  await view(hema, 'tc15-assign-existing')
+  await ed.getByTestId('sheet-done').click()
+  await until(() => scalar(`SELECT COUNT(*) AS v FROM chat.TRN_ChatTask t JOIN auth.Users u ON u.UserId = t.OwnerUserId WHERE t.Title = N'${title}' AND t.IsActive = 1 AND u.Email = '${EMP.email}' AND t.AssignedByUserId IS NOT NULL`) === 1, 'Esha has no copy')
+  check(bell(EMP.email, 'TASK_ASSIGNED', title) === 1, 'Esha not notified')
+  check(scalar(`SELECT COUNT(*) AS v FROM chat.TRN_ChatTask WHERE PublicId = '${own.data.id}' AND IsActive = 1`) === 0, 'Hema still has the personal task')
+  await esha.goto('/tasks?filter=assigned')
+  await esha.getByTestId('task-row').filter({ hasText: title }).waitFor()
+  await hema.goto('/tasks?filter=delegated')
+  await hema.getByTestId('task-row').filter({ hasText: title }).waitFor()
+  return 'assigned from an existing task'
+})
+
 await closeAll()
 writeResults('task-collab')
 const all = Object.values(ok)

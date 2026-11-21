@@ -299,10 +299,12 @@ export function TaskEditor({ task: initial, seed, onClose, onSaved, onDeleted }:
   const [confirmDelete, setConfirmDelete] = useState(false)
   const isNew = !task
   const role = task?.role ?? 'mine'
-  const assigning = isNew && assignees.length > 0
+  const handOver = !isNew && role === 'mine' && assignees.length > 0   // give my existing task to colleagues
+  const assigning = (isNew || handOver) && assignees.length > 0
   const locked = role === 'assignee'          // what / when are set by the person who assigned it
   const personal = role !== 'assigner' && !assigning   // category, reminder, private notes, repeat
   const closed = task?.status === 'COMPLETED' || task?.status === 'CANCELLED'
+  const canAssign = collab && !closed && (isNew || role === 'mine')
 
   // Keep the form in step when the task changes underneath (review, date approved, edits by the other person).
   const onTask = useCallback((t: Task) => {
@@ -341,6 +343,13 @@ export function TaskEditor({ task: initial, seed, onClose, onSaved, onDeleted }:
         toast.success(assigning
           ? `Assigned to ${assignees.length === 1 ? assignees[0].name : `${assignees.length} people`}${requiresReview ? ' · you review before it closes' : ''}`
           : reminderUtc ? `Task added · reminder ${whenText(reminderUtc)}` : 'Task added')
+      } else if (handOver) {
+        // Save my edits first, then give the task away (it becomes the colleague's copy; mine is retired).
+        await workApi.updateTask(task.id, { title: title.trim(), description: description.trim() || null, priority, dueUtc, hasDueTime: !!dueUtc && hasDueTime, repeatRule: 'NONE' })
+        const copy = await workApi.assignExisting(task.id, assignees.map((a) => a.id), requiresReview)
+        onDeleted?.(task.id)
+        onSaved(copy)
+        toast.success(`Assigned to ${assignees.length === 1 ? assignees[0].name : `${assignees.length} people`} · they have been notified`)
       } else if (role === 'assigner') {
         const saved = await workApi.updateTask(task.id, { title: title.trim(), description: description.trim() || null, priority, dueUtc, hasDueTime: !!dueUtc && hasDueTime, requiresReview })
         onSaved(saved)
@@ -372,11 +381,11 @@ export function TaskEditor({ task: initial, seed, onClose, onSaved, onDeleted }:
 
   const titleText = isNew
     ? assigning ? 'Assign Task' : seed?.sourceMessageId || seed?.sourceCallId || seed?.conversationId || seed?.meetingId || seed?.noteId ? 'Follow-up' : 'New Task'
-    : role === 'assigner' ? 'Assigned Task' : role === 'assignee' ? 'Task for You' : 'Details'
+    : handOver ? 'Assign Task' : role === 'assigner' ? 'Assigned Task' : role === 'assignee' ? 'Task for You' : 'Details'
 
   return (
     <>
-      <Sheet title={titleText} onClose={onClose} onDone={() => void save()} doneLabel={isNew ? (assigning ? 'Assign' : 'Add') : 'Done'} doneDisabled={!title.trim()} busy={busy} testId="task-editor">
+      <Sheet title={titleText} onClose={onClose} onDone={() => void save()} doneLabel={assigning ? 'Assign' : isNew ? 'Add' : 'Done'} doneDisabled={!title.trim()} busy={busy} testId="task-editor">
         {locked ? (
           <section className="mt-2 rounded-[14px] bg-white px-4 py-3" data-testid="task-locked">
             <p className="text-[19px] leading-[24px] font-semibold break-words" data-testid="task-title-text">
@@ -397,7 +406,7 @@ export function TaskEditor({ task: initial, seed, onClose, onSaved, onDeleted }:
         )}
 
         {/* Assign to colleagues (new tasks) */}
-        {isNew && collab && (
+        {canAssign && (
           <Group title="Assign" footer={assigning ? 'They get a notification and an e-mail, and can accept, ask for a new date or decline.' : 'Leave empty to keep the task for yourself.'}>
             <Row label="Assign to" icon={<UserPlus className="size-4" />} tint="var(--ios-indigo, #5856d6)" onClick={() => setPicker('assignees')} testId="task-assign">
               {assigning ? <AvatarStack names={assignees.map((a) => a.name)} /> : <span className="text-[16px] text-[var(--ios-gray)]">Only me</span>}
@@ -484,9 +493,9 @@ export function TaskEditor({ task: initial, seed, onClose, onSaved, onDeleted }:
         )}
 
         {role === 'mine' && (
-          <Group title="Related to">
+          <Group title="Related to" footer={collab ? '“About” is for reference only. To give this task to someone, use “Assign to” above.' : undefined}>
             <LinkRow icon={<Video className="size-4" />} tint="#5856d6" label="Meeting" value={meeting?.title ?? 'None'} onClick={() => setPicker('meeting')} onClear={meeting ? () => setMeeting(null) : undefined} />
-            <LinkRow icon={<UserRound className="size-4" />} tint="var(--ios-green)" label="Employee" value={employee?.name ?? 'None'} onClick={() => setPicker('person')} onClear={employee ? () => setEmployee(null) : undefined} />
+            <LinkRow icon={<UserRound className="size-4" />} tint="var(--ios-green)" label="About (colleague)" value={employee?.name ?? 'None'} onClick={() => setPicker('person')} onClear={employee ? () => setEmployee(null) : undefined} />
             {conversation && <LinkRow icon={<MessageSquare className="size-4" />} tint="var(--ios-blue)" label="Chat" value={conversation.title} onClear={seed?.sourceMessageId ? undefined : () => setConversation(null)} />}
             {(task?.note || seed?.noteTitle) && <LinkRow icon={<StickyNote className="size-4" />} tint="var(--ios-yellow)" label="Note" value={task?.note?.title ?? seed!.noteTitle!} />}
           </Group>

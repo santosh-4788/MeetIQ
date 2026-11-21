@@ -52,6 +52,7 @@ public static partial class ChatWorkEndpoints
         g.MapPost("/tasks/{id:guid}/review", Review).RequireRateLimiting(WriteRateLimit);
         g.MapPost("/tasks/{id:guid}/comments", Comment).RequireRateLimiting(WriteRateLimit);
         g.MapPost("/tasks/{id:guid}/nudge", Nudge).RequireRateLimiting(WriteRateLimit);
+        g.MapPost("/tasks/{id:guid}/assign", AssignExisting).RequireRateLimiting(WriteRateLimit);
         g.MapPost("/tasks/{id:guid}/files", UploadTaskFile).RequireRateLimiting(ChatEndpoints.UploadRateLimit)
             .WithMetadata(new RequestSizeLimitAttribute((TaskFileMaxMb + 1) * 1024L * 1024L),
                 new RequestFormLimitsAttribute { MultipartBodyLengthLimit = (TaskFileMaxMb + 1) * 1024L * 1024L });
@@ -360,6 +361,77 @@ public static partial class ChatWorkEndpoints
         var first = await TaskByIdAsync(c, me, created[0], now);
         return Results.Ok(first);
     }
+
+    sealed class ExistingTask
+    {
+        public string Title { get; set; } = "";
+        public string? Description { get; set; }
+        public string Priority { get; set; } = "MEDIUM";
+        public DateTime? DueUtc { get; set; }
+        public bool HasDueTime { get; set; }
+        public Guid? MeetingId { get; set; }
+        public Guid? EmployeeId { get; set; }
+        public Guid? ConversationId { get; set; }
+        public Guid? MessageId { get; set; }
+        public Guid? CallId { get; set; }
+    }
+
+    /// <summary>
+    /// Gives one of my own (personal, open) tasks to colleagues (21 Nov 2026 fix: people opened an existing task to assign it).
+    /// The copies are made exactly like a new assigned task (same checks, notifications and e-mails) from the task's title,
+    /// details, priority, due date, links and checklist; then my personal task is retired (its reminder is cancelled) and the
+    /// copies appear under "Assigned by me". Nothing changes if any copy cannot be made.
+    /// </summary>
+    static Task<IResult> AssignExisting(Guid id, JsonElement body, WorkServices s, HttpContext ctx) => RunCollab(s, ctx, async (c, me) =>
+    {
+        var t = await VisibleTaskAsync(c, me, id);
+        if (t is null) return NotFound("Task");
+        if (!t.IsOwner) return OnlyOwner(t);
+        if (t.IsAssigned) return Db_.Conflict("This task was assigned to you by someone else; it cannot be passed on.");
+        if (t.IsClosed) return Closed();
+        var inp = new Input(body);
+        var ids = ReadIds(inp, "assigneeIds", MaxAssignees, "colleague");
+        if (ids is not { Count: > 0 } && inp.V.IsValid) inp.V.Add("assigneeIds", "Choose at least one colleague.");
+        var requiresReview = inp.Bool("requiresReview") ?? false;
+        if (!inp.V.IsValid) return inp.V.Problem();
+
+        var x = await c.QuerySingleAsync<ExistingTask>("""
+            SELECT x.Title, x.[Description], x.[Priority], x.DueUtc, x.HasDueTime, m.PublicId AS MeetingId, eu.PublicId AS EmployeeId, cv.PublicId AS ConversationId,
+                   msg.PublicId AS MessageId, cl.PublicId AS CallId
+            FROM chat.TRN_ChatTask x
+            LEFT JOIN mtg.Meetings m ON m.MeetingId = x.MeetingId LEFT JOIN auth.Users eu ON eu.UserId = x.EmployeeUserId
+            LEFT JOIN chat.TRN_ChatConversation cv ON cv.ConversationId = x.ConversationId AND x.SourceMessageId IS NULL AND x.SourceCallId IS NULL
+            LEFT JOIN chat.TRN_ChatMessage msg ON msg.MessageId = x.SourceMessageId LEFT JOIN chat.TRN_ChatCall cl ON cl.CallId = x.SourceCallId
+            WHERE x.TaskId = @id
+            """, new { id = t.TaskId });
+        var steps = (await c.QueryAsync<(string Text, bool IsRequired)>(
+            "SELECT [Text], IsRequired FROM chat.TRN_ChatTaskChecklist WHERE TaskId = @id AND IsActive = 1 AND IsDone = 0 ORDER BY SortOrder, ItemId", new { id = t.TaskId }))
+            .Select(i => new { text = i.Text, isRequired = i.IsRequired }).ToList();
+        var fields = new Dictionary<string, object?>
+        {
+            ["title"] = x.Title, ["description"] = x.Description, ["priority"] = x.Priority, ["dueUtc"] = x.DueUtc, ["hasDueTime"] = x.HasDueTime,
+            ["assigneeIds"] = ids, ["requiresReview"] = requiresReview,
+        };
+        if (x.MeetingId is { } mg) fields["meetingId"] = mg;
+        if (x.EmployeeId is { } eg) fields["employeeId"] = eg;
+        if (x.ConversationId is { } cg) fields["conversationId"] = cg;
+        if (x.MessageId is { } msgId) fields["sourceMessageId"] = msgId;
+        if (x.CallId is { } callId) fields["sourceCallId"] = callId;
+        if (steps.Count > 0) fields["checklist"] = steps;
+        // A due date already in the past stays as it is (the copy is simply overdue and the alerts say so).
+        var result = await CreateAssignedAsync(c, s, me, Input.Of(fields));
+        if (result is not IStatusCodeHttpResult { StatusCode: 200 }) return result;
+
+        var now = s.Clock.UtcNow;
+        using (var tx = c.BeginTransaction())
+        {
+            await c.ExecuteAsync("UPDATE chat.TRN_ChatTask SET IsActive = 0, FocusUtc = NULL, UpdatedUtc = @now WHERE TaskId = @id", new { id = t.TaskId, now }, tx);
+            await CloseRemindersAsync(c, tx, "TaskId", t.TaskId, "CANCELLED", now);
+            tx.Commit();
+        }
+        await s.Push.ToUsersAsync([me.UserId], "task.changed", new { id = t.Id });
+        return result;
+    });
 
     static bool IsNullValue(Input inp, string field) => inp.Raw(field) is JsonElement { ValueKind: JsonValueKind.Null };
 

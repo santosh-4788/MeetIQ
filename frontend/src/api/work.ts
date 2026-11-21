@@ -246,6 +246,8 @@ export const workApi = {
   submit: (id: string, note?: string) => http<Task>(`/chat/tasks/${id}/submit`, { method: 'POST', body: { note: note || null } }),
   review: (id: string, approve: boolean, comment?: string) => http<Task>(`/chat/tasks/${id}/review`, { method: 'POST', body: { approve, comment: comment || null } }),
   comment: (id: string, body: string) => http<TaskDetails>(`/chat/tasks/${id}/comments`, { method: 'POST', body: { body } }),
+  /** Give one of my own tasks to colleagues (it moves to "Assigned by me"); returns the first copy. */
+  assignExisting: (id: string, assigneeIds: string[], requiresReview: boolean) => http<Task>(`/chat/tasks/${id}/assign`, { method: 'POST', body: { assigneeIds, requiresReview } }),
   nudge: (id: string) => http<Task>(`/chat/tasks/${id}/nudge`, { method: 'POST', body: {} }),
   uploadFile: (id: string, file: File, onProgress?: (f: number) => void) =>
     uploadFile(`/chat/tasks/${id}/files`, file, {}, onProgress) as unknown as Promise<TaskDetails>,

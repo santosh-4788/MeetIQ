@@ -1,5 +1,22 @@
 # Changelog
 
+## 21 Nov 2026, 17:32–17:36 IST — DEPLOYED: assign an existing task to a colleague
+
+- **Problem reported:** "assigned to someone not working, assigned user not getting any notification and not showing tasks". "Assign to" was only offered when creating a task. On an existing task, the user set "Related to → Employee", which is only a reference, so nothing was assigned, no notification went out and the colleague saw no task.
+- **Fix:**
+  - API: new `POST /chat/tasks/{id}/assign` (owner only, not for assigned or closed tasks). It creates the assigned copies through the normal assign path (notification, live alert, e-mail), carrying over the title, details, priority, due date, links and open checklist steps, then retires the original and cancels its reminders.
+  - Website: the task editor shows "Assign to" (with "Needs my review") on your own open tasks, and the button reads "Assign". The employee link is relabelled "About (colleague)", with a note that it is for reference only.
+  - No database change.
+- **Tests:**
+  - backend TaskCollabTests 9/9 (new: an existing own task can be assigned later);
+  - e2e `task-collab.mjs` 15/15 (new TC-15 repeats the user's steps on an existing task), tasks 7/7.
+- **Deploy:**
+  - pre-check: 0 live meetings, recordings, jobs or meetings starting soon;
+  - backups: files in `deploy\_backup-20261121-173247`; database `Oneinsure_v_pre-assignexisting-20261121-173247.bak` (61.1 MB, CHECKSUM + VERIFYONLY);
+  - API: self-contained publish, service restart, about 10 s downtime, health Healthy; new endpoint answers 403 without sign-in, not 404;
+  - website: `npm run build`.
+- **Undo:** copy `api` back to `deploy\api` (with the service stopped) and `frontend-dist` back to `frontend\dist`.
+
 ## 21 Nov 2026, 15:42 IST — PUBLISHED: Android app 1.2.0 (versionCode 4) with phone notifications for tasks; TASK_COLLAB switched ON
 
 - **TASK_COLLAB switched on in production** at the user's request (audit row `FEATURE_CHANGED`). Assigning, reviews, comments, files and note sharing are now visible to everyone with Notes & tasks access.
