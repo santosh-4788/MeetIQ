@@ -14,10 +14,10 @@ export const isIOS = () =>
 
 const ready = new Map<string, File>()
 
-async function load(id: string, name: string) {
+async function load(id: string, name: string, url: (id: string) => string) {
   const cached = ready.get(id)
   if (cached) return cached
-  const res = await fetch(fileUrl(id), { credentials: 'same-origin' })
+  const res = await fetch(url(id), { credentials: 'same-origin' })
   if (!res.ok) throw new Error(res.status === 409 ? 'The file is still being checked for viruses. Try again in a moment.' : 'The file could not be downloaded.')
   const blob = await res.blob()
   const file = new File([blob], name, { type: blob.type || 'application/octet-stream' })
@@ -38,13 +38,13 @@ function saveWithLink(file: File) {
 }
 
 /** onClick for a download link. Does nothing (normal link) unless the device is an iPhone/iPad. */
-export function iosDownload(id: string, name: string, notify: { success: (t: string) => void; error: (t: string) => void }) {
+export function iosDownload(id: string, name: string, notify: { success: (t: string) => void; error: (t: string) => void }, url: (id: string) => string = (x) => fileUrl(x)) {
   return async (e: MouseEvent<HTMLAnchorElement>) => {
     if (!isIOS()) return
     e.preventDefault()
     let file: File
     try {
-      file = await load(id, name)
+      file = await load(id, name, url)
     } catch (err) {
       notify.error(err instanceof Error ? err.message : 'The file could not be downloaded.')
       return

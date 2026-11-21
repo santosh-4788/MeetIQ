@@ -18,6 +18,7 @@ export const PRIORITY: Record<Priority, { label: string; color: string; marks: s
 export const STATUS: Record<TaskStatus, string> = {
   PENDING: 'Pending',
   IN_PROGRESS: 'In progress',
+  IN_REVIEW: 'Waiting for review',
   COMPLETED: 'Completed',
   POSTPONED: 'Postponed',
   CANCELLED: 'Cancelled',

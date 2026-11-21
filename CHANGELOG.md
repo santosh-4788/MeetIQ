@@ -1,5 +1,92 @@
 # Changelog
 
+## 21 Nov 2026, 15:42 IST — PUBLISHED: Android app 1.2.0 (versionCode 4) with phone notifications for tasks; TASK_COLLAB switched ON
+
+- **TASK_COLLAB switched on in production** at the user's request (audit row `FEATURE_CHANGED`). Assigning, reviews, comments, files and note sharing are now visible to everyone with Notes & tasks access.
+- **Cross-check:** all scenarios were run on the exact production build (the same code served by `vite preview`, against the test API): `task-collab.mjs` 13/13. Scenarios: assign, live alert + Accept, locked details + required step + send for review, send back / re-send / approve, My Day + quick add, notes, iPhone, new date, decline, withdraw, proof file, e-mails, switch off/on.
+- **Android app 1.2.0** (new `Alerts.kt`, channel "Tasks and reminders", icon `ic_stat_task`):
+  - bridge messages `notify` and `notifyPermission`; the page asks for a phone notification when a task alert or a reminder arrives while the app is in the background;
+  - tapping it opens that task or note in the app; only portal links are used;
+  - no cloud push service: notifications come from the app's own live connection while it runs (open or in the background); if Android has closed the app, the alerts wait in the bell;
+  - the app offers the update itself (`/meet/app/android.json`, versionCode 4).
+- **Website:**
+  - `appNotify` / `appNotifyPermission` in `androidBridge.ts`; TaskAlerts and ReminderCenter use them in the app;
+  - Tasks → Settings shows "Phone notifications" in the app.
+- **Tests:**
+  - gradle unit tests, lint and assembleRelease passed;
+  - `task-collab.mjs` 14/14 (new TC-14: background alert → `notify` with the task link); android-app-chat 3/3; tasks 7/7;
+  - downloaded APK sha256 `5e2614c8…fbbbb` = published.
+- **Backup:**
+  - website files in `deploy\_backup-20261121-154228` (the previous APK is inside it at `frontend-dist\app`).
+  - Undo: copy it back to `frontend\dist`, and the app stays at 1.1.1 for people who did not update.
+
+## 21 Nov 2026, 14:49–14:56 IST — DEPLOYED: task collaboration and iOS redesign of My Day, Tasks and Notes (V033, switch TASK_COLLAB)
+
+- **Deploy:**
+  - pre-check: 0 live meetings, recordings, jobs or meetings starting soon;
+  - plan: only V033 pending; V033 applied alone (`-MigrationsPath` with the one script) to `Oneinsure_v`; 4 new tables and the new columns verified;
+  - API: self-contained win-x64 publish, MeetIQApi stopped/started, about 11 s downtime, health Healthy;
+  - website: `npm run build`; live site 200; new endpoint answers 401 without sign-in.
+- **Switch:** TASK_COLLAB is still **OFF** in production. Switching it on at deploy was blocked by a tool permission rule, so it was not done. An admin turns it on in Admin → Meeting Features → "Assign tasks and reviews". Until then, people get the new look, Top 3, quick add, checklists and note colours; assigning, reviews, comments, files and sharing stay hidden.
+- **Backups:**
+  - files in `deploy\_backup-20261121-144957` (api, frontend-dist, git diff/status);
+  - database `Oneinsure_v_pre-taskcollab-20261121-144957.bak` (60.1 MB, verified).
+- **Undo:**
+  1. switch TASK_COLLAB off (normal);
+  2. full rollback: stop MeetIQApi, copy `api` back from the backup, copy `frontend-dist` back to `frontend\dist`, start MeetIQApi, then run `database/rollback/V033__task_collaboration.rollback.sql`.
+
+- **Assign tasks** (anyone with Notes & tasks access to any active colleague who also has it):
+  - one copy per person (`OwnerUserId` = the person doing it, `AssignedByUserId`, shared `AssignmentKey`);
+  - only those two people can see it; anyone else gets 404;
+  - the person can Accept, Ask for a new date (with a reason; the assigner approves or keeps the date) or Decline (reason required);
+  - what the task is and when it is due stay with the assigner; the person doing it keeps their own category, reminder and private notes, which the assigner never sees;
+  - the assigner can edit the task or Withdraw it, and the other person is told.
+- **Needs my review:**
+  - the person doing the task cannot complete it; they use "Send for review" (new status `IN_REVIEW`, with an optional note);
+  - the assigner chooses Approve & close, or Send back (comment required);
+  - checklist steps marked **Required** must be ticked before a task can be completed or sent for review.
+- **Comments, history and proof files:**
+  - the full timeline (assigned, accepted, review, sent back, approved, overdue …) and a comment thread;
+  - files use the same checks and Windows Defender scan as chat attachments;
+  - a 25 MB limit and up to 20 files per task.
+- **Nudge:** the assigner can send a "Remind" at most every 4 hours.
+- **Due alerts for assigned tasks:**
+  - the day before the due date, an alert to the person doing it;
+  - when it becomes overdue, both people get an alert and an e-mail;
+  - then one alert a day to the person doing it, for up to 7 days.
+- **Notifications** (all in-house):
+  - bell types TASK_ASSIGNED, TASK_UPDATE, TASK_REVIEW, TASK_COMMENT, TASK_DUE and NOTE_SHARED;
+  - a live pop-up on any page with Accept / Approve / Open;
+  - a browser notification while the portal is in a background tab (after "Turn on");
+  - e-mails for assigned / review / decision / declined / overdue, through the existing outbox; each person can switch them off in Tasks → Settings (`TaskEmails`).
+- **My Day:**
+  - a gradient header with today's progress ring;
+  - Top 3 for today, with suggestions and a limit of 3;
+  - the sections Assigned to you (with Accept), Waiting for your review and Waiting on others;
+  - live refresh.
+- **Tasks:**
+  - new lists Assigned to me, Assigned by me (grouped by state) and To review;
+  - quick add in plain words ("Call Ramesh tomorrow 4pm urgent"), which also sets a 15-minute reminder for timed tasks;
+  - on phones, swipe right to complete and swipe left for Top 3;
+  - row badges (New, In review, checklist x/y, comments, files);
+  - a progress stepper inside the task.
+- **Notes:**
+  - colours;
+  - checklists as `- [ ]` lines with a progress bar;
+  - turn a line into a task linked to the note;
+  - share read-only with colleagues, plus a "Shared with me" list.
+- **Navigation:** a My Day | Tasks | Notes switcher; My Day in the phone tab bar when Notes & tasks is on.
+- **Database V033 (additive):**
+  - new columns on `chat.TRN_ChatTask` and `chat.TRN_ChatNote` (`Color`) and on `chat.MST_ChatUserPreference` (`TaskEmails`);
+  - new tables `chat.TRN_ChatTaskChecklist`, `TRN_ChatTaskActivity`, `TRN_ChatTaskFile` and `TRN_ChatNoteShare`;
+  - two widened CHECKs: task status +IN_REVIEW, and the notification types;
+  - feature `TASK_COLLAB` is seeded OFF.
+  - Rollback: `database/rollback/V033__task_collaboration.rollback.sql`. The normal way to stop the feature is to switch TASK_COLLAB off.
+- **Tests:**
+  - backend 140/140, including the new `TaskCollabTests` 8/8;
+  - new e2e `tests/e2e/room/task-collab.mjs` 7/7 (computer + Android phone + iPhone WebKit);
+  - regression: tasks 7/7, chat 10/10, calls 7/7, advanced 8/8, sidebar 5/5, user-access 3/3, ios-look 9/9, receipts 2/2, chat-downloads 6/6, chat-phone-view 4/4, android-app-chat 3/3, 8 browsers 104/104.
+
 ## 20 Nov 2026, 18:16 IST — DEPLOYED: phone chat view (full screen, keyboard, long file names); website only
 
 Reported from an iPhone (Chrome): inside a chat, the portal header and the bottom tab bar took a third of the screen. With the keyboard open, the message box was hidden behind the tab bar. A long file name (`4. Undertaking - not holding ins license Rama.docx`) pushed the bubble off the left edge.

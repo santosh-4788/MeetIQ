@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  AlarmClock, Bell, BellRing, CalendarPlus, ChevronRight, ListPlus, MessageSquare, MessageSquarePlus, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing,
-  Search, StickyNote, Sun, Users, Video,
+  AlarmClock, Bell, BellRing, CalendarPlus, Check, ChevronRight, ClipboardCheck, Hand, ListPlus, MessageSquare, MessageSquarePlus, Phone, PhoneIncoming, PhoneMissed,
+  PhoneOutgoing, Search, Star, StickyNote, Sun, UserPlus, Users, Video,
 } from 'lucide-react'
 import { chatApi } from '../../../api/chat'
 import type { Call } from '../../../api/calls'
@@ -18,8 +18,21 @@ import type { Section } from '../ChatPage'
 import { NoteEditor, PersonPicker, TaskEditor, type TaskSeed } from './Editors'
 import FollowUpSheet, { type FollowUpSource } from './FollowUp'
 import { NoteRow } from './NotesView'
-import { TaskRow, useTaskToggle } from './TasksView'
-import { timeText, tomorrowAt9, whenText } from './ui'
+import { TaskRow, useFocusToggle, useTaskToggle } from './TasksView'
+import { PRIORITY, timeText, tomorrowAt9, whenText } from './ui'
+
+/** Apple-Fitness-style ring: today's progress (done / planned). */
+function Ring({ done, total, size = 76 }: { done: number; total: number; size?: number }) {
+  const r = (size - 10) / 2
+  const c = 2 * Math.PI * r
+  const f = total ? Math.min(1, done / total) : 0
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`${done} of ${total} done today`} className="shrink-0 -rotate-90">
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgb(255 255 255 / 0.25)" strokeWidth={9} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#fff" strokeWidth={9} strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c * (1 - f)} style={{ transition: 'stroke-dashoffset 600ms cubic-bezier(.2,.8,.2,1)' }} />
+    </svg>
+  )
+}
 
 function Card({ title, icon, tint, count, action, children, testId }: { title: string; icon: ReactNode; tint: string; count?: number; action?: ReactNode; children: ReactNode; testId?: string }) {
   return (
@@ -114,11 +127,14 @@ export function MyDay({ onSection, onOpenChat, onNewChat, onNewGroup }: {
   }, [])
   useEffect(() => {
     load()
-    const offs = [chat.on('reminder.due', load), chat.on('reconnected', load), chat.on('call.ended', load)]
+    let h = 0
+    const later = () => (window.clearTimeout(h), (h = window.setTimeout(load, 600)))
+    const offs = [chat.on('reminder.due', load), chat.on('reconnected', load), chat.on('call.ended', load), chat.on('task.changed', later)]
     const t = window.setInterval(load, 120_000)
     return () => {
       offs.forEach((o) => o())
       window.clearInterval(t)
+      window.clearTimeout(h)
     }
   }, [chat, load])
 
@@ -128,8 +144,11 @@ export function MyDay({ onSection, onOpenChat, onNewChat, onNewGroup }: {
       todayTasks: d.todayTasks.map((x) => (x.id === t.id ? t : x)),
       overdueTasks: d.overdueTasks.map((x) => (x.id === t.id ? t : x)),
       followUps: d.followUps.map((x) => (x.id === t.id ? t : x)),
+      focus: d.focus?.map((x) => (x.id === t.id ? t : x)),
+      newAssigned: d.newAssigned?.map((x) => (x.id === t.id ? t : x)),
     })
   }, [])
+  const focusToggle = useFocusToggle(() => load())
   const toggle = useTaskToggle((t) => {
     replaceTask(t)
     if (t.status === 'COMPLETED') window.setTimeout(load, 1400)
@@ -152,9 +171,32 @@ export function MyDay({ onSection, onOpenChat, onNewChat, onNewGroup }: {
 
   return (
     <div className="mx-auto w-full max-w-[1100px]" data-testid="myday-view">
-      <p className="text-[15px] text-[var(--ios-label2)]">
-        {new Intl.DateTimeFormat('en-IN', { weekday: 'long', day: 'numeric', month: 'long' }).format(now)} · {greeting}{first ? `, ${first}` : ''}
-      </p>
+      {(() => {
+        const doneToday = data?.counts.completedToday ?? 0
+        const planned = doneToday + (data?.counts.todayTasks ?? 0) + (data?.counts.overdue ?? 0)
+        const left = planned - doneToday
+        return (
+          <section className="relative overflow-hidden rounded-[20px] bg-[linear-gradient(135deg,#0a84ff_0%,#5e5ce6_55%,#bf5af2_100%)] px-4 py-4 text-white shadow-[0_10px_30px_rgb(94_92_230/0.28)] sm:px-5" data-testid="myday-hero">
+            <span className="pointer-events-none absolute -top-10 -right-8 size-40 rounded-full bg-white/10" aria-hidden />
+            <div className="relative flex items-center gap-4">
+              <div className="min-w-0 flex-1">
+                <p className="text-[13px] font-semibold tracking-wide text-white/80 uppercase">{new Intl.DateTimeFormat('en-IN', { weekday: 'long', day: 'numeric', month: 'long' }).format(now)}</p>
+                <p className="mt-0.5 text-[22px] leading-[28px] font-bold">{greeting}{first ? `, ${first}` : ''}</p>
+                <p className="mt-1 text-[14px] text-white/90">
+                  {!data ? 'Getting your day ready…' : planned === 0 ? 'Nothing due today. Plan your Top 3 below.' : left === 0 ? `All ${planned} done today. Great work!` : `${doneToday} of ${planned} done · ${left} to go${data.counts.overdue ? ` (${data.counts.overdue} overdue)` : ''}`}
+                </p>
+              </div>
+              <div className="relative">
+                <Ring done={doneToday} total={planned} />
+                <span className="absolute inset-0 flex flex-col items-center justify-center text-center leading-none">
+                  <span className="text-[20px] font-bold">{planned ? Math.round((doneToday / planned) * 100) : 0}%</span>
+                  <span className="mt-0.5 text-[10px] text-white/80">today</span>
+                </span>
+              </div>
+            </div>
+          </section>
+        )
+      })()}
 
       <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(74px,1fr))] gap-y-3 pb-1" role="toolbar" aria-label="Quick actions">
         <QuickAction label="Add task" icon={<ListPlus className="size-6" />} tint="var(--ios-blue)" onClick={() => setNewTask({})} testId="qa-task" />
@@ -192,6 +234,46 @@ export function MyDay({ onSection, onOpenChat, onNewChat, onNewGroup }: {
 
           <div className="mt-4 grid items-start gap-3 lg:grid-cols-2">
             <div className="grid gap-3">
+              <Card title="Top 3 for today" icon={<Star className="size-4" />} tint="var(--ios-orange)" count={data.focus?.length} testId="myday-focus">
+                {(data.focus?.length ?? 0) === 0 ? (
+                  <>
+                    <Line>Pick the three things that matter most today. Swipe a task left on your phone, or use ☆ below.</Line>
+                    {[...data.overdueTasks, ...data.todayTasks].filter((t) => t.role !== 'assigner').sort((a, b) => ['URGENT', 'HIGH', 'MEDIUM', 'LOW'].indexOf(a.priority) - ['URGENT', 'HIGH', 'MEDIUM', 'LOW'].indexOf(b.priority)).slice(0, 3).map((t) => (
+                      <div key={t.id} className="flex items-center gap-3 pl-4">
+                        <span className="text-[13px] font-semibold" style={{ color: PRIORITY[t.priority].color }}>{PRIORITY[t.priority].marks || '·'}</span>
+                        <button type="button" onClick={() => setEditTask(t)} className="ios-sep-top min-w-0 flex-1 truncate py-2.5 text-left text-[15px]">{t.title}</button>
+                        <button type="button" onClick={() => focusToggle(t)} className="ios-sep-top self-stretch pr-4 pl-1 text-[14px] font-semibold text-[var(--ios-orange)]" aria-label={`Add ${t.title} to Top 3`} data-testid="focus-suggest">☆ Add</button>
+                      </div>
+                    ))}
+                  </>
+                ) : (
+                  data.focus!.map((t, i) => (
+                    <div key={t.id} className="flex items-center">
+                      <span className="w-8 shrink-0 pl-4 text-[15px] font-bold text-[var(--ios-orange)]">{i + 1}</span>
+                      <div className="min-w-0 flex-1"><TaskRow t={t} compact onToggle={() => toggle(t)} onOpen={() => setEditTask(t)} onFocus={() => focusToggle(t)} /></div>
+                    </div>
+                  ))
+                )}
+              </Card>
+              {(data.newAssigned?.length ?? 0) > 0 && (
+                <Card title="Assigned to you" icon={<UserPlus className="size-4" />} tint="#5856d6" count={data.newAssigned!.length} testId="myday-new-assigned">
+                  {data.newAssigned!.map((t) => (
+                    <div key={t.id} className="flex items-center">
+                      <div className="min-w-0 flex-1"><TaskRow t={t} compact onToggle={() => toggle(t)} onOpen={() => setEditTask(t)} /></div>
+                      <button type="button" className="ios-sep-top flex items-center gap-1 self-stretch pr-4 pl-1 text-[14px] font-semibold text-[var(--ios-blue)]" data-testid="myday-accept"
+                        onClick={() => workApi.accept(t.id).then(() => (toast.success('Accepted'), load()), (e) => toast.error(errorMessage(e, 'That did not work.')))}>
+                        <Check className="size-4" />Accept
+                      </button>
+                    </div>
+                  ))}
+                </Card>
+              )}
+              {(data.toReview?.length ?? 0) > 0 && (
+                <Card title="Waiting for your review" icon={<ClipboardCheck className="size-4" />} tint="var(--ios-purple)" count={data.counts.toReview} testId="myday-to-review"
+                  action={<button type="button" onClick={() => navigate('/tasks?filter=to-review')} className="flex items-center text-[15px] text-[var(--ios-blue)]">All <ChevronRight className="size-4" /></button>}>
+                  {data.toReview!.map((t) => <TaskRow key={t.id} t={t} compact onToggle={() => setEditTask(t)} onOpen={() => setEditTask(t)} />)}
+                </Card>
+              )}
               {data.missedReminders.length > 0 && (
                 <div id="myday-missed">
                   <Card title="Missed reminders" icon={<BellRing className="size-4" />} tint="var(--ios-red)" count={data.missedReminders.length}>
@@ -201,7 +283,7 @@ export function MyDay({ onSection, onOpenChat, onNewChat, onNewGroup }: {
               )}
               {data.overdueTasks.length > 0 && (
                 <Card title="Overdue" icon={<AlarmClock className="size-4" />} tint="var(--ios-orange)" count={data.overdueTasks.length} testId="myday-overdue">
-                  {data.overdueTasks.map((t) => <TaskRow key={t.id} t={t} compact onToggle={() => toggle(t)} onOpen={() => setEditTask(t)} />)}
+                  {data.overdueTasks.map((t) => <TaskRow key={t.id} t={t} compact onToggle={() => toggle(t)} onOpen={() => setEditTask(t)} onFocus={() => focusToggle(t)} />)}
                 </Card>
               )}
               <Card
@@ -212,7 +294,7 @@ export function MyDay({ onSection, onOpenChat, onNewChat, onNewGroup }: {
                 testId="myday-today"
                 action={<button type="button" onClick={() => setNewTask({ dueUtc: new Date(new Date().setHours(23, 59, 0, 0)).toISOString(), hasDueTime: false })} className="text-[15px] text-[var(--ios-blue)]">Add</button>}
               >
-                {data.todayTasks.length === 0 ? <Line>Nothing due today.</Line> : data.todayTasks.map((t) => <TaskRow key={t.id} t={t} compact onToggle={() => toggle(t)} onOpen={() => setEditTask(t)} />)}
+                {data.todayTasks.length === 0 ? <Line>Nothing due today.</Line> : data.todayTasks.map((t) => <TaskRow key={t.id} t={t} compact onToggle={() => toggle(t)} onOpen={() => setEditTask(t)} onFocus={() => focusToggle(t)} />)}
               </Card>
               <Card title="Meetings today" icon={<Video className="size-4" />} tint="#5856d6" count={data.meetings.length} testId="myday-meetings">
                 {data.meetings.length === 0 ? (
@@ -236,8 +318,14 @@ export function MyDay({ onSection, onOpenChat, onNewChat, onNewGroup }: {
             </div>
 
             <div className="grid gap-3">
+              {(data.waitingOnOthers?.length ?? 0) > 0 && (
+                <Card title="Waiting on others" icon={<Hand className="size-4" />} tint="#30b0c7" count={data.counts.waitingOnOthers} testId="myday-waiting"
+                  action={<button type="button" onClick={() => navigate('/tasks?filter=delegated')} className="flex items-center text-[15px] text-[var(--ios-blue)]">All <ChevronRight className="size-4" /></button>}>
+                  {data.waitingOnOthers!.map((t) => <TaskRow key={t.id} t={t} compact onToggle={() => setEditTask(t)} onOpen={() => setEditTask(t)} />)}
+                </Card>
+              )}
               <Card title="Pending follow-ups" icon={<MessageSquare className="size-4" />} tint="var(--ios-purple)" count={data.followUps.length} testId="myday-followups">
-                {data.followUps.length === 0 ? <Line>Turn a chat message, call or meeting into a follow-up and it appears here.</Line> : data.followUps.map((t) => <TaskRow key={t.id} t={t} compact onToggle={() => toggle(t)} onOpen={() => setEditTask(t)} />)}
+                {data.followUps.length === 0 ? <Line>Turn a chat message, call or meeting into a follow-up and it appears here.</Line> : data.followUps.map((t) => <TaskRow key={t.id} t={t} compact onToggle={() => toggle(t)} onOpen={() => setEditTask(t)} onFocus={() => focusToggle(t)} />)}
               </Card>
               <Card
                 title="Notes"

@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Bell, CalendarDays, ChevronLeft, ChevronRight, Lock, MessageSquare, Pin, Plus, Search, StickyNote, UserRound, Video, X } from 'lucide-react'
+import { Bell, CalendarDays, CheckSquare, ChevronLeft, ChevronRight, Lock, MessageSquare, Pin, Plus, Search, Share2, StickyNote, UserRound, Users, Video, X } from 'lucide-react'
 import { errorMessage } from '../../../api/types'
 import { workApi, type Note, type NoteFilter } from '../../../api/work'
 import { useToast } from '../../../components/ui/Toast'
+import { useChat } from '../ChatProvider'
 import { cn } from '../../../lib/cn'
 import { parseUtc } from '../../../lib/format'
 import { NoteEditor } from './Editors'
 import FollowUpSheet, { type FollowUpSource } from './FollowUp'
 import { ScrollChips } from '../ScrollChips'
-import { Empty, Pill, whenText } from './ui'
+import { Empty, Pill, Sheet, whenText } from './ui'
+import { checklistOf } from './noteChecklist'
 
-const FILTERS: { key: NoteFilter | 'date'; label: string }[] = [
+const FILTERS: { key: NoteFilter | 'date'; label: string; collab?: boolean }[] = [
   { key: 'all', label: 'All' },
   { key: 'today', label: 'Today' },
   { key: 'pinned', label: 'Pinned' },
@@ -18,15 +20,17 @@ const FILTERS: { key: NoteFilter | 'date'; label: string }[] = [
   { key: 'date', label: 'By date' },
   { key: 'completed', label: 'Completed' },
   { key: 'archived', label: 'Archived' },
+  { key: 'shared', label: 'Shared with me', collab: true },
 ]
 
 function preview(n: Note) {
-  return (n.body ?? '').replace(/\s+/g, ' ').trim() || 'No additional text'
+  return (n.body ?? '').replace(/^\s*- \[[ xX]\]\s*/gm, '').replace(/\s+/g, ' ').trim() || 'No additional text'
 }
 
 export function NoteRow({ n, onOpen }: { n: Note; onOpen: () => void }) {
   return (
-    <button type="button" onClick={onOpen} className="ios-pressable flex w-full pl-4 text-left" data-testid="note-row">
+    <button type="button" onClick={onOpen} className="ios-pressable relative flex w-full pl-4 text-left" data-testid="note-row">
+      {n.color && <span className="absolute inset-y-2 left-1.5 w-[4px] rounded-full" style={{ background: n.color }} aria-hidden />}
       <span className="ios-sep-top flex min-w-0 flex-1 flex-col py-2.5 pr-4">
         <span className={cn('flex items-center gap-1.5 text-[17px] leading-[22px] font-semibold md:text-[16px]', n.isCompleted && 'text-[var(--ios-gray)] line-through')}>
           {n.isPinned && <Pin className="size-3.5 shrink-0 fill-[var(--ios-orange)] text-[var(--ios-orange)]" aria-label="Pinned" />}
@@ -37,6 +41,9 @@ export function NoteRow({ n, onOpen }: { n: Note; onOpen: () => void }) {
           <span className="truncate">{preview(n)}</span>
         </span>
         <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[var(--ios-gray)] empty:hidden">
+          {n.isShared && n.ownerName && <span className="inline-flex items-center gap-0.5 text-[var(--ios-blue)]"><Share2 className="size-3.5" aria-hidden />From {n.ownerName}</span>}
+          {!n.isShared && (n.sharedCount ?? 0) > 0 && <span className="inline-flex items-center gap-0.5"><Users className="size-3.5" aria-hidden />Shared with {n.sharedCount}</span>}
+          {(() => { const c = checklistOf(n.body); return c.total ? <span className={cn('inline-flex items-center gap-0.5', c.done === c.total && 'text-[var(--ios-green)]')}><CheckSquare className="size-3.5" aria-hidden />{c.done}/{c.total}</span> : null })()}
           {n.reminderUtc && (n.reminderState === 'PENDING' || n.reminderState === 'FIRED') && (
             <span className="inline-flex items-center gap-0.5 text-[var(--ios-orange)]"><Bell className="size-3.5" aria-hidden />{whenText(n.reminderUtc)}</span>
           )}
@@ -86,6 +93,10 @@ function WeekStrip({ day, onDay }: { day: Date; onDay: (d: Date) => void }) {
 /** Notes: iOS Notes-style list (Pinned first), filters, search, a week view, private to the owner. */
 export function NotesView({ params, setParams }: { params: URLSearchParams; setParams: (p: URLSearchParams) => void }) {
   const toast = useToast()
+  const chat = useChat()
+  const collab = !!(chat.status?.enabled && chat.status.taskCollab)
+  const [viewing, setViewing] = useState<Note | null>(null)
+  const sharedId = params.get('shared')
   const filter = (params.get('filter') as NoteFilter | 'date' | null) ?? 'all'
   const [items, setItems] = useState<Note[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -121,6 +132,21 @@ export function NotesView({ params, setParams }: { params: URLSearchParams; setP
     return () => window.clearTimeout(t)
   }, [load, search])
 
+  // Opened from the bell: a note a colleague shared (?shared=<id>).
+  useEffect(() => {
+    if (!sharedId) return
+    workApi.notes({ filter: 'shared' }).then((r) => {
+      const n = r.items.find((x) => x.id === sharedId)
+      if (n) setViewing(n)
+      else toast.error('That note is no longer shared with you.')
+    }, () => {})
+  }, [sharedId, toast])
+
+  useEffect(() => {
+    const offs = [chat.on('note.changed', () => filter === 'shared' && load())]
+    return () => offs.forEach((o) => o())
+  }, [chat, filter, load])
+
   useEffect(() => {
     if (!openNoteId) return
     workApi.note(openNoteId).then((n) => setEditing(n), () => toast.error('That note is not available.'))
@@ -146,7 +172,7 @@ export function NotesView({ params, setParams }: { params: URLSearchParams; setP
         {search && <button type="button" onClick={() => setSearch('')} aria-label="Clear search" className="flex size-[18px] items-center justify-center rounded-full bg-[var(--ios-gray2)] text-white"><X className="size-3" strokeWidth={3} /></button>}
       </label>
       <ScrollChips label="Filter notes" className="mt-2.5">
-        {FILTERS.map((f) => (
+        {FILTERS.filter((f) => !f.collab || collab).map((f) => (
           <button
             key={f.key}
             type="button"
@@ -174,7 +200,7 @@ export function NotesView({ params, setParams }: { params: URLSearchParams; setP
         <Empty
           icon={<StickyNote className="size-8" />}
           title={search ? 'No Results' : 'No Notes'}
-          text={search ? undefined : 'Meeting preparation, customer follow-ups, daily work: notes are private to you.'}
+          text={search ? undefined : filter === 'shared' ? 'Notes colleagues share with you appear here (read-only).' : 'Meeting preparation, customer follow-ups, daily work: notes are private to you.'}
         />
       )}
       {pinned.length > 0 && (
@@ -186,11 +212,11 @@ export function NotesView({ params, setParams }: { params: URLSearchParams; setP
       {rest.length > 0 && (
         <section>
           <p className="ios-group-title mt-5">{filter === 'date' ? whenText(day.toISOString(), false) : pinned.length ? 'Notes' : FILTERS.find((f) => f.key === filter)?.label}</p>
-          <div className="ios-group ios-list">{rest.map((n) => <NoteRow key={n.id} n={n} onOpen={() => setEditing(n)} />)}</div>
+          <div className="ios-group ios-list">{rest.map((n) => <NoteRow key={n.id} n={n} onOpen={() => (n.isShared ? setViewing(n) : setEditing(n))} />)}</div>
         </section>
       )}
       {items && items.length > 0 && <p className="mt-2 text-center text-[13px] text-[var(--ios-gray)]">{items.length} {items.length === 1 ? 'Note' : 'Notes'}</p>}
-      <p className="mt-3 flex items-center justify-center gap-1 text-[12px] text-[var(--ios-gray)]"><Lock className="size-3" /> Notes are private: no one else can see them.</p>
+      <p className="mt-3 flex items-center justify-center gap-1 text-[12px] text-[var(--ios-gray)]"><Lock className="size-3" /> {collab ? 'Notes are private unless you share one (read-only).' : 'Notes are private: no one else can see them.'}</p>
 
       <button type="button" onClick={() => setEditing('new')} className="mt-3 flex items-center gap-2 px-1 py-2 text-[17px] font-semibold text-[var(--ios-blue)] active:opacity-50" data-testid="note-new">
         <span className="flex size-6 items-center justify-center rounded-full bg-[var(--ios-blue)] text-white"><Plus className="size-4" strokeWidth={3} /></span>
@@ -208,6 +234,26 @@ export function NotesView({ params, setParams }: { params: URLSearchParams; setP
         />
       )}
       {followUp && <FollowUpSheet source={followUp} onClose={() => setFollowUp(null)} />}
+      {viewing && (
+        <Sheet title="Shared note" leftLabel="Close" onClose={() => {
+          setViewing(null)
+          if (sharedId) { const next = new URLSearchParams(params); next.delete('shared'); setParams(next) }
+        }} testId="shared-note">
+          <section className="mt-2 rounded-[14px] bg-white px-4 py-3" style={viewing.color ? { boxShadow: `inset 4px 0 0 ${viewing.color}` } : undefined}>
+            <p className="text-[19px] font-semibold break-words">{viewing.title}</p>
+            <p className="mt-0.5 text-[13px] text-[var(--ios-gray)]">From {viewing.ownerName} · updated {whenText(viewing.updatedUtc)}</p>
+            <div className="mt-3 space-y-1 text-[16px] leading-[22px] break-words whitespace-pre-wrap">
+              {(viewing.body ?? '').split('\n').map((line, i) => {
+                const m = line.match(/^\s*- \[([ xX])\]\s?(.*)$/)
+                return m ? (
+                  <p key={i} className="flex items-start gap-2"><span className={cn('mt-[3px] flex size-[18px] shrink-0 items-center justify-center rounded-[5px] text-[12px] text-white', m[1] !== ' ' ? 'bg-[var(--ios-green)]' : 'shadow-[inset_0_0_0_1.5px_var(--ios-gray3)]')}>{m[1] !== ' ' ? '✓' : ''}</span><span className={cn(m[1] !== ' ' && 'text-[var(--ios-gray)] line-through')}>{m[2]}</span></p>
+                ) : <p key={i}>{line || '\u00a0'}</p>
+              })}
+            </div>
+          </section>
+          <p className="mt-2 flex items-center gap-1 px-4 text-[13px] text-[var(--ios-label2)]"><Lock className="size-3" /> Read-only. Only {viewing.ownerName ?? 'the owner'} can change it.</p>
+        </Sheet>
+      )}
     </div>
   )
 }

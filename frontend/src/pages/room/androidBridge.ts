@@ -15,3 +15,46 @@ export const bridge = (): Bridge | null => {
 
 /** True inside the OneInsure Connect Android app. */
 export const inAndroidApp = () => bridge() !== null
+
+/**
+ * Phone notification through the app (Android app 1.2.0+; older apps ignore the message). link: an app path such as
+ * "/tasks?task=…", turned into the full portal address here. Returns false outside the app.
+ */
+export function appNotify(title: string, body: string, link: string, tag: string) {
+  const b = bridge()
+  if (!b) return false
+  const base = `${window.location.origin}${import.meta.env.BASE_URL.replace(/\/$/, '')}`
+  try {
+    b.postMessage(JSON.stringify({ type: 'notify', title, body, link: base + (link.startsWith('/') ? link : '/' + link), tag }))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Asks the app for the notification permission; resolves with the answer (false on older apps after 4 s). */
+export function appNotifyPermission(): Promise<boolean> {
+  const b = bridge()
+  if (!b) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    const done = (v: boolean) => {
+      window.clearTimeout(t)
+      resolve(v)
+    }
+    const t = window.setTimeout(() => resolve(false), 4000)
+    const prev = b.onmessage
+    b.onmessage = (e) => {
+      try {
+        const m = JSON.parse(e.data)
+        if (m.type === 'notifyPermission') {
+          b.onmessage = prev ?? null
+          return done(!!m.granted)
+        }
+      } catch {
+        /* not JSON */
+      }
+      prev?.(e)
+    }
+    b.postMessage(JSON.stringify({ type: 'notifyPermission' }))
+  })
+}

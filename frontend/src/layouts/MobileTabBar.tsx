@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Bell, CalendarDays, LayoutDashboard, MessagesSquare, Plus, Video } from 'lucide-react'
+import { Bell, CalendarDays, LayoutDashboard, MessagesSquare, Plus, Sun, Video } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { cn } from '../lib/cn'
 import { NewMeetingDialog } from '../pages/meetings/QuickMeetingDialogs'
@@ -22,6 +22,8 @@ export function MobileTabBar() {
     chat.enabled
       ? { to: '/chat', label: 'Chat', icon: MessagesSquare, badge: chat.unread }
       : can('calendar.view') && { to: '/calendar', label: 'Calendar', icon: CalendarDays },
+    // V033: My Day (tasks, Top 3, reviews) one tap away on phones when Notes & tasks is on for this person.
+    chat.status?.enabled && chat.status.tasks && { to: '/my-day', label: 'My Day', icon: Sun },
     can('notifications.view') && { to: '/notifications', label: 'Alerts', icon: Bell },
   ].filter((t): t is { to: string; label: string; icon: typeof Plus; badge?: number } => !!t)
   if (tabs.length < 2) return null

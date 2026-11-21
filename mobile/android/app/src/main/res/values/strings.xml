@@ -3,6 +3,8 @@
     <string name="app_name">OneInsure Connect</string>
     <string name="channel_meeting">Call or meeting in progress</string>
     <string name="channel_screen">Screen sharing</string>
+    <string name="channel_tasks">Tasks and reminders</string>
+    <string name="channel_tasks_description">Tasks assigned to you, reviews, comments, due dates and reminders</string>
     <string name="meeting_notification_title">OneInsure Connect call or meeting in progress</string>
     <string name="meeting_notification_text">Your microphone stays on. Tap to return.</string>
     <string name="screen_notification_title">You are presenting your screen</string>

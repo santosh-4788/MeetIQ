@@ -128,8 +128,25 @@ public static class ChatFileEndpoints
     }
 
     /// <summary>Common checks of an incoming file: allowed type, size, content. Returns the stored file or the problem to answer with.</summary>
-    static async Task<(Stored? File, FileType? Type, string Name, IResult? Error)> ReceiveAsync(IDbConnection c, ChatServices s, ChatMe me, IFormFile? file,
-        Func<FileType, bool> allowed, int maxMb, HttpContext ctx)
+    static Task<(Stored? File, FileType? Type, string Name, IResult? Error)> ReceiveAsync(IDbConnection c, ChatServices s, ChatMe me, IFormFile? file,
+        Func<FileType, bool> allowed, int maxMb, HttpContext ctx) =>
+        ReceiveCoreAsync(c, s.Options, s.Clock.UtcNow, me.UserId, file, allowed, maxMb, ctx);
+
+    /// <summary>A checked and stored file for a task (V033 proof files): same allowed types, content check and storage as chat attachments.</summary>
+    internal sealed record ReceivedFile(string StorageKey, string FullPath, long Size, string Sha256, string Extension, string ContentType, string Name);
+
+    internal static async Task<(ReceivedFile? File, IResult? Error)> ReceiveTaskFileAsync(IDbConnection c, ChatOptions o, DateTime now, long userId, IFormFile? file,
+        int maxMb, HttpContext ctx)
+    {
+        var (stored, type, name, error) = await ReceiveCoreAsync(c, o, now, userId, file, _ => true, maxMb, ctx);
+        return error is not null ? (null, error)
+            : (new ReceivedFile(stored!.StorageKey, stored.FullPath, stored.Size, stored.Sha256, type!.Extension, type.ContentType, name), null);
+    }
+
+    internal static void DeleteStored(string fullPath) => TryDelete(fullPath);
+
+    static async Task<(Stored? File, FileType? Type, string Name, IResult? Error)> ReceiveCoreAsync(IDbConnection c, ChatOptions options, DateTime now, long userId,
+        IFormFile? file, Func<FileType, bool> allowed, int maxMb, HttpContext ctx)
     {
         if (file is null || file.Length == 0) return (null, null, "", Invalid("file", "Choose a file to send."));
         var name = SafeName(file.FileName);
@@ -138,22 +155,22 @@ public static class ChatFileEndpoints
             "SELECT Extension, Category, ContentType, Signature, MaxSizeMb, InlinePreview FROM chat.MST_ChatFileType WHERE Extension = @ext AND IsActive = 1", new { ext });
         if (type is null || !allowed(type))
             return (null, null, name, Invalid("file", $"Files of type .{(ext.Length == 0 ? "?" : ext)} cannot be shared. Allowed: images, PDF, Word, Excel, PowerPoint, text, CSV and ZIP."));
-        var limitMb = Math.Min(Math.Min(type.MaxSizeMb, s.Options.MaxUploadMb), maxMb);
+        var limitMb = Math.Min(Math.Min(type.MaxSizeMb, options.MaxUploadMb), maxMb);
         if (file.Length > limitMb * Mb) return (null, type, name, Invalid("file", $"The file is larger than {limitMb} MB."));
 
         Stored stored;
-        try { stored = await StoreAsync(file, s.Options, s.Clock.UtcNow, ctx.RequestAborted); }
+        try { stored = await StoreAsync(file, options, now, ctx.RequestAborted); }
         catch (IOException e) when ((e.HResult & 0xFFFF) == 225 || e.Message.Contains("virus", StringComparison.OrdinalIgnoreCase))
         {
             // Defender's real-time protection refused the write (ERROR_VIRUS_INFECTED).
-            await Audit.WriteAsync(c, "USER", me.UserId, "CHAT_FILE_BLOCKED", "ChatFile", null, "Upload blocked by the antivirus while saving", ClientInfo.From(ctx).Ip,
+            await Audit.WriteAsync(c, "USER", userId, "CHAT_FILE_BLOCKED", "ChatFile", null, "Upload blocked by the antivirus while saving", ClientInfo.From(ctx).Ip,
                 newValues: new { extension = ext, size = file.Length });
             return (null, type, name, Invalid("file", "This file was blocked by the antivirus and was not shared."));
         }
         if (FileInspector.Check(stored.FullPath, type.Signature) is { } reason)
         {
             TryDelete(stored.FullPath);
-            await Audit.WriteAsync(c, "USER", me.UserId, "CHAT_FILE_REJECTED", "ChatFile", null, "Upload refused: content does not match its type", ClientInfo.From(ctx).Ip,
+            await Audit.WriteAsync(c, "USER", userId, "CHAT_FILE_REJECTED", "ChatFile", null, "Upload refused: content does not match its type", ClientInfo.From(ctx).Ip,
                 newValues: new { extension = ext, size = file.Length, reason });
             return (null, type, name, Invalid("file", reason));
         }
@@ -454,7 +471,46 @@ public sealed class ChatFileScanWorker(Db db, IOptions<ChatOptions> options, Cha
             }
             await PushRowsAsync(c, rows);
         }
+        await ScanTaskFilesAsync(c, o, ct);
         await RetentionAsync(c, o, ct);
+    }
+
+    /// <summary>Proof files on tasks (V033): same scan; the owner and the person who assigned the task see the result live.</summary>
+    async Task ScanTaskFilesAsync(IDbConnection c, ChatOptions o, CancellationToken ct)
+    {
+        List<PendingRow> pending;
+        try
+        {
+            pending = (await c.QueryAsync<PendingRow>("""
+                SELECT TOP (10) StorageKey, ScanAttempts AS Attempts FROM chat.TRN_ChatTaskFile WHERE ScanStatus = 'PENDING' AND DeletedUtc IS NULL ORDER BY FileId
+                """)).ToList();
+        }
+        catch (Microsoft.Data.SqlClient.SqlException e) when (e.Number == 208) { return; }   // database without V033
+        foreach (var p in pending)
+        {
+            ct.ThrowIfCancellationRequested();
+            var (status, detail) = await ScanAsync(o, p, ct);
+            if (status is null)
+            {
+                await c.ExecuteAsync("UPDATE chat.TRN_ChatTaskFile SET ScanAttempts = ScanAttempts + 1, ScanDetail = @detail WHERE StorageKey = @key AND ScanStatus = 'PENDING'",
+                    new { key = p.StorageKey, detail });
+                continue;
+            }
+            var rows = (await c.QueryAsync<(Guid Id, Guid TaskId, long OwnerUserId, long? AssignedByUserId)>("""
+                UPDATE f SET ScanStatus = @status, ScannedUtc = SYSUTCDATETIME(), ScanDetail = @detail, ScanAttempts = ScanAttempts + 1
+                OUTPUT inserted.PublicId AS Id, t.PublicId AS TaskId, t.OwnerUserId, t.AssignedByUserId
+                FROM chat.TRN_ChatTaskFile f JOIN chat.TRN_ChatTask t ON t.TaskId = f.TaskId
+                WHERE f.StorageKey = @key AND f.ScanStatus = 'PENDING'
+                """, new { status, detail, key = p.StorageKey })).ToList();
+            if (status == "BLOCKED")
+            {
+                try { File.Delete(ChatFileEndpoints.Resolve(o.ResolvedStorageRoot(), p.StorageKey)); } catch (Exception) { /* already removed by the antivirus */ }
+                foreach (var r in rows)
+                    await Audit.WriteAsync(c, "SYSTEM", null, "TASK_FILE_BLOCKED", "ChatTaskFile", r.Id.ToString(), "Task file blocked by the antivirus", null, newValues: new { detail });
+            }
+            foreach (var r in rows)
+                await push.ToUsersAsync(r.AssignedByUserId is { } ab ? [r.OwnerUserId, ab] : [r.OwnerUserId], "task.changed", new { id = r.TaskId });
+        }
     }
 
     async Task PushRowsAsync(IDbConnection c, IEnumerable<(Guid Id, long? MessageId, long ConversationId)> rows)

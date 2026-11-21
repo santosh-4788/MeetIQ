@@ -7,6 +7,7 @@ import { workApi, type Reminder } from '../../../api/work'
 import { useToast } from '../../../components/ui/Toast'
 import { parseUtc } from '../../../lib/format'
 import { useChat } from '../ChatProvider'
+import { appNotify } from '../../room/androidBridge'
 import { silenced } from '../quiet'
 import { PRIORITY, fromLocalInput, toLocalInput, tomorrowAt9, whenText } from './ui'
 import '../chat.css'
@@ -73,6 +74,8 @@ export default function ReminderCenter() {
     const quiet = silenced(prefs.current, r.priority === 'URGENT' ? 'urgent-reminder' : 'reminder')
     if (prefs.current?.soundsOn !== false && prefs.current?.availability !== 'DND' && !quiet) chime()
     try {
+      if (!quiet && document.visibilityState === 'hidden'
+        && appNotify(`Reminder: ${r.title}`, r.details ?? whenText(r.dueUtc), r.kind === 'TASK' ? `/tasks?task=${r.itemId}` : `/notes?note=${r.itemId}`, `oic-reminder-${r.id}`)) return
       if (!quiet && document.visibilityState === 'hidden' && 'Notification' in window && Notification.permission === 'granted')
         new Notification(`Reminder: ${r.title}`, { body: r.details ?? whenText(r.dueUtc), tag: `oic-reminder-${r.id}` })
     } catch {

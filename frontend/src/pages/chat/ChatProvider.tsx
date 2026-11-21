@@ -32,7 +32,7 @@ const ChatContext = createContext<ChatContextValue | null>(null)
 
 const EVENTS = ['message.new', 'message.updated', 'conversation.added', 'conversation.updated', 'conversation.removed', 'conversation.changed',
   'receipt', 'presence', 'typing', 'preferences', 'call.incoming', 'call.updated', 'call.ended', 'notification.new', 'reminder.due', 'reminder.updated',
-  'scheduled.updated', 'pins.updated']
+  'scheduled.updated', 'pins.updated', 'task.changed', 'note.changed']
 
 function readCookie(name: string) {
   return document.cookie.split('; ').find((c) => c.startsWith(`${name}=`))?.split('=')[1]

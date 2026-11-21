@@ -46,7 +46,9 @@ public static class RoomFeatureEndpoints
         public const string ChatTasks = "CHAT_TASKS";
         /// <summary>Advanced chat: scheduled / saved / pinned messages, @mentions, favourites, quiet hours (V031, 20 Nov 2026); needs CHAT on as well.</summary>
         public const string ChatAdvanced = "CHAT_ADVANCED";
-        public static readonly string[] Features = [Reactions, Polls, PrivateChat, Whiteboard, BackgroundEffects, NoiseSuppression, CameraFlip, MeetingMinutes, Chat, ChatCalls, ChatTasks, ChatAdvanced];
+        /// <summary>Task collaboration (V033, 21 Nov 2026): assign tasks, review before close, comments, proof files, shared notes; needs CHAT and CHAT_TASKS.</summary>
+        public const string TaskCollab = "TASK_COLLAB";
+        public static readonly string[] Features = [Reactions, Polls, PrivateChat, Whiteboard, BackgroundEffects, NoiseSuppression, CameraFlip, MeetingMinutes, Chat, ChatCalls, ChatTasks, ChatAdvanced, TaskCollab];
     }
 
     sealed record SettingRow(string FeatureKey, bool IsEnabled, DateTime ModifiedUtc, string? ModifiedBy);

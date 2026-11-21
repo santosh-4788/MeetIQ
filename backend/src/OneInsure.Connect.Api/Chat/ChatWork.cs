@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using Dapper;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
+using OneInsure.Connect.Api.Email;
 using OneInsure.Connect.Api.Infrastructure;
 using OneInsure.Connect.Api.Meetings;
 using OneInsure.Connect.Api.Security;
@@ -30,15 +31,20 @@ public static partial class ChatWorkEndpoints
     public const int MaxOpenTasks = 5000;
 
     static readonly string[] Priorities = ["LOW", "MEDIUM", "HIGH", "URGENT"];
-    static readonly string[] Statuses = ["PENDING", "IN_PROGRESS", "COMPLETED", "POSTPONED", "CANCELLED"];
+    static readonly string[] Statuses = ["PENDING", "IN_PROGRESS", "IN_REVIEW", "COMPLETED", "POSTPONED", "CANCELLED"];
     static readonly string[] RepeatRules = ["NONE", "DAILY", "WEEKDAYS", "WEEKLY", "MONTHLY"];
 
-    public sealed class WorkServices(Db db, IMemoryCache cache, ChatPush push, IClock clock)
+    public sealed class WorkServices(Db db, IMemoryCache cache, ChatPush push, IClock clock, IOptions<EmailOptions> email, IOptions<PublicEndpointOptions> endpoints,
+        IOptions<ChatOptions> chatOptions, ChatFileScanSignal scanSignal)
     {
         public Db Db => db;
         public IMemoryCache Cache => cache;
         public ChatPush Push => push;
         public IClock Clock => clock;
+        public EmailOptions Email => email.Value;
+        public string WebBaseUrl => endpoints.Value.WebBaseUrl.TrimEnd('/');
+        public ChatOptions ChatOptions => chatOptions.Value;
+        public ChatFileScanSignal ScanSignal => scanSignal;
     }
 
     public static RouteGroupBuilder MapChatWorkEndpoints(this RouteGroupBuilder api)
@@ -71,6 +77,7 @@ public static partial class ChatWorkEndpoints
 
         g.MapGet("/my-day", MyDay);
         g.MapGet("/work/meetings", WorkMeetings);
+        MapCollaboration(g);
         return api;
     }
 
@@ -169,6 +176,7 @@ public static partial class ChatWorkEndpoints
         public static Input Of(object o) => new(JsonSerializer.SerializeToElement(o));
 
         public bool Has(string n) => props.ContainsKey(n);
+        public JsonElement? Raw(string n) => props.TryGetValue(n, out var v) ? v : null;
         bool Get(string n, out JsonElement v) => props.TryGetValue(n, out v) && v.ValueKind != JsonValueKind.Null;
 
         public string? Str(string n)
@@ -190,6 +198,13 @@ public static partial class ChatWorkEndpoints
             if (!Get(n, out var v)) return null;
             if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i)) return i;
             V.Add(n, "Must be a whole number."); return null;
+        }
+
+        public List<JsonElement>? Array(string n)
+        {
+            if (!Get(n, out var v)) return null;
+            if (v.ValueKind == JsonValueKind.Array) return v.EnumerateArray().ToList();
+            V.Add(n, "Must be a list."); return null;
         }
 
         public Guid? Id(string n)
@@ -444,11 +459,14 @@ public static partial class ChatWorkEndpoints
         public Guid? TaskId { get; set; }
         public string? TaskTitle { get; set; }
         public string? TaskStatus { get; set; }
+        public string? Color { get; set; }
+        public int SharedCount { get; set; }
     }
 
     static readonly string NoteSelect = $"""
         SELECT x.NoteId, x.PublicId AS Id, x.Title, x.Body, x.IsPinned, x.IsCompleted, x.IsArchived, x.NoteDateUtc,
                lt.PublicId AS TaskId, lt.Title AS TaskTitle, lt.[Status] AS TaskStatus,
+               x.Color, (SELECT COUNT(*) FROM chat.TRN_ChatNoteShare ns WHERE ns.NoteId = x.NoteId) AS SharedCount,
                {LinkColumns}
         FROM chat.TRN_ChatNote x
         {LinkJoins}
@@ -461,6 +479,7 @@ public static partial class ChatWorkEndpoints
     {
         id = r.Id, title = r.Title, body = r.Body, categoryId = r.CategoryId, categoryName = r.CategoryName, categoryColor = r.CategoryColor,
         isPinned = r.IsPinned, isCompleted = r.IsCompleted, isArchived = r.IsArchived, noteDateUtc = r.NoteDateUtc,
+        color = r.Color, sharedCount = r.SharedCount, isShared = false, ownerName = (string?)null,
         reminderId = r.ReminderId, reminderUtc = r.ReminderUtc, reminderState = r.ReminderState,
         meeting = r.Meeting,
         task = r.TaskId is { } tid ? new { id = tid, title = r.TaskTitle, status = r.TaskStatus } : null,
@@ -515,6 +534,8 @@ public static partial class ChatWorkEndpoints
     static Task<IResult> Notes(string? filter, string? search, DateTime? from, DateTime? to, DateTime? dayStartUtc, DateTime? dayEndUtc, WorkServices s, HttpContext ctx) =>
         Run(s, ctx, async (c, me) =>
         {
+            // Collaboration (V033): notes colleagues shared with me, read-only.
+            if (string.Equals(filter?.Trim(), "shared", StringComparison.OrdinalIgnoreCase)) return await SharedNotesAsync(c, s, me, search);
             var (ds, de, dayError) = Day(dayStartUtc, dayEndUtc, me, s.Clock.UtcNow);
             if (dayError is not null) return dayError;
             var (items, error) = await QueryNotesAsync(c, me, filter, search, from, to, ds, de, 500);
@@ -550,6 +571,7 @@ public static partial class ChatWorkEndpoints
         public long? TaskId { get; set; }
         public long? EmployeeUserId { get; set; }
         public long? ConversationId { get; set; }
+        public string? Color { get; set; }
     }
 
     static async Task<IResult> SaveNoteAsync(IDbConnection c, WorkServices s, Caller me, long? noteId, Input inp)
@@ -557,7 +579,7 @@ public static partial class ChatWorkEndpoints
         var now = s.Clock.UtcNow;
         var create = noteId is null;
         var old = create ? null : await c.QuerySingleAsync<NoteRaw>("""
-            SELECT NoteId, Title, Body, CategoryId, IsPinned, IsCompleted, CompletedUtc, IsArchived, NoteDateUtc, MeetingId, TaskId, EmployeeUserId, ConversationId
+            SELECT NoteId, Title, Body, CategoryId, IsPinned, IsCompleted, CompletedUtc, IsArchived, NoteDateUtc, MeetingId, TaskId, EmployeeUserId, ConversationId, Color
             FROM chat.TRN_ChatNote WHERE NoteId = @noteId
             """, new { noteId });
         var n = create ? new NoteRaw() : old!.MemberwiseCloneNote();
@@ -567,6 +589,12 @@ public static partial class ChatWorkEndpoints
         if (inp.Has("isPinned")) n.IsPinned = inp.Bool("isPinned") ?? false;
         if (inp.Has("isCompleted")) n.IsCompleted = inp.Bool("isCompleted") ?? false;
         if (inp.Has("isArchived")) n.IsArchived = inp.Bool("isArchived") ?? false;
+        if (inp.Has("color"))
+        {
+            n.Color = inp.Str("color")?.Trim().ToUpperInvariant();
+            if (n.Color is { Length: 0 }) n.Color = null;
+            if (n.Color is not null && !ColorRe().IsMatch(n.Color)) v.Add("color", "Choose a colour such as #FDE68A.");
+        }
         if (inp.Has("noteDateUtc")) { n.NoteDateUtc = inp.Utc("noteDateUtc"); CheckDate(v, "noteDateUtc", n.NoteDateUtc, now); }
         var reminderGiven = inp.Has("reminderUtc");
         var reminderUtc = inp.Utc("reminderUtc");
@@ -603,9 +631,9 @@ public static partial class ChatWorkEndpoints
             p.Add("now", now);
             if (create)
                 id = await c.QuerySingleAsync<long>("""
-                    INSERT chat.TRN_ChatNote (OwnerUserId, Title, Body, CategoryId, IsPinned, IsCompleted, CompletedUtc, IsArchived, NoteDateUtc, MeetingId, TaskId, EmployeeUserId, ConversationId, CreatedUtc, UpdatedUtc)
+                    INSERT chat.TRN_ChatNote (OwnerUserId, Title, Body, CategoryId, IsPinned, IsCompleted, CompletedUtc, IsArchived, NoteDateUtc, MeetingId, TaskId, EmployeeUserId, ConversationId, Color, CreatedUtc, UpdatedUtc)
                     OUTPUT inserted.NoteId
-                    VALUES (@me, @Title, @Body, @CategoryId, @IsPinned, @IsCompleted, @CompletedUtc, @IsArchived, @NoteDateUtc, @MeetingId, @TaskId, @EmployeeUserId, @ConversationId, @now, @now)
+                    VALUES (@me, @Title, @Body, @CategoryId, @IsPinned, @IsCompleted, @CompletedUtc, @IsArchived, @NoteDateUtc, @MeetingId, @TaskId, @EmployeeUserId, @ConversationId, @Color, @now, @now)
                     """, p, tx);
             else
             {
@@ -613,7 +641,7 @@ public static partial class ChatWorkEndpoints
                 await c.ExecuteAsync("""
                     UPDATE chat.TRN_ChatNote SET Title = @Title, Body = @Body, CategoryId = @CategoryId, IsPinned = @IsPinned, IsCompleted = @IsCompleted, CompletedUtc = @CompletedUtc,
                         IsArchived = @IsArchived, NoteDateUtc = @NoteDateUtc, MeetingId = @MeetingId, TaskId = @TaskId, EmployeeUserId = @EmployeeUserId,
-                        ConversationId = @ConversationId, UpdatedUtc = @now
+                        ConversationId = @ConversationId, Color = @Color, UpdatedUtc = @now
                     WHERE NoteId = @NoteId AND OwnerUserId = @me
                     """, p, tx);
             }
@@ -632,6 +660,7 @@ public static partial class ChatWorkEndpoints
     {
         NoteId = n.NoteId, Title = n.Title, Body = n.Body, CategoryId = n.CategoryId, IsPinned = n.IsPinned, IsCompleted = n.IsCompleted, CompletedUtc = n.CompletedUtc,
         IsArchived = n.IsArchived, NoteDateUtc = n.NoteDateUtc, MeetingId = n.MeetingId, TaskId = n.TaskId, EmployeeUserId = n.EmployeeUserId, ConversationId = n.ConversationId,
+        Color = n.Color,
     };
 
     static Task<IResult> DeleteNote(Guid id, WorkServices s, HttpContext ctx) => Run(s, ctx, async (c, me) =>
@@ -640,7 +669,8 @@ public static partial class ChatWorkEndpoints
         if (noteId is null) return NotFound("Note");
         var now = s.Clock.UtcNow;
         using var tx = c.BeginTransaction();
-        await c.ExecuteAsync("UPDATE chat.TRN_ChatNote SET IsActive = 0, UpdatedUtc = @now WHERE NoteId = @noteId", new { noteId, now }, tx);
+        await c.ExecuteAsync("UPDATE chat.TRN_ChatNote SET IsActive = 0, UpdatedUtc = @now WHERE NoteId = @noteId; DELETE FROM chat.TRN_ChatNoteShare WHERE NoteId = @noteId;",
+            new { noteId, now }, tx);
         await CloseRemindersAsync(c, tx, "NoteId", noteId.Value, "CANCELLED", now);
         tx.Commit();
         return Results.NoContent();
@@ -676,9 +706,28 @@ public static partial class ChatWorkEndpoints
         public string? CallOtherName { get; set; }
         public Guid? NoteId { get; set; }
         public string? NoteTitle { get; set; }
+        // Collaboration (V033).
+        public bool IsMine { get; set; }
+        public Guid OwnerId { get; set; }
+        public string? OwnerName { get; set; }
+        public Guid? AssignedById { get; set; }
+        public string? AssignedByName { get; set; }
+        public Guid? AssignmentKey { get; set; }
+        public string? AssignState { get; set; }
+        public bool RequiresReview { get; set; }
+        public DateTime? RequestedDueUtc { get; set; }
+        public string? RequestReason { get; set; }
+        public DateTime? SubmittedUtc { get; set; }
+        public DateTime? ReviewedUtc { get; set; }
+        public DateTime? FocusUtc { get; set; }
+        public int? ChecklistTotal { get; set; }
+        public int? ChecklistDone { get; set; }
+        public int? ChecklistRequiredOpen { get; set; }
+        public int CommentCount { get; set; }
+        public int FileCount { get; set; }
     }
 
-    static readonly string TaskSelect = $"""
+    static readonly string TaskSelectBase = $"""
         SELECT x.TaskId, x.PublicId AS Id, x.Title, x.[Description], x.Notes, x.[Priority], x.[Status], x.DueUtc, x.HasDueTime, x.RepeatRule, x.CompletedUtc,
                lmsg.PublicId AS MessageId, lmcv.PublicId AS MessageConversationId, CASE WHEN lmp.UserId IS NULL THEN NULL ELSE lmse.DisplayName END AS MessageSenderName,
                CASE WHEN lmp.UserId IS NULL THEN NULL ELSE LEFT(lmsg.Body, 200) END AS MessageBody, lmsg.Kind AS MessageKind, lmsg.DeletedUtc AS MessageDeletedUtc,
@@ -687,6 +736,10 @@ public static partial class ChatWorkEndpoints
                lcl.PublicId AS CallId, lcl.[Type] AS CallType, lcl.CreatedUtc AS CallStartedUtc,
                CASE WHEN lcl.[Type] = 'GROUP' THEN COALESCE(lclcv.[Name], 'Group call') ELSE lclo.DisplayName END AS CallOtherName,
                ln.PublicId AS NoteId, ln.Title AS NoteTitle,
+               CAST(CASE WHEN x.OwnerUserId = @me THEN 1 ELSE 0 END AS BIT) AS IsMine, ow.PublicId AS OwnerId, owe.DisplayName AS OwnerName,
+               abu.PublicId AS AssignedById, abe.DisplayName AS AssignedByName, x.AssignmentKey, x.AssignState, x.RequiresReview, x.RequestedDueUtc,
+               x.RequestReason, x.SubmittedUtc, x.ReviewedUtc, x.FocusUtc,
+               ck.Total AS ChecklistTotal, ck.Done AS ChecklistDone, ck.RequiredOpen AS ChecklistRequiredOpen, ac.Comments AS CommentCount, tf.Files AS FileCount,
                {LinkColumns}
         FROM chat.TRN_ChatTask x
         {LinkJoins}
@@ -703,9 +756,25 @@ public static partial class ChatWorkEndpoints
                      JOIN org.Employees ce ON ce.EmployeeId = cu.EmployeeId
                      WHERE cp2.CallId = lcl.CallId AND cp2.UserId <> x.OwnerUserId ORDER BY cp2.InvitedUtc) lclo
         LEFT JOIN chat.TRN_ChatNote ln ON ln.NoteId = x.NoteId AND ln.IsActive = 1
+        LEFT JOIN org.Employees owe ON owe.EmployeeId = ow.EmployeeId
+        LEFT JOIN auth.Users abu ON abu.UserId = x.AssignedByUserId LEFT JOIN org.Employees abe ON abe.EmployeeId = abu.EmployeeId
+        OUTER APPLY (SELECT COUNT(*) AS Total, SUM(CASE WHEN ci.IsDone = 1 THEN 1 ELSE 0 END) AS Done,
+                            SUM(CASE WHEN ci.IsRequired = 1 AND ci.IsDone = 0 THEN 1 ELSE 0 END) AS RequiredOpen
+                     FROM chat.TRN_ChatTaskChecklist ci WHERE ci.TaskId = x.TaskId AND ci.IsActive = 1) ck
+        OUTER APPLY (SELECT COUNT(*) AS Comments FROM chat.TRN_ChatTaskActivity ta WHERE ta.TaskId = x.TaskId AND ta.Kind = 'COMMENT') ac
+        OUTER APPLY (SELECT COUNT(*) AS Files FROM chat.TRN_ChatTaskFile tfl WHERE tfl.TaskId = x.TaskId AND tfl.DeletedUtc IS NULL AND tfl.ScanStatus <> 'BLOCKED') tf
         {ReminderApply("TaskId", "TaskId")}
-        WHERE x.IsActive = 1 AND x.OwnerUserId = @me
+        WHERE x.IsActive = 1
         """;
+
+    /// <summary>The caller's own tasks (including tasks other people assigned to them).</summary>
+    static readonly string TaskSelect = TaskSelectBase + " AND x.OwnerUserId = @me";
+
+    /// <summary>Tasks the caller can open: their own, and the copies of tasks they assigned to other people.</summary>
+    static readonly string TaskSelectVisible = TaskSelectBase + " AND (x.OwnerUserId = @me OR x.AssignedByUserId = @me)";
+
+    /// <summary>Copies of tasks the caller assigned to other people.</summary>
+    static readonly string TaskSelectAssigner = TaskSelectBase + " AND x.AssignedByUserId = @me";
 
     static string MessageExcerpt(TaskRow r)
     {
@@ -715,12 +784,35 @@ public static partial class ChatWorkEndpoints
         return Excerpt(text, 140) ?? "";
     }
 
-    static object TaskDto(TaskRow r, DateTime now) => new
+    /// <summary>
+    /// A task as the caller sees it. role: "mine" (own task), "assignee" (someone assigned it to me), "assigner" (I assigned it to the owner).
+    /// The person who assigned a task never sees the owner's private notes, category, reminder or linked note.
+    /// </summary>
+    static object TaskDto(TaskRow r, DateTime now)
     {
-        id = r.Id, title = r.Title, description = r.Description, notes = r.Notes, priority = r.Priority, status = r.Status,
-        dueUtc = r.DueUtc, hasDueTime = r.HasDueTime, isOverdue = r.DueUtc is { } d && d < now && r.Status is not ("COMPLETED" or "CANCELLED"),
-        categoryId = r.CategoryId, categoryName = r.CategoryName, categoryColor = r.CategoryColor, repeatRule = r.RepeatRule,
-        reminderId = r.ReminderId, reminderUtc = r.ReminderUtc, reminderState = r.ReminderState, completedUtc = r.CompletedUtc,
+        var assigned = r.AssignedById is not null;
+        var role = !assigned ? "mine" : r.IsMine ? "assignee" : "assigner";
+        var mine = r.IsMine;
+        var closed = r.Status is "COMPLETED" or "CANCELLED";
+        return new
+        {
+        id = r.Id, title = r.Title, description = r.Description, notes = mine ? r.Notes : null, priority = r.Priority, status = r.Status,
+        dueUtc = r.DueUtc, hasDueTime = r.HasDueTime, isOverdue = r.DueUtc is { } d && d < now && !closed && r.Status != "IN_REVIEW",
+        categoryId = mine ? r.CategoryId : null, categoryName = mine ? r.CategoryName : null, categoryColor = mine ? r.CategoryColor : null, repeatRule = r.RepeatRule,
+        reminderId = mine ? r.ReminderId : null, reminderUtc = mine ? r.ReminderUtc : null, reminderState = mine ? r.ReminderState : null, completedUtc = r.CompletedUtc,
+        role,
+        owner = new { id = r.OwnerId, name = r.OwnerName },
+        assignedBy = r.AssignedById is { } abid ? new { id = abid, name = r.AssignedByName } : null,
+        assignmentKey = r.AssignmentKey, assignState = r.AssignState, requiresReview = r.RequiresReview,
+        requestedDueUtc = r.RequestedDueUtc, requestReason = r.RequestedDueUtc is null ? null : r.RequestReason,
+        submittedUtc = r.SubmittedUtc, reviewedUtc = r.ReviewedUtc, focusUtc = mine ? r.FocusUtc : null,
+        checklist = new { total = r.ChecklistTotal ?? 0, done = r.ChecklistDone ?? 0, requiredOpen = r.ChecklistRequiredOpen ?? 0 },
+        commentCount = r.CommentCount, fileCount = r.FileCount,
+        // What the caller may do now (the server checks again on every action).
+        canComplete = mine && !(assigned && r.RequiresReview) && (r.ChecklistRequiredOpen ?? 0) == 0 && !closed && r.Status != "IN_REVIEW",
+        canSubmit = mine && assigned && r.RequiresReview && !closed && r.Status != "IN_REVIEW",
+        canReview = role == "assigner" && r.Status == "IN_REVIEW",
+        canEditDetails = role != "assignee" && !closed,
         meeting = r.Meeting,
         employee = r.Employee,
         conversation = r.Conversation,
@@ -728,12 +820,13 @@ public static partial class ChatWorkEndpoints
             ? new { id = mid, conversationId = r.MessageVisible ? r.MessageConversationId : null, senderName = r.MessageSenderName, excerpt = MessageExcerpt(r), sentUtc = r.MessageSentUtc }
             : null,
         call = r.CallId is { } cid ? new { id = cid, type = r.CallType, startedUtc = r.CallStartedUtc, otherName = r.CallOtherName } : null,
-        note = r.NoteId is { } nid ? new { id = nid, title = r.NoteTitle } : null,
+        note = r.NoteId is { } nid && mine ? new { id = nid, title = r.NoteTitle } : null,
         createdUtc = r.CreatedUtc, updatedUtc = r.UpdatedUtc,
-    };
+        };
+    }
 
     static async Task<object?> TaskByIdAsync(IDbConnection c, Caller me, long taskId, DateTime now) =>
-        (await c.QueryAsync<TaskRow>($"{TaskSelect} AND x.TaskId = @taskId", new { me = me.UserId, taskId })).Select(r => TaskDto(r, now)).FirstOrDefault();
+        (await c.QueryAsync<TaskRow>($"{TaskSelectVisible} AND x.TaskId = @taskId", new { me = me.UserId, taskId })).Select(r => TaskDto(r, now)).FirstOrDefault();
 
     const string OpenTask = "x.[Status] NOT IN ('COMPLETED', 'CANCELLED')";
     const string PriorityOrder = "CASE x.[Priority] WHEN 'URGENT' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END";
@@ -742,15 +835,25 @@ public static partial class ChatWorkEndpoints
     {
         "all" => $"AND {OpenTask}",
         "today" => $"AND {OpenTask} AND ((x.DueUtc >= @ds AND x.DueUtc < @de) OR (rm.DueUtc >= @ds AND rm.DueUtc < @de))",
-        "overdue" => $"AND {OpenTask} AND x.DueUtc < @now",
+        "overdue" => $"AND {OpenTask} AND x.[Status] <> 'IN_REVIEW' AND x.DueUtc < @now",
         "upcoming" => $"AND {OpenTask} AND x.DueUtc >= @de AND x.DueUtc < @upTo",
         "completed" => "AND x.[Status] = 'COMPLETED'",
         "followups" => $"AND {OpenTask} AND (x.SourceMessageId IS NOT NULL OR x.SourceCallId IS NOT NULL OR x.ConversationId IS NOT NULL OR x.MeetingId IS NOT NULL)",
         // Advanced chat (V031): open tasks due in the 7 days from the start of the caller's day; "week-rest" (follow-up panel) leaves today out.
         "week" => $"AND {OpenTask} AND x.DueUtc >= @ds AND x.DueUtc < @weekEnd",
         "week-rest" => $"AND {OpenTask} AND x.DueUtc >= @de AND x.DueUtc < @weekEnd",
+        // Collaboration (V033). Owner scope: tasks other people gave me; new ones I have not answered; my Top 3 for today.
+        "assigned" => $"AND {OpenTask} AND x.AssignedByUserId IS NOT NULL",
+        "new-assigned" => $"AND {OpenTask} AND x.AssignState = 'PENDING'",
+        "focus" => "AND x.FocusUtc >= @ds AND x.FocusUtc < @de AND x.[Status] <> 'CANCELLED'",
+        // Assigner scope (AssignerFilters): tasks I gave to others (open, plus closed or declined in the last 14 days); waiting for my review.
+        "delegated" => "AND (x.[Status] NOT IN ('COMPLETED', 'CANCELLED') OR x.UpdatedUtc >= @recent)",
+        "delegated-open" => $"AND {OpenTask} AND x.[Status] <> 'IN_REVIEW'",
+        "to-review" => "AND x.[Status] = 'IN_REVIEW'",
         _ => null,
     };
+
+    static readonly string[] AssignerFilters = ["delegated", "delegated-open", "to-review"];
 
     static async Task<(List<object>? Items, IResult? Error)> QueryTasksAsync(IDbConnection c, Caller me, string? filter, string? search, string? status,
         DateTime ds, DateTime de, DateTime now, int top, bool allowInternal = false)
@@ -758,9 +861,10 @@ public static partial class ChatWorkEndpoints
         var f = string.IsNullOrWhiteSpace(filter) ? "all" : filter.Trim().ToLowerInvariant();
         var where = TaskFilterSql(f);
         var v = new Validator();
-        if (where is null || (f == "week-rest" && !allowInternal)) v.Add("filter", "Use all, today, week, overdue, upcoming, completed or followups.");
+        if (where is null || (f is "week-rest" or "new-assigned" or "delegated-open" && !allowInternal))
+            v.Add("filter", "Use all, today, week, overdue, upcoming, completed, followups, assigned, focus, delegated or to-review.");
         var st = string.IsNullOrWhiteSpace(status) ? null : status.Trim().ToUpperInvariant();
-        if (st is not null && !Statuses.Contains(st)) v.Add("status", "Use PENDING, IN_PROGRESS, COMPLETED, POSTPONED or CANCELLED.");
+        if (st is not null && !Statuses.Contains(st)) v.Add("status", "Use PENDING, IN_PROGRESS, IN_REVIEW, COMPLETED, POSTPONED or CANCELLED.");
         if (!v.IsValid) return (null, v.Problem());
         // ?status= narrows the list; with the default "all" filter it replaces the "open only" rule (so status=COMPLETED works).
         if (st is not null) where = (f == "all" ? "" : where) + " AND x.[Status] = @status";
@@ -768,17 +872,20 @@ public static partial class ChatWorkEndpoints
         if (term is not null) where += " AND (x.Title LIKE @term OR x.[Description] LIKE @term OR x.Notes LIKE @term)";
         string order;
         if (f == "completed") { order = "x.CompletedUtc DESC, x.TaskId DESC"; top = Math.Min(top, 200); }
+        else if (f == "focus") order = "CASE WHEN x.[Status] = 'COMPLETED' THEN 1 ELSE 0 END, x.FocusUtc";
+        else if (f == "to-review") order = "x.SubmittedUtc, x.TaskId";
         else order = $"CASE WHEN x.DueUtc IS NULL THEN 1 ELSE 0 END, x.DueUtc, {PriorityOrder}, x.CreatedUtc DESC";
-        var rows = await c.QueryAsync<TaskRow>($"{TaskSelect} {where} ORDER BY {order} OFFSET 0 ROWS FETCH NEXT {top} ROWS ONLY",
-            new { me = me.UserId, ds, de, now, upTo = de.AddDays(30), term, status = st, weekEnd = ds.AddDays(7) });
+        var select = AssignerFilters.Contains(f) ? TaskSelectAssigner : TaskSelect;
+        var rows = await c.QueryAsync<TaskRow>($"{select} {where} ORDER BY {order} OFFSET 0 ROWS FETCH NEXT {top} ROWS ONLY",
+            new { me = me.UserId, ds, de, now, upTo = de.AddDays(30), term, status = st, weekEnd = ds.AddDays(7), recent = now.AddDays(-14) });
         return (rows.Select(r => TaskDto(r, now)).ToList(), null);
     }
 
     static Task<int> CountTasksAsync(IDbConnection c, Caller me, string filter, DateTime ds, DateTime de, DateTime now) =>
         c.ExecuteScalarAsync<int>($"""
             SELECT COUNT(*) FROM chat.TRN_ChatTask x {ReminderApply("TaskId", "TaskId")}
-            WHERE x.IsActive = 1 AND x.OwnerUserId = @me {TaskFilterSql(filter)}
-            """, new { me = me.UserId, ds, de, now, upTo = de.AddDays(30), weekEnd = ds.AddDays(7) });
+            WHERE x.IsActive = 1 AND {(AssignerFilters.Contains(filter) ? "x.AssignedByUserId" : "x.OwnerUserId")} = @me {TaskFilterSql(filter)}
+            """, new { me = me.UserId, ds, de, now, upTo = de.AddDays(30), weekEnd = ds.AddDays(7), recent = now.AddDays(-14) });
 
     static Task<IResult> Tasks(string? filter, string? search, string? status, DateTime? dayStartUtc, DateTime? dayEndUtc, WorkServices s, HttpContext ctx) =>
         Run(s, ctx, async (c, me) =>
@@ -811,28 +918,38 @@ public static partial class ChatWorkEndpoints
 
     static Task<IResult> GetTask(Guid id, WorkServices s, HttpContext ctx) => Run(s, ctx, async (c, me) =>
     {
-        var taskId = await OwnTaskIdAsync(c, me, id);
-        return taskId is null ? NotFound("Task") : Results.Ok(await TaskByIdAsync(c, me, taskId.Value, s.Clock.UtcNow));
+        var t = await VisibleTaskAsync(c, me, id);
+        return t is null ? NotFound("Task") : Results.Ok(await TaskByIdAsync(c, me, t.TaskId, s.Clock.UtcNow));
     });
 
     static Task<IResult> CreateTask(JsonElement body, WorkServices s, HttpContext ctx) => Run(s, ctx, async (c, me) =>
     {
-        var r = await SaveTaskAsync(c, s, me, null, new Input(body));
-        return r.Error ?? Results.Ok(await TaskByIdAsync(c, me, r.TaskId, s.Clock.UtcNow));
+        var inp = new Input(body);
+        // Collaboration (V033): with assigneeIds the task is given to colleagues (one copy each), otherwise it is the caller's own.
+        if (inp.Has("assigneeIds") && inp.Array("assigneeIds") is { Count: > 0 }) return await CreateAssignedAsync(c, s, me, inp);
+        var checklist = ReadChecklist(inp);
+        if (!inp.V.IsValid) return inp.V.Problem();
+        var r = await SaveTaskAsync(c, s, me, null, inp);
+        if (r.Error is not null) return r.Error;
+        if (checklist.Count > 0) await AddChecklistAsync(c, me, r.TaskId, checklist, true, s.Clock.UtcNow);
+        return Results.Ok(await TaskByIdAsync(c, me, r.TaskId, s.Clock.UtcNow));
     });
 
     static Task<IResult> PatchTask(Guid id, JsonElement body, WorkServices s, HttpContext ctx) => Run(s, ctx, async (c, me) =>
     {
-        var taskId = await OwnTaskIdAsync(c, me, id);
-        if (taskId is null) return NotFound("Task");
-        var r = await SaveTaskAsync(c, s, me, taskId, new Input(body));
+        var t = await VisibleTaskAsync(c, me, id);
+        if (t is null) return NotFound("Task");
+        if (!t.IsOwner) return await PatchAssignedAsync(c, s, me, t, new Input(body));
+        var r = await SaveTaskAsync(c, s, me, t.TaskId, new Input(body));
         return r.Error ?? Results.Ok(await TaskByIdAsync(c, me, r.TaskId, s.Clock.UtcNow));
     });
 
     static Task<IResult> SetStatus(Guid id, JsonElement body, WorkServices s, HttpContext ctx) => Run(s, ctx, async (c, me) =>
     {
-        var taskId = await OwnTaskIdAsync(c, me, id);
-        if (taskId is null) return NotFound("Task");
+        var t = await VisibleTaskAsync(c, me, id);
+        if (t is null) return NotFound("Task");
+        if (!t.IsOwner) return OnlyOwner(t);
+        var taskId = (long?)t.TaskId;
         var inp = new Input(body);
         if (!inp.Has("status") || inp.Str("status") is null) inp.V.Add("status", "Choose a status.");
         if (!inp.V.IsValid) return inp.V.Problem();
@@ -862,13 +979,16 @@ public static partial class ChatWorkEndpoints
         public long? SourceCallId { get; set; }
         public long? NoteId { get; set; }
         public long? RepeatedFromTaskId { get; set; }
+        public long? AssignedByUserId { get; set; }
+        public bool RequiresReview { get; set; }
+        public string? AssignState { get; set; }
 
         public TaskRaw Copy() => (TaskRaw)MemberwiseClone();
     }
 
     const string TaskRawSelect = """
         SELECT TaskId, Title, [Description], Notes, [Priority], [Status], DueUtc, HasDueTime, CategoryId, RepeatRule, CompletedUtc, MeetingId, EmployeeUserId,
-               ConversationId, SourceMessageId, SourceCallId, NoteId, RepeatedFromTaskId
+               ConversationId, SourceMessageId, SourceCallId, NoteId, RepeatedFromTaskId, AssignedByUserId, RequiresReview, AssignState
         FROM chat.TRN_ChatTask WHERE TaskId = @taskId
         """;
 
@@ -947,6 +1067,26 @@ public static partial class ChatWorkEndpoints
             else t.SourceMessageId = null;
         }
 
+        var statusChanging = create || old!.Status != t.Status;
+        if (statusChanging && t.Status == "IN_REVIEW")
+            return new SaveResult(Problems.Create(409, "USE_SUBMIT", "Use \"Send for review\" to send a task for review."), 0, null);
+        if (old?.AssignedByUserId is not null)
+        {
+            // A task someone else assigned: they set what it is and when it is due; the owner works on it.
+            if (t.Title != old.Title || t.Description != old.Description || t.Priority != old.Priority || t.DueUtc != old.DueUtc || t.HasDueTime != old.HasDueTime
+                || t.RepeatRule != old.RepeatRule || t.MeetingId != old.MeetingId || t.EmployeeUserId != old.EmployeeUserId || t.ConversationId != old.ConversationId
+                || t.SourceMessageId != old.SourceMessageId || t.SourceCallId != old.SourceCallId)
+                return new SaveResult(Problems.Create(409, "ASSIGNED_TASK",
+                    "The person who assigned this task decides its title, details, priority and due date. Ask them, or ask for a new date."), 0, null);
+            if (old.AssignState == "DECLINED") return new SaveResult(Problems.Create(409, "ASSIGNED_TASK", "You declined this task."), 0, null);
+            if (statusChanging && t.Status == "CANCELLED")
+                return new SaveResult(Problems.Create(409, "ASSIGNED_TASK", "Use Decline to turn down a task someone assigned to you."), 0, null);
+            if (statusChanging && t.Status == "COMPLETED" && old.RequiresReview)
+                return new SaveResult(Problems.Create(409, "REVIEW_REQUIRED", "This task needs a review before it can be closed. Use \"Send for review\"."), 0, null);
+        }
+        if (statusChanging && t.Status == "COMPLETED" && !create && await RequiredOpenAsync(c, taskId!.Value) > 0)
+            return new SaveResult(Problems.Create(409, "CHECKLIST_INCOMPLETE", "Finish the required checklist steps first."), 0, null);
+
         if (create && await c.ExecuteScalarAsync<int>($"SELECT COUNT(*) FROM chat.TRN_ChatTask x WHERE x.OwnerUserId = @me AND x.IsActive = 1 AND {OpenTask}",
                 new { me = me.UserId }) >= MaxOpenTasks)
             return new SaveResult(LimitReached($"You can have at most {MaxOpenTasks} open tasks. Complete or delete some first."), 0, null);
@@ -1004,7 +1144,33 @@ public static partial class ChatWorkEndpoints
                 var offset = (reminderGiven ? reminderUtc : lastReminderDue) is { } rd ? AsUtc(dueUtc) - AsUtc(rd) : (TimeSpan?)null;
                 if (offset is { } off) await AddReminderAsync(c, tx, me.UserId, "TaskId", nextId.Value, next.DueUtc.Value - off, now);
             }
+            // Assigned task: starting or finishing it also accepts it; the change goes into its history.
+            if (old?.AssignedByUserId is not null && statusChanged)
+            {
+                if (old.AssignState == "PENDING" && t.Status is "IN_PROGRESS" or "COMPLETED")
+                    await c.ExecuteAsync("UPDATE chat.TRN_ChatTask SET AssignState = 'ACCEPTED' WHERE TaskId = @id", new { id }, tx);
+                if (old.Status == "IN_REVIEW") await c.ExecuteAsync("UPDATE chat.TRN_ChatTask SET SubmittedUtc = NULL WHERE TaskId = @id", new { id }, tx);
+                await AddActivityAsync(c, tx, id, me.UserId, t.Status switch
+                {
+                    "IN_PROGRESS" => old.Status == "IN_REVIEW" ? "REOPENED" : "STARTED",
+                    "COMPLETED" => "COMPLETED",
+                    _ => old.Status is "COMPLETED" ? "REOPENED" : "EDITED",
+                }, t.Status == "POSTPONED" ? "Postponed" : t.Status == "PENDING" ? "Not started" : null, null, now);
+            }
             tx.Commit();
+        }
+        // The person who assigned it hears about: finished, taken back from review, first started, reopened after finishing.
+        if (old?.AssignedByUserId is { } assigner && statusChanged)
+        {
+            string? what = t.Status switch
+            {
+                "COMPLETED" => "completed",
+                "IN_PROGRESS" when old.Status == "IN_REVIEW" => "took back from review",
+                "IN_PROGRESS" when old.Status == "COMPLETED" => "reopened",
+                "IN_PROGRESS" when old.AssignState == "PENDING" => "started",
+                _ => null,
+            };
+            if (what is not null) await NotifyTaskAsync(c, s, assigner, "TASK_UPDATE", id, $"{me.Name} {what}: {t.Title}", null, email: false);
         }
         return new SaveResult(null, id, nextId);
     }
@@ -1026,8 +1192,14 @@ public static partial class ChatWorkEndpoints
 
     static Task<IResult> DeleteTask(Guid id, WorkServices s, HttpContext ctx) => Run(s, ctx, async (c, me) =>
     {
-        var taskId = await OwnTaskIdAsync(c, me, id);
-        if (taskId is null) return NotFound("Task");
+        var t = await VisibleTaskAsync(c, me, id);
+        if (t is null) return NotFound("Task");
+        // The person who assigned it withdraws it (the owner is told); the owner cannot delete a task someone else assigned.
+        if (!t.IsOwner) return await WithdrawAssignedAsync(c, s, me, t);
+        if (t.AssignedByUserId is not null && t.Status is not ("COMPLETED" or "CANCELLED"))
+            return Problems.Create(409, "ASSIGNED_TASK", "Use Decline to turn down a task someone assigned to you.");
+        if (t.AssignedByUserId is not null) return Problems.Create(409, "ASSIGNED_TASK", "Closed tasks that someone assigned to you stay in their history.");
+        var taskId = (long?)t.TaskId;
         var now = s.Clock.UtcNow;
         using var tx = c.BeginTransaction();
         await c.ExecuteAsync("UPDATE chat.TRN_ChatTask SET IsActive = 0, UpdatedUtc = @now WHERE TaskId = @taskId", new { taskId, now }, tx);
@@ -1160,6 +1332,15 @@ public static partial class ChatWorkEndpoints
         var todayTasks = (await QueryTasksAsync(c, me, "today", null, null, ds, de, now, 50)).Items!;
         var overdueTasks = (await QueryTasksAsync(c, me, "overdue", null, null, ds, de, now, 50)).Items!;
         var followUps = (await QueryTasksAsync(c, me, "followups", null, null, ds, de, now, 10)).Items!;
+        // V033: Top 3 for today, tasks given to me that I have not answered, waiting for my review, waiting on others.
+        var collab = await CollabEnabledAsync(c, s.Cache);
+        var focus = (await QueryTasksAsync(c, me, "focus", null, null, ds, de, now, MaxFocus)).Items!;
+        var newAssigned = (await QueryTasksAsync(c, me, "new-assigned", null, null, ds, de, now, 20, allowInternal: true)).Items!;
+        var toReview = collab ? (await QueryTasksAsync(c, me, "to-review", null, null, ds, de, now, 20)).Items! : [];
+        var waitingOnOthers = collab ? (await QueryTasksAsync(c, me, "delegated-open", null, null, ds, de, now, 10, allowInternal: true)).Items! : [];
+        var completedToday = await c.ExecuteScalarAsync<int>("""
+            SELECT COUNT(*) FROM chat.TRN_ChatTask WHERE OwnerUserId = @me AND IsActive = 1 AND [Status] = 'COMPLETED' AND CompletedUtc >= @ds AND CompletedUtc < @de
+            """, new { me = me.UserId, ds, de });
         var notes = (await QueryNotesAsync(c, me, "pinned-today", null, null, null, ds, de, 8)).Items!;
         var upcoming = (await RemindersAsync(c, "AND r.OwnerUserId = @me AND r.[State] = 'PENDING' AND r.DueUtc < @until ORDER BY r.DueUtc, r.ReminderId OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY",
             new { me = me.UserId, until = now.AddDays(7) })).Select(ReminderDto).ToList();
@@ -1219,12 +1400,16 @@ public static partial class ChatWorkEndpoints
             meetings, notes, followUps,
             importantChats = chats,
             recentCalls,
+            focus, newAssigned, toReview, waitingOnOthers,
             counts = new
             {
                 todayTasks = await CountTasksAsync(c, me, "today", ds, de, now),
                 overdue = await CountTasksAsync(c, me, "overdue", ds, de, now),
                 missed = missedRows.Count,
                 followUps = await CountTasksAsync(c, me, "followups", ds, de, now),
+                completedToday,
+                toReview = collab ? await CountTasksAsync(c, me, "to-review", ds, de, now) : 0,
+                waitingOnOthers = collab ? await CountTasksAsync(c, me, "delegated-open", ds, de, now) : 0,
             },
         });
     });
@@ -1250,7 +1435,7 @@ public static partial class ChatWorkEndpoints
 /// transaction. With the switch off nothing happens: reminders stay PENDING and fire when it is switched back on.
 /// </summary>
 public sealed class ChatReminderWorker(Db db, ChatPush push, IClock clock, IOptions<ChatOptions> options, IMemoryCache cache,
-    ILogger<ChatReminderWorker> log) : BackgroundService
+    IOptions<EmailOptions> email, IOptions<PublicEndpointOptions> endpoints, ILogger<ChatReminderWorker> log) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -1308,6 +1493,12 @@ public sealed class ChatReminderWorker(Db db, ChatPush push, IClock clock, IOpti
         {
             await push.ToUsersAsync([r.OwnerUserId], "notification.new", new { type = Type(r), title = Title(r) });
             await push.ToUsersAsync([r.OwnerUserId], "reminder.due", ChatWorkEndpoints.ReminderDto(r));
+        }
+        // V033: due-soon / overdue alerts for assigned tasks.
+        if (await ChatWorkEndpoints.CollabEnabledAsync(c, cache))
+        {
+            try { await TaskDueAlerts.RunAsync(c, push, email.Value, endpoints.Value.WebBaseUrl.TrimEnd('/'), now); }
+            catch (Exception e) when (e is not OperationCanceledException) { log.LogWarning(e, "Task due alerts pass failed"); }
         }
         return fired.Count;
     }

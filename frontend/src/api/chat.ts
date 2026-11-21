@@ -39,6 +39,8 @@ export type ChatStatus =
       tasks?: boolean
       /** Phase 5: scheduled, saved and pinned messages, mentions, quiet hours, favourites (switch CHAT_ADVANCED). */
       advanced?: boolean
+      /** V033: assign tasks, review before close, comments, proof files, shared notes (switch TASK_COLLAB). */
+      taskCollab?: boolean
     }
 
 export type LastMessage = {

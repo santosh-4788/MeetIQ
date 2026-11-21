@@ -56,6 +56,8 @@ import org.json.JSONObject
  *   {type:"stopPresent"}
  *   {type:"inMeeting", on}                          -> keeps the microphone alive in the background, screen on
  *   {type:"saveFile", name, mime, base64}           -> saves a page-generated file (e.g. a report) to Downloads
+ *   {type:"notify", title, body, link, tag}         -> phone notification for a task alert or reminder (1.2.0, [Alerts])
+ *   {type:"notifyPermission"}                       -> asks for the notification permission; reply {type:"notifyPermission", granted}
  * Events to the page: {type:"present", state:"STARTING"|"PRESENTING"|"IDLE", detail}
  */
 class MainActivity : AppCompatActivity() {
@@ -95,6 +97,12 @@ class MainActivity : AppCompatActivity() {
 
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
         launchProjection()
+    }
+
+    // Task and reminder notifications (1.2.0): asked when the page asks, answered to the page.
+    @SuppressLint("RequiresFeature")
+    private val alertPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
+        try { replyProxy?.postMessage(JSONObject().put("type", "notifyPermission").put("granted", Alerts.canPost(this)).toString()) } catch (_: Exception) {}
     }
 
     private val projection = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
@@ -220,11 +228,14 @@ class MainActivity : AppCompatActivity() {
                     .put("type", "info").put("app", "android")
                     .put("versionName", BuildConfig.VERSION_NAME).put("versionCode", BuildConfig.VERSION_CODE)
                     .put("screenShare", true).put("presenting", ScreenShareSession.state != ScreenShareSession.State.IDLE)
+                    .put("notifications", true).put("notificationsGranted", Alerts.canPost(this))
                     .toString())
                 "present" -> present(msg.optString("url"), msg.optString("token"), msg.optString("name"))
                 "stopPresent" -> ScreenShareSession.stop("user")
                 "inMeeting" -> setInMeeting(msg.optBoolean("on"))
                 "saveFile" -> saveFromPage(msg.optString("name"), msg.optString("mime"), msg.optString("base64"))
+                "notify" -> Alerts.show(this, msg.optString("title"), msg.optString("body"), msg.optString("link"), msg.optString("tag"))
+                "notifyPermission" -> requestAlertPermission(reply)
             }
         }
         // Page-made files (blob: links, e.g. CSV/PDF reports): keep them readable long enough for the app to save them.
@@ -232,6 +243,15 @@ class MainActivity : AppCompatActivity() {
             WebViewCompat.addDocumentStartJavaScript(web, """
                 (function(){ var r = URL.revokeObjectURL.bind(URL); URL.revokeObjectURL = function(u){ setTimeout(function(){ r(u) }, 60000) }; })();
             """.trimIndent(), setOf(origin))
+        }
+    }
+
+    @SuppressLint("RequiresFeature")
+    private fun requestAlertPermission(reply: JavaScriptReplyProxy) {
+        if (Build.VERSION.SDK_INT >= 33 && !granted(android.Manifest.permission.POST_NOTIFICATIONS)) {
+            alertPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            try { reply.postMessage(JSONObject().put("type", "notifyPermission").put("granted", Alerts.canPost(this)).toString()) } catch (_: Exception) {}
         }
     }
 

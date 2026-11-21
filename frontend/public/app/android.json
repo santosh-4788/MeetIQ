@@ -1,9 +1,9 @@
 {
-    "versionCode":  3,
-    "versionName":  "1.1.1",
+    "versionCode":  4,
+    "versionName":  "1.2.0",
     "url":  "https://www.oneinsure.com/meet/app/OneInsureConnect.apk",
     "sizeMb":  26.3,
-    "sha256":  "69e070df0fc8457c6e4131c243ca664e34fedc02c6c5df7ea4ff9af212c24904",
+    "sha256":  "5e2614c8bedb217fabb3afacc47d2331719ff367414b3b1f5d916fb3c18fbbbb",
     "minAndroid":  "8",
-    "released":  "2026-11-20"
+    "released":  "2026-11-21"
 }

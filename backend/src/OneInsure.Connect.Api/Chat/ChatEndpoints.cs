@@ -334,6 +334,9 @@ public static class ChatEndpoints
             tasks = ctx.User.Can(ModuleAccess.TasksPermission) && await ChatWorkEndpoints.TasksEnabledAsync(c, s.Cache),
             calls = ctx.User.Can(ModuleAccess.CallsPermission) && await ChatCallEndpoints.CallsEnabledAsync(c, s.Cache),
             advanced = await ChatAdvancedEndpoints.AdvancedEnabledAsync(c, s.Cache),
+            // Task collaboration (V033): assign tasks, review before close, comments, proof files, shared notes.
+            taskCollab = ctx.User.Can(ModuleAccess.TasksPermission) && await ChatWorkEndpoints.TasksEnabledAsync(c, s.Cache)
+                && await ChatWorkEndpoints.CollabEnabledAsync(c, s.Cache),
         });
     }
 

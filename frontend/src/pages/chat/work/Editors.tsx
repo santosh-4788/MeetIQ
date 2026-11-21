@@ -1,16 +1,20 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Bell, CalendarDays, Clock, Flag, Folder, Link2, MessageSquare, Phone, Pin, Repeat, Search, StickyNote, Trash2, UserRound, Video, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Bell, CalendarDays, CheckSquare, Clock, Flag, Folder, Link2, MessageSquare, Phone, Pin, Repeat, Search, Share2, ShieldCheck, StickyNote, Trash2, Undo2, UserPlus, UserRound, Video, X } from 'lucide-react'
 import { chatApi, type ChatPerson } from '../../../api/chat'
 import { errorMessage } from '../../../api/types'
 import {
-  workApi, type Category, type LinkConversation, type LinkEmployee, type LinkMeeting, type Note, type NoteInput, type Priority, type RepeatRule,
+  workApi, type Assignee, type Category, type LinkConversation, type LinkEmployee, type LinkMeeting, type Note, type NoteInput, type Priority, type RepeatRule,
   type Task, type TaskInput, type TaskStatus,
 } from '../../../api/work'
 import { Avatar } from '../../../components/ui/Avatar'
 import { ConfirmDialog } from '../../../components/ui/Overlay'
 import { useToast } from '../../../components/ui/Toast'
+import { cn } from '../../../lib/cn'
 import { parseUtc } from '../../../lib/format'
+import { useChat } from '../ChatProvider'
 import { IosSegmented } from '../IosSegmented'
+import { AssigneePicker, AvatarStack, ChecklistDraft, TaskCollabPanel } from './collab'
+import { ColorDots, NoteChecklist, insertChecklistLine } from './noteChecklist'
 import { Group, PRIORITY, Row, Sheet, STATUS, fromLocalInput, toLocalInput, whenText } from './ui'
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -256,10 +260,23 @@ export type TaskSeed = TaskInput & {
   meetingTitle?: string | null
   noteTitle?: string | null
   employeeName?: string | null
+  /** V033: start with these colleagues as assignees. */
+  assignees?: Assignee[]
 }
 
-export function TaskEditor({ task, seed, onClose, onSaved, onDeleted }: { task?: Task | null; seed?: TaskSeed; onClose: () => void; onSaved: (t: Task, next?: Task | null) => void; onDeleted?: (id: string) => void }) {
+/**
+ * New task / task details. What can be changed depends on the caller's role (V033):
+ *  - "mine": everything, as before (plus a checklist);
+ *  - "assignee" (someone gave it to me): what it is and when it is due are read-only; I set the status, my category,
+ *    reminder and private notes; accept / new date / decline / send for review are in the collaboration panel;
+ *  - "assigner" (I gave it to someone): title, details, priority, due date and "needs my review"; review and reminders
+ *    are in the collaboration panel; "Delete" becomes "Withdraw".
+ */
+export function TaskEditor({ task: initial, seed, onClose, onSaved, onDeleted }: { task?: Task | null; seed?: TaskSeed; onClose: () => void; onSaved: (t: Task, next?: Task | null) => void; onDeleted?: (id: string) => void }) {
   const toast = useToast()
+  const chat = useChat()
+  const collab = !!(chat.status?.enabled && chat.status.taskCollab)
+  const [task, setTask] = useState<Task | null>(initial ?? null)
   const [cats, setCats] = useCategories()
   const [title, setTitle] = useState(task?.title ?? seed?.title ?? '')
   const [description, setDescription] = useState(task?.description ?? seed?.description ?? '')
@@ -274,38 +291,71 @@ export function TaskEditor({ task, seed, onClose, onSaved, onDeleted }: { task?:
   const [meeting, setMeeting] = useState<LinkMeeting | null>(task?.meeting ?? (seed?.meetingId ? { id: seed.meetingId, title: seed.meetingTitle ?? 'Meeting', startUtc: '' } : null))
   const [employee, setEmployee] = useState<LinkEmployee | null>(task?.employee ?? (seed?.employeeId ? { id: seed.employeeId, name: seed.employeeName ?? 'Employee', code: null } : null))
   const [conversation, setConversation] = useState<LinkConversation | null>(task?.conversation ?? (seed?.conversationId ? { id: seed.conversationId, title: seed.conversationTitle ?? 'Chat', isGroup: false } : null))
-  const [picker, setPicker] = useState<'meeting' | 'person' | null>(null)
+  const [assignees, setAssignees] = useState<Assignee[]>(seed?.assignees ?? [])
+  const [requiresReview, setRequiresReview] = useState(task?.requiresReview ?? seed?.requiresReview ?? false)
+  const [checklist, setChecklist] = useState<{ text: string; isRequired: boolean }[]>([])
+  const [picker, setPicker] = useState<'meeting' | 'person' | 'assignees' | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const isNew = !task
+  const role = task?.role ?? 'mine'
+  const assigning = isNew && assignees.length > 0
+  const locked = role === 'assignee'          // what / when are set by the person who assigned it
+  const personal = role !== 'assigner' && !assigning   // category, reminder, private notes, repeat
+  const closed = task?.status === 'COMPLETED' || task?.status === 'CANCELLED'
+
+  // Keep the form in step when the task changes underneath (review, date approved, edits by the other person).
+  const onTask = useCallback((t: Task) => {
+    setTask(t)
+    setStatus(t.status)
+    if (t.role === 'assignee') {
+      setTitle(t.title)
+      setDescription(t.description ?? '')
+      setPriority(t.priority)
+      setDueUtc(t.dueUtc)
+      setHasDueTime(t.hasDueTime)
+    }
+    setRequiresReview(t.requiresReview)
+    onSaved(t)
+  }, [onSaved])
+
+  const statusOptions = (Object.keys(STATUS) as TaskStatus[]).filter((k) =>
+    k !== 'IN_REVIEW' ? !(role === 'assignee' && (k === 'CANCELLED' || (k === 'COMPLETED' && task?.requiresReview))) : status === 'IN_REVIEW')
 
   async function save() {
     if (!title.trim()) return
     setBusy(true)
-    const body: TaskInput = {
-      title: title.trim(),
-      description: description.trim() || null,
-      notes: notes.trim() || null,
-      priority,
-      dueUtc,
-      hasDueTime: !!dueUtc && hasDueTime,
-      categoryId,
-      repeatRule: dueUtc ? repeatRule : 'NONE',
-      ...reminderField(reminderUtc, task?.reminderState === 'PENDING' || task?.reminderState === 'FIRED' ? task.reminderUtc : null, isNew),
-      meetingId: meeting?.id ?? null,
-      employeeId: employee?.id ?? null,
-      conversationId: conversation?.id ?? null,
-    }
     try {
       if (isNew) {
-        const created = await workApi.createTask({ ...body, sourceMessageId: seed?.sourceMessageId ?? null, sourceCallId: seed?.sourceCallId ?? null, noteId: seed?.noteId ?? null })
+        const base: TaskInput = {
+          title: title.trim(), description: description.trim() || null, priority, dueUtc, hasDueTime: !!dueUtc && hasDueTime,
+          meetingId: meeting?.id ?? null, employeeId: employee?.id ?? null, conversationId: conversation?.id ?? null,
+          sourceMessageId: seed?.sourceMessageId ?? null, sourceCallId: seed?.sourceCallId ?? null,
+          ...(checklist.length ? { checklist } : {}),
+        }
+        const body: TaskInput = assigning
+          ? { ...base, assigneeIds: assignees.map((a) => a.id), requiresReview }
+          : { ...base, notes: notes.trim() || null, categoryId, repeatRule: dueUtc ? repeatRule : 'NONE', noteId: seed?.noteId ?? null, ...reminderField(reminderUtc, null, true) }
+        const created = await workApi.createTask(body)
         onSaved(created)
-        toast.success(reminderUtc ? `Task added · reminder ${whenText(reminderUtc)}` : 'Task added')
+        toast.success(assigning
+          ? `Assigned to ${assignees.length === 1 ? assignees[0].name : `${assignees.length} people`}${requiresReview ? ' · you review before it closes' : ''}`
+          : reminderUtc ? `Task added · reminder ${whenText(reminderUtc)}` : 'Task added')
+      } else if (role === 'assigner') {
+        const saved = await workApi.updateTask(task.id, { title: title.trim(), description: description.trim() || null, priority, dueUtc, hasDueTime: !!dueUtc && hasDueTime, requiresReview })
+        onSaved(saved)
       } else {
-        const statusChanged = status !== task.status
+        const original = task.reminderState === 'PENDING' || task.reminderState === 'FIRED' ? task.reminderUtc : null
+        const body: TaskInput = role === 'assignee'
+          ? { notes: notes.trim() || null, categoryId, ...reminderField(reminderUtc, original, false) }
+          : {
+              title: title.trim(), description: description.trim() || null, notes: notes.trim() || null, priority, dueUtc, hasDueTime: !!dueUtc && hasDueTime,
+              categoryId, repeatRule: dueUtc ? repeatRule : 'NONE', ...reminderField(reminderUtc, original, false),
+              meetingId: meeting?.id ?? null, employeeId: employee?.id ?? null, conversationId: conversation?.id ?? null,
+            }
         let saved = await workApi.updateTask(task.id, body)
         let next: Task | null = null
-        if (statusChanged) {
+        if (status !== task.status) {
           const r = await workApi.setStatus(task.id, status)
           saved = r.task
           next = r.next
@@ -320,13 +370,55 @@ export function TaskEditor({ task, seed, onClose, onSaved, onDeleted }: { task?:
     }
   }
 
+  const titleText = isNew
+    ? assigning ? 'Assign Task' : seed?.sourceMessageId || seed?.sourceCallId || seed?.conversationId || seed?.meetingId || seed?.noteId ? 'Follow-up' : 'New Task'
+    : role === 'assigner' ? 'Assigned Task' : role === 'assignee' ? 'Task for You' : 'Details'
+
   return (
     <>
-      <Sheet title={isNew ? (seed?.sourceMessageId || seed?.sourceCallId || seed?.conversationId || seed?.meetingId || seed?.noteId ? 'Follow-up' : 'New Task') : 'Details'} onClose={onClose} onDone={() => void save()} doneLabel={isNew ? 'Add' : 'Done'} doneDisabled={!title.trim()} busy={busy} testId="task-editor">
-        <Group className="!mt-2">
-          <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} placeholder="Title" aria-label="Title" className="ios-field" autoFocus={isNew && !title} data-testid="task-title" />
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} maxLength={8000} rows={2} placeholder="Description" aria-label="Description" className="ios-field resize-none" data-testid="task-description" />
-        </Group>
+      <Sheet title={titleText} onClose={onClose} onDone={() => void save()} doneLabel={isNew ? (assigning ? 'Assign' : 'Add') : 'Done'} doneDisabled={!title.trim()} busy={busy} testId="task-editor">
+        {locked ? (
+          <section className="mt-2 rounded-[14px] bg-white px-4 py-3" data-testid="task-locked">
+            <p className="text-[19px] leading-[24px] font-semibold break-words" data-testid="task-title-text">
+              {PRIORITY[priority].marks && <span className="mr-1" style={{ color: PRIORITY[priority].color }}>{PRIORITY[priority].marks}</span>}{title}
+            </p>
+            {description && <p className="mt-1 text-[15px] whitespace-pre-wrap text-[var(--ios-label2)]">{description}</p>}
+            <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-[var(--ios-gray)]">
+              {dueUtc && <span className={cn(task?.isOverdue && 'font-semibold text-[var(--ios-red)]')}><CalendarDays className="mr-1 inline size-3.5" />{whenText(dueUtc, hasDueTime)}</span>}
+              <span><Flag className="mr-1 inline size-3.5" />{PRIORITY[priority].label}</span>
+              <span className="inline-flex items-center gap-1"><UserRound className="size-3.5" />Set by {task?.assignedBy?.name}</span>
+            </p>
+          </section>
+        ) : (
+          <Group className="!mt-2">
+            <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} placeholder="Title" aria-label="Title" className="ios-field" autoFocus={isNew && !title} data-testid="task-title" disabled={closed && role === 'assigner'} />
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} maxLength={8000} rows={2} placeholder="Description" aria-label="Description" className="ios-field resize-none" data-testid="task-description" />
+          </Group>
+        )}
+
+        {/* Assign to colleagues (new tasks) */}
+        {isNew && collab && (
+          <Group title="Assign" footer={assigning ? 'They get a notification and an e-mail, and can accept, ask for a new date or decline.' : 'Leave empty to keep the task for yourself.'}>
+            <Row label="Assign to" icon={<UserPlus className="size-4" />} tint="var(--ios-indigo, #5856d6)" onClick={() => setPicker('assignees')} testId="task-assign">
+              {assigning ? <AvatarStack names={assignees.map((a) => a.name)} /> : <span className="text-[16px] text-[var(--ios-gray)]">Only me</span>}
+            </Row>
+            {assigning && (
+              <Row label="Needs my review" icon={<ShieldCheck className="size-4" />} tint="var(--ios-purple)">
+                <input type="checkbox" role="switch" className="ios-switch" checked={requiresReview} onChange={(e) => setRequiresReview(e.target.checked)} aria-label="Needs my review before it can be closed" data-testid="task-requires-review" />
+              </Row>
+            )}
+          </Group>
+        )}
+        {role === 'assigner' && (
+          <Group title="Assigned to">
+            <Row label={task!.owner.name ?? ''} icon={<UserRound className="size-4" />} tint="var(--ios-green)" value={STATUS[task!.status]} />
+            <Row label="Needs my review" icon={<ShieldCheck className="size-4" />} tint="var(--ios-purple)">
+              <input type="checkbox" role="switch" className="ios-switch" checked={requiresReview} disabled={closed} onChange={(e) => setRequiresReview(e.target.checked)} aria-label="Needs my review before it can be closed" data-testid="task-requires-review" />
+            </Row>
+          </Group>
+        )}
+
+        {task && <TaskCollabPanel task={task} onTask={onTask} onClosed={onClose} />}
 
         {(seed?.messageExcerpt || task?.message) && (
           <Group title="From a message">
@@ -345,71 +437,100 @@ export function TaskEditor({ task, seed, onClose, onSaved, onDeleted }: { task?:
           </Group>
         )}
 
-        <Group title="Date and reminder">
-          <DueRows dueUtc={dueUtc} hasTime={hasDueTime} onChange={(d, t) => (setDueUtc(d), setHasDueTime(t))} />
-          <ReminderRow reminderUtc={reminderUtc} dueUtc={dueUtc} hasDueTime={hasDueTime} onChange={setReminderUtc} />
-          {dueUtc && (
-            <Row label="Repeat" icon={<Repeat className="size-4" />} tint="var(--ios-gray)">
-              <select value={repeatRule} onChange={(e) => setRepeatRule(e.target.value as RepeatRule)} className="appearance-none bg-transparent text-right text-[17px] text-[var(--ios-gray)] outline-none md:text-[16px]" aria-label="Repeat" data-testid="field-repeat">
-                <option value="NONE">Never</option>
-                <option value="DAILY">Daily</option>
-                <option value="WEEKDAYS">Weekdays</option>
-                <option value="WEEKLY">Weekly</option>
-                <option value="MONTHLY">Monthly</option>
-              </select>
-            </Row>
-          )}
-        </Group>
+        {!locked && (
+          <Group title={personal ? 'Date and reminder' : 'Due date'}>
+            <DueRows dueUtc={dueUtc} hasTime={hasDueTime} onChange={(d, t) => (setDueUtc(d), setHasDueTime(t))} />
+            {personal && <ReminderRow reminderUtc={reminderUtc} dueUtc={dueUtc} hasDueTime={hasDueTime} onChange={setReminderUtc} />}
+            {personal && dueUtc && (
+              <Row label="Repeat" icon={<Repeat className="size-4" />} tint="var(--ios-gray)">
+                <select value={repeatRule} onChange={(e) => setRepeatRule(e.target.value as RepeatRule)} className="appearance-none bg-transparent text-right text-[17px] text-[var(--ios-gray)] outline-none md:text-[16px]" aria-label="Repeat" data-testid="field-repeat">
+                  <option value="NONE">Never</option>
+                  <option value="DAILY">Daily</option>
+                  <option value="WEEKDAYS">Weekdays</option>
+                  <option value="WEEKLY">Weekly</option>
+                  <option value="MONTHLY">Monthly</option>
+                </select>
+              </Row>
+            )}
+          </Group>
+        )}
+        {locked && (
+          <Group title="My reminder">
+            <ReminderRow reminderUtc={reminderUtc} dueUtc={dueUtc} hasDueTime={hasDueTime} onChange={setReminderUtc} />
+          </Group>
+        )}
 
-        <Group title="Priority">
-          <div className="p-2">
-            <Segmented label="Priority" value={priority} onChange={setPriority} options={(['LOW', 'MEDIUM', 'HIGH', 'URGENT'] as Priority[]).map((k) => ({ key: k, label: PRIORITY[k].label }))} />
-          </div>
-        </Group>
+        {!locked && (
+          <Group title="Priority">
+            <div className="p-2">
+              <Segmented label="Priority" value={priority} onChange={setPriority} options={(['LOW', 'MEDIUM', 'HIGH', 'URGENT'] as Priority[]).map((k) => ({ key: k, label: PRIORITY[k].label }))} />
+            </div>
+          </Group>
+        )}
 
-        <Group>
-          {!isNew && (
-            <Row label="Status" icon={<Flag className="size-4" />} tint="var(--ios-purple)">
-              <select value={status} onChange={(e) => setStatus(e.target.value as TaskStatus)} className="appearance-none bg-transparent text-right text-[17px] text-[var(--ios-gray)] outline-none md:text-[16px]" aria-label="Status" data-testid="field-status">
-                {(Object.keys(STATUS) as TaskStatus[]).map((k) => <option key={k} value={k}>{STATUS[k]}</option>)}
-              </select>
-            </Row>
-          )}
-          <CategorySelect value={categoryId} onChange={setCategoryId} cats={cats} setCats={setCats} />
-        </Group>
+        {isNew && <ChecklistDraft items={checklist} setItems={setChecklist} allowRequired />}
 
-        <Group title="Related to">
-          <LinkRow icon={<Video className="size-4" />} tint="#5856d6" label="Meeting" value={meeting?.title ?? 'None'} onClick={() => setPicker('meeting')} onClear={meeting ? () => setMeeting(null) : undefined} />
-          <LinkRow icon={<UserRound className="size-4" />} tint="var(--ios-green)" label="Employee" value={employee?.name ?? 'None'} onClick={() => setPicker('person')} onClear={employee ? () => setEmployee(null) : undefined} />
-          {conversation && <LinkRow icon={<MessageSquare className="size-4" />} tint="var(--ios-blue)" label="Chat" value={conversation.title} onClear={seed?.sourceMessageId ? undefined : () => setConversation(null)} />}
-          {(task?.note || seed?.noteTitle) && <LinkRow icon={<StickyNote className="size-4" />} tint="var(--ios-yellow)" label="Note" value={task?.note?.title ?? seed!.noteTitle!} />}
-        </Group>
+        {(personal || locked) && (
+          <Group>
+            {!isNew && (
+              <Row label="Status" icon={<Flag className="size-4" />} tint="var(--ios-purple)">
+                <select value={status} onChange={(e) => setStatus(e.target.value as TaskStatus)} disabled={status === 'IN_REVIEW' && role === 'mine'} className="appearance-none bg-transparent text-right text-[17px] text-[var(--ios-gray)] outline-none md:text-[16px]" aria-label="Status" data-testid="field-status">
+                  {statusOptions.map((k) => <option key={k} value={k}>{STATUS[k]}</option>)}
+                </select>
+              </Row>
+            )}
+            <CategorySelect value={categoryId} onChange={setCategoryId} cats={cats} setCats={setCats} />
+          </Group>
+        )}
 
-        <Group title="Notes">
-          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={8000} rows={3} placeholder="Add notes" aria-label="Notes" className="ios-field resize-none" />
-        </Group>
+        {role === 'mine' && (
+          <Group title="Related to">
+            <LinkRow icon={<Video className="size-4" />} tint="#5856d6" label="Meeting" value={meeting?.title ?? 'None'} onClick={() => setPicker('meeting')} onClear={meeting ? () => setMeeting(null) : undefined} />
+            <LinkRow icon={<UserRound className="size-4" />} tint="var(--ios-green)" label="Employee" value={employee?.name ?? 'None'} onClick={() => setPicker('person')} onClear={employee ? () => setEmployee(null) : undefined} />
+            {conversation && <LinkRow icon={<MessageSquare className="size-4" />} tint="var(--ios-blue)" label="Chat" value={conversation.title} onClear={seed?.sourceMessageId ? undefined : () => setConversation(null)} />}
+            {(task?.note || seed?.noteTitle) && <LinkRow icon={<StickyNote className="size-4" />} tint="var(--ios-yellow)" label="Note" value={task?.note?.title ?? seed!.noteTitle!} />}
+          </Group>
+        )}
+        {role !== 'mine' && (task?.meeting || task?.conversation) && (
+          <Group title="Related to">
+            {task?.meeting && <LinkRow icon={<Video className="size-4" />} tint="#5856d6" label="Meeting" value={task.meeting.title} />}
+            {task?.conversation && <LinkRow icon={<MessageSquare className="size-4" />} tint="var(--ios-blue)" label="Chat" value={task.conversation.title} />}
+          </Group>
+        )}
 
-        {!isNew && (
+        {personal && (
+          <Group title={locked ? 'My private notes' : 'Notes'} footer={locked ? `Only you can see these; ${task?.assignedBy?.name ?? 'they'} cannot.` : undefined}>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={8000} rows={3} placeholder="Add notes" aria-label="Notes" className="ios-field resize-none" />
+          </Group>
+        )}
+
+        {!isNew && role === 'mine' && (
           <Group>
             <Row label="Delete Task" danger onClick={() => setConfirmDelete(true)} testId="task-delete" icon={<Trash2 className="size-4" />} tint="var(--ios-red)" />
+          </Group>
+        )}
+        {!isNew && role === 'assigner' && !closed && (
+          <Group footer={`${task!.owner.name ?? 'They'} will be told the task is no longer needed.`}>
+            <Row label="Withdraw Task" danger onClick={() => setConfirmDelete(true)} testId="task-withdraw" icon={<Undo2 className="size-4" />} tint="var(--ios-red)" />
           </Group>
         )}
       </Sheet>
       {picker === 'meeting' && <MeetingPicker onClose={() => setPicker(null)} onPick={(m) => (setMeeting(m), setPicker(null))} />}
       {picker === 'person' && <PersonPicker onClose={() => setPicker(null)} onPick={(p) => (setEmployee({ id: p.id, name: p.name, code: p.code }), setPicker(null))} />}
+      {picker === 'assignees' && <AssigneePicker selected={assignees} onClose={() => setPicker(null)} onDone={(list) => (setAssignees(list), setPicker(null))} />}
       {task && (
         <ConfirmDialog
           open={confirmDelete}
           onClose={() => setConfirmDelete(false)}
-          title="Delete this task?"
-          confirmLabel="Delete"
+          title={role === 'assigner' ? 'Withdraw this task?' : 'Delete this task?'}
+          confirmLabel={role === 'assigner' ? 'Withdraw' : 'Delete'}
           onConfirm={async () => {
             await workApi.deleteTask(task.id)
             onDeleted?.(task.id)
             onClose()
           }}
         >
-          <p className="text-[14px] text-ink-secondary">“{task.title}” and its reminder are removed.</p>
+          <p className="text-[14px] text-ink-secondary">{role === 'assigner' ? `“${task.title}” is cancelled for ${task.owner.name ?? 'them'}, and they are told.` : `“${task.title}” and its reminder are removed.`}</p>
         </ConfirmDialog>
       )}
     </>
@@ -430,6 +551,15 @@ export function NoteEditor({ note, seed, onClose, onSaved, onDeleted, onMakeTask
   const [isPinned, setPinned] = useState(note?.isPinned ?? seed?.isPinned ?? false)
   const [isCompleted, setCompleted] = useState(note?.isCompleted ?? false)
   const [isArchived, setArchived] = useState(note?.isArchived ?? false)
+  const [color, setColor] = useState<string | null>(note?.color ?? seed?.color ?? null)
+  const [sharing, setSharing] = useState<Assignee[] | null>(null)
+  const [shares, setShares] = useState<{ id: string; name: string | null }[]>([])
+  const chat = useChat()
+  const collab = !!(chat.status?.enabled && chat.status.taskCollab)
+  const bodyRef = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    if (note && collab && (note.sharedCount ?? 0) > 0) workApi.noteShares(note.id).then((r) => setShares(r.items), () => {})
+  }, [note, collab])
   const [noteDateUtc, setNoteDate] = useState<string | null>(note?.noteDateUtc ?? seed?.noteDateUtc ?? null)
   const [reminderUtc, setReminderUtc] = useState<string | null>(note?.reminderState === 'PENDING' || note?.reminderState === 'FIRED' ? note.reminderUtc : seed?.reminderUtc ?? null)
   const [meeting, setMeeting] = useState<LinkMeeting | null>(note?.meeting ?? (seed?.meetingId ? { id: seed.meetingId, title: seed.meetingTitle ?? 'Meeting', startUtc: '' } : null))
@@ -449,6 +579,7 @@ export function NoteEditor({ note, seed, onClose, onSaved, onDeleted, onMakeTask
       categoryId,
       isPinned,
       noteDateUtc,
+      color,
       ...reminderField(reminderUtc, note?.reminderState === 'PENDING' || note?.reminderState === 'FIRED' ? note.reminderUtc : null, isNew),
       meetingId: meeting?.id ?? null,
       employeeId: employee?.id ?? null,
@@ -473,9 +604,17 @@ export function NoteEditor({ note, seed, onClose, onSaved, onDeleted, onMakeTask
       <Sheet title={isNew ? 'New Note' : 'Note'} onClose={onClose} onDone={() => void save()} doneLabel={isNew ? 'Save' : 'Done'} doneDisabled={!title.trim()} busy={busy} testId="note-editor">
         <Group className="!mt-2">
           <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} placeholder="Title" aria-label="Title" className="ios-field text-[19px] font-semibold" autoFocus={isNew && !title} data-testid="note-title" />
-          <textarea value={body} onChange={(e) => setBody(e.target.value)} maxLength={8000} rows={7} placeholder="Write your note…" aria-label="Note" className="ios-field resize-y leading-[22px]" data-testid="note-body" />
+          <textarea ref={bodyRef} value={body} onChange={(e) => setBody(e.target.value)} maxLength={8000} rows={7} placeholder="Write your note…" aria-label="Note" className="ios-field resize-y leading-[22px]" data-testid="note-body" />
+          <div className="flex items-center gap-1 px-2 py-1">
+            <button type="button" onClick={() => setBody(insertChecklistLine(body, bodyRef.current))} className="inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[14px] font-medium text-[var(--ios-blue)] active:bg-black/5" data-testid="note-add-check">
+              <CheckSquare className="size-4" />Checklist
+            </button>
+            <span className="flex-1" />
+            <ColorDots value={color} onChange={setColor} />
+          </div>
         </Group>
-        <p className="px-4 pt-1.5 text-[13px] text-[var(--ios-label2)]">Only you can see your notes.</p>
+        <NoteChecklist body={body} setBody={setBody} noteId={note?.id ?? null} />
+        <p className="px-4 pt-1.5 text-[13px] text-[var(--ios-label2)]">{shares.length ? `Shared read-only with ${shares.map((x) => x.name).join(', ')}.` : 'Only you can see your notes.'}</p>
 
         <Group title="Date and reminder">
           <Row label="Date" icon={<CalendarDays className="size-4" />} tint="var(--ios-red)">
@@ -511,6 +650,7 @@ export function NoteEditor({ note, seed, onClose, onSaved, onDeleted, onMakeTask
 
         {!isNew && (
           <Group>
+            {collab && <Row label={shares.length ? `Shared with ${shares.length}` : 'Share (read-only)'} icon={<Share2 className="size-4" />} tint="var(--ios-blue)" onClick={() => setSharing(shares.map((x) => ({ id: x.id, name: x.name ?? '', code: null, department: null, designation: null })))} testId="note-share" />}
             {onMakeTask && <Row label="Create follow-up task" onClick={() => onMakeTask(note)} testId="note-make-task" />}
             <Row label="Delete Note" danger onClick={() => setConfirmDelete(true)} testId="note-delete" icon={<Trash2 className="size-4" />} tint="var(--ios-red)" />
           </Group>
@@ -518,6 +658,15 @@ export function NoteEditor({ note, seed, onClose, onSaved, onDeleted, onMakeTask
       </Sheet>
       {picker === 'meeting' && <MeetingPicker onClose={() => setPicker(null)} onPick={(m) => (setMeeting(m), setPicker(null))} />}
       {picker === 'person' && <PersonPicker onClose={() => setPicker(null)} onPick={(p) => (setEmployee({ id: p.id, name: p.name, code: p.code }), setPicker(null))} />}
+      {note && sharing && (
+        <AssigneePicker title="Share with" testId="note-share-picker" selected={sharing} onClose={() => setSharing(null)}
+          onDone={(list) => {
+            workApi.shareNote(note.id, list.map((x) => x.id)).then(
+              (r) => (setShares(r.items), setSharing(null), toast.success(r.items.length ? `Shared with ${r.items.length} ${r.items.length === 1 ? 'person' : 'people'}` : 'No longer shared')),
+              (e) => toast.error(errorMessage(e, 'The note could not be shared.')),
+            )
+          }} />
+      )}
       {note && (
         <ConfirmDialog
           open={confirmDelete}
