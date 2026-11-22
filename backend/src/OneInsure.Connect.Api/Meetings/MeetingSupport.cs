@@ -284,7 +284,8 @@ public sealed class MeetingMessaging(IOptions<PublicEndpointOptions> pub, IOptio
                 var due = DateTime.SpecifyKind(m.StartUtc, DateTimeKind.Utc).AddMinutes(-offset);
                 if (due <= now) continue;
                 if (r.UserId is not null) rows.Add(new { m.MeetingId, r.ParticipantId, offset, channel = "IN_APP", due, m.ScheduleVersion });
-                if (r.Email is not null) rows.Add(new { m.MeetingId, r.ParticipantId, offset, channel = "EMAIL", due, m.ScheduleVersion });
+                if (r.Email is not null && emailOptions.Value.ReminderEmailAllowed(offset)) // e-mail only 15 min before (22 Nov 2026)
+                    rows.Add(new { m.MeetingId, r.ParticipantId, offset, channel = "EMAIL", due, m.ScheduleVersion });
             }
         if (rows.Count == 0) return 0;
         return await c.ExecuteAsync("""

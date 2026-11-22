@@ -76,8 +76,8 @@ public sealed partial class MeetingTests(ApiFixture fx)
         Assert.NotEmpty(token1);
         Assert.Equal(1, await Count("SELECT COUNT(*) FROM mtg.MeetingInvitations WHERE MeetingId = @mid AND RevokedUtc IS NULL", new { mid }));
         Assert.Equal(1, await Count("SELECT COUNT(*) FROM mtg.MeetingNotifications n JOIN auth.Users u ON u.UserId = n.RecipientUserId WHERE n.MeetingId = @mid AND u.Email = N'mpeer@test.invalid' AND n.[Type] = 'INVITATION' AND n.LinkPath = @link", new { mid, link = $"/meetings/{id}" }));
-        // 3 offsets × (3 employees with accounts × IN_APP+EMAIL + guest × EMAIL).
-        Assert.Equal(21, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid AND [Status] = 'PENDING' AND ScheduleVersion = 1", new { mid }));
+        // IN_APP at 3 offsets × 3 employees with accounts + EMAIL only 15 min before × 4 (22 Nov 2026).
+        Assert.Equal(13, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid AND [Status] = 'PENDING' AND ScheduleVersion = 1", new { mid }));
 
         // Visibility.
         var peerList = await Json(await peer.Http.GetAsync("/api/v1/meetings?scope=mine&pageSize=100"));
@@ -103,7 +103,7 @@ public sealed partial class MeetingTests(ApiFixture fx)
         Assert.True((await Json(resched)).GetProperty("rescheduled").GetBoolean());
         Assert.Equal(2, await fx.QueryAsync<int>("SELECT ScheduleVersion FROM mtg.Meetings WHERE MeetingId = @mid", new { mid }));
         Assert.Equal(0, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid AND ScheduleVersion = 1 AND [Status] <> 'CANCELLED'", new { mid }));
-        Assert.Equal(21, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid AND ScheduleVersion = 2 AND [Status] = 'PENDING'", new { mid }));
+        Assert.Equal(13, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid AND ScheduleVersion = 2 AND [Status] = 'PENDING'", new { mid }));
         Assert.Equal(1, await Count("SELECT COUNT(*) FROM mtg.MeetingInvitations WHERE MeetingId = @mid AND RevokedUtc IS NULL", new { mid }));
         Assert.Equal(HttpStatusCode.NotFound, (await (await fx.NewClientAsync()).Http.GetAsync($"/api/v1/join/{token1}")).StatusCode); // old link revoked
         Assert.Equal(1, await Count("SELECT COUNT(*) FROM mtg.MeetingNotifications n JOIN auth.Users u ON u.UserId = n.RecipientUserId WHERE n.MeetingId = @mid AND u.Email = N'mthird@test.invalid' AND n.[Type] = 'RESCHEDULED'", new { mid }));
@@ -252,7 +252,7 @@ public sealed partial class MeetingTests(ApiFixture fx)
             SELECT COUNT(*) FROM mtg.MeetingReminders r JOIN mtg.MeetingParticipants p ON p.ParticipantId = r.ParticipantId
             JOIN org.Employees e ON e.EmployeeId = p.EmployeeId WHERE r.MeetingId = @mid AND e.EmployeeCode = 'M-PEER' AND r.[Status] = 'PENDING'
             """;
-        Assert.Equal(6, await Count(peerReminders, new { mid }));
+        Assert.Equal(4, await Count(peerReminders, new { mid })); // in-app at 3 offsets + e-mail at 15 min
 
         Assert.Equal("VALIDATION", await Code(await peer.PostAsync($"/api/v1/meetings/{id}/respond", new { response = "MAYBE" })));
         Assert.Equal(HttpStatusCode.NotFound, (await outsider.PostAsync($"/api/v1/meetings/{id}/respond", new { response = "ACCEPTED" })).StatusCode);
@@ -265,7 +265,7 @@ public sealed partial class MeetingTests(ApiFixture fx)
         Assert.Equal(HttpStatusCode.NoContent, (await peer.PostAsync($"/api/v1/meetings/{id}/respond", new { response = "DECLINED" })).StatusCode);
         Assert.Equal(0, await Count(peerReminders, new { mid }));
         Assert.Equal(HttpStatusCode.NoContent, (await peer.PostAsync($"/api/v1/meetings/{id}/respond", new { response = "TENTATIVE" })).StatusCode);
-        Assert.Equal(6, await Count(peerReminders, new { mid }));
+        Assert.Equal(4, await Count(peerReminders, new { mid })); // in-app at 3 offsets + e-mail at 15 min
         Assert.Equal(3, await Count("SELECT COUNT(*) FROM app.AuditLog WHERE [Action] = 'MEETING_RESPONDED' AND EntityId = @e", new { e = id.ToString() }));
     }
 
@@ -368,8 +368,8 @@ public sealed partial class MeetingTests(ApiFixture fx)
         Guid peerId = await Emp("M-PEER"), noAccount = await Emp("M-NOACCT");
         var id = await Create(host, Meeting("Reminder check", Slot(20, 5), Slot(20, 6), [peerId, noAccount]));
         var mid = await MeetingRowId(id);
-        // host, peer: IN_APP + EMAIL; no-account employee: EMAIL only → 5 per offset.
-        Assert.Equal(15, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid", new { mid }));
+        // host, peer: IN_APP at 3 offsets; e-mail only 15 min before for host, peer and the no-account employee → 6 + 3.
+        Assert.Equal(9, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid", new { mid }));
 
         // Reschedule first: version-1 rows are cancelled; even if one is forced back to PENDING it is never claimed.
         Assert.Equal(HttpStatusCode.OK, (await host.PutAsync($"/api/v1/meetings/{id}", new { title = "Reminder check", startUtc = Slot(21, 5), endUtc = Slot(21, 6) })).StatusCode);
@@ -379,22 +379,35 @@ public sealed partial class MeetingTests(ApiFixture fx)
             SELECT 1;
             """, new { mid });
 
-        Assert.True(await RunReminders() >= 15);
-        Assert.Equal(15, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid AND ScheduleVersion = 2 AND [Status] = 'SENT'", new { mid }));
+        Assert.True(await RunReminders() >= 9);
+        // E-mail reminders only 15 minutes before (22 Nov 2026): no 24 h / 1 h e-mail rows are created at all.
+        Assert.Equal(9, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid AND ScheduleVersion = 2 AND [Status] = 'SENT'", new { mid }));
+        Assert.Equal(0, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid AND ScheduleVersion = 2 AND Channel = 'EMAIL' AND OffsetMinutes IN (1440, 60)", new { mid }));
         Assert.Equal(1, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid AND ScheduleVersion = 1 AND [Status] = 'PENDING'", new { mid }));
         Assert.Equal(6, await Count("SELECT COUNT(*) FROM mtg.MeetingNotifications WHERE MeetingId = @mid AND [Type] = 'REMINDER'", new { mid }));
-        Assert.Equal(9, await Count("SELECT COUNT(*) FROM app.EmailOutbox WHERE RelatedMeetingId = @mid AND Template = 'MEETING_REMINDER' AND RelatedReminderId IS NOT NULL", new { mid }));
-        Assert.Equal(3, await Count("SELECT COUNT(*) FROM app.EmailOutbox WHERE RelatedMeetingId = @mid AND Template = 'MEETING_REMINDER' AND ToAddress = N'mnoacct@test.invalid'", new { mid }));
+        Assert.Equal(3, await Count("SELECT COUNT(*) FROM app.EmailOutbox WHERE RelatedMeetingId = @mid AND Template = 'MEETING_REMINDER' AND RelatedReminderId IS NOT NULL", new { mid }));
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM app.EmailOutbox WHERE RelatedMeetingId = @mid AND Template = 'MEETING_REMINDER' AND ToAddress = N'mnoacct@test.invalid'", new { mid }));
         Assert.Equal(0, await Count("SELECT COUNT(*) FROM app.EmailOutbox o JOIN mtg.MeetingReminders r ON r.ReminderId = o.RelatedReminderId WHERE r.MeetingId = @mid AND r.ScheduleVersion = 1", new { mid }));
 
         // Idempotent: a second run claims nothing; a re-delivered e-mail reminder cannot create a second e-mail.
-        Assert.Equal(0, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid AND ScheduleVersion = 2 AND [Status] <> 'SENT'", new { mid }));
+        Assert.Equal(0, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid AND ScheduleVersion = 2 AND [Status] NOT IN ('SENT', 'CANCELLED')", new { mid }));
         await RunReminders();
-        await fx.QueryAsync<int>("UPDATE TOP (1) mtg.MeetingReminders SET [Status] = 'PENDING', SentUtc = NULL WHERE MeetingId = @mid AND ScheduleVersion = 2 AND Channel = 'EMAIL'; SELECT 1;", new { mid });
+        await fx.QueryAsync<int>("UPDATE TOP (1) mtg.MeetingReminders SET [Status] = 'PENDING', SentUtc = NULL WHERE MeetingId = @mid AND ScheduleVersion = 2 AND Channel = 'EMAIL' AND OffsetMinutes = 15; SELECT 1;", new { mid });
         await RunReminders();
-        Assert.Equal(9, await Count("SELECT COUNT(*) FROM app.EmailOutbox WHERE RelatedMeetingId = @mid AND Template = 'MEETING_REMINDER'", new { mid }));
+        Assert.Equal(3, await Count("SELECT COUNT(*) FROM app.EmailOutbox WHERE RelatedMeetingId = @mid AND Template = 'MEETING_REMINDER'", new { mid }));
         Assert.Equal(6, await Count("SELECT COUNT(*) FROM mtg.MeetingNotifications WHERE MeetingId = @mid AND [Type] = 'REMINDER'", new { mid }));
-        Assert.Equal(0, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid AND ScheduleVersion = 2 AND [Status] <> 'SENT'", new { mid }));
+        Assert.Equal(0, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid AND ScheduleVersion = 2 AND [Status] NOT IN ('SENT', 'CANCELLED')", new { mid }));
+
+        // A 1-hour e-mail reminder made before the 15-minute rule (22 Nov 2026) is closed without an e-mail.
+        await fx.QueryAsync<int>("""
+            INSERT mtg.MeetingReminders (MeetingId, ParticipantId, OffsetMinutes, Channel, DueUtc, ScheduleVersion)
+            SELECT TOP (1) MeetingId, ParticipantId, 60, 'EMAIL', DATEADD(MINUTE, -1, SYSUTCDATETIME()), ScheduleVersion
+            FROM mtg.MeetingReminders WHERE MeetingId = @mid AND ScheduleVersion = 2 AND Channel = 'EMAIL';
+            SELECT 1;
+            """, new { mid });
+        await RunReminders();
+        Assert.Equal(1, await Count("SELECT COUNT(*) FROM mtg.MeetingReminders WHERE MeetingId = @mid AND OffsetMinutes = 60 AND Channel = 'EMAIL' AND [Status] = 'CANCELLED' AND LastError LIKE 'E-mail reminders are sent only 15%'", new { mid }));
+        Assert.Equal(3, await Count("SELECT COUNT(*) FROM app.EmailOutbox WHERE RelatedMeetingId = @mid AND Template = 'MEETING_REMINDER'", new { mid }));
 
         // Cancelled meeting: nothing is sent even if reminders are due and (wrongly) still pending.
         var gone = await Create(host, Meeting("Will be cancelled", Slot(22, 5), Slot(22, 6), [peerId]));

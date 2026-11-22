@@ -38,6 +38,32 @@ public sealed partial class EmailOptions
     public int BatchSize { get; set; } = 20;
     public int MaxAttempts { get; set; } = 5;
 
+    /// <summary>
+    /// Only these kinds of e-mail are sent (decision of 22 Nov 2026): meeting scheduled / instant invite, rescheduled,
+    /// cancelled or removed, the 15-minute reminder, and the sign-in mails (password reset, sign-in code) plus the admin
+    /// test mail. Everything else (recording ready, tasks, notes, …) is marked CANCELLED with the reason and never sent.
+    /// Values from configuration are added to this list.
+    /// </summary>
+    public string[] AllowedTemplates { get; set; } =
+    [
+        "MEETING_INVITED", "MEETING_INSTANT_INVITED", "MEETING_RESCHEDULED", "MEETING_CANCELLED", "MEETING_REMOVED",
+        "MEETING_REMINDER", "PASSWORD_RESET", "MFA_EMAIL_OTP", "TEST",
+    ];
+    /// <summary>Meeting reminder e-mails only at these minutes before the start (in-app reminders keep all their times).</summary>
+    public int[] ReminderEmailMinutes { get; set; } = [15];
+    /// <summary>Addresses that never get any e-mail (kept in the server's appsettings.Production.json, not in source control).</summary>
+    public string[] BlockedAddresses { get; set; } = [];
+
+    /// <summary>Why this e-mail must not be sent, or null when it may be sent.</summary>
+    public string? NotSentReason(string template, string to)
+    {
+        if (!AllowedTemplates.Contains(template, StringComparer.OrdinalIgnoreCase)) return $"Not sent: {template} e-mails are switched off.";
+        if (BlockedAddresses.Any(b => string.Equals(b?.Trim(), to?.Trim(), StringComparison.OrdinalIgnoreCase))) return "Not sent: address is blocked.";
+        return null;
+    }
+
+    public bool ReminderEmailAllowed(int offsetMinutes) => ReminderEmailMinutes.Contains(offsetMinutes);
+
     public bool ProcedureNameIsSafe() => ProcedureRe().IsMatch(Procedure);
 
     [GeneratedRegex(@"^(\[?[A-Za-z_][A-Za-z0-9_]{0,127}\]?\.){0,2}\[?[A-Za-z_][A-Za-z0-9_]{0,127}\]?$")]
@@ -124,6 +150,15 @@ public sealed class EmailOutboxWorker(Db db, IEmailSender sender, IOptions<Email
 
         foreach (var m in batch)
         {
+            if (o.NotSentReason(m.Template, m.ToAddress) is { } notSent)
+            {
+                using var nc = await db.OpenAsync(ct);
+                await nc.ExecuteAsync("""
+                    UPDATE app.EmailOutbox SET [Status] = 'CANCELLED', LeaseOwner = NULL, LeaseExpiresUtc = NULL WHERE OutboxId = @id;
+                    INSERT app.EmailDeliveryLog (OutboxId, AttemptNo, Succeeded, ErrorMessage, DurationMs) VALUES (@id, @attempt, 0, @notSent, 0);
+                    """, new { id = m.OutboxId, attempt = m.Attempts, notSent });
+                continue;
+            }
             var started = DateTime.UtcNow;
             string? error = null;
             try { await sender.SendAsync(m, ct); }

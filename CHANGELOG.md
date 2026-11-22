@@ -1,5 +1,28 @@
 # Changelog
 
+## 22 Nov 2026, 23:19–23:25 IST — DEPLOYED: e-mail policy (meeting and sign-in mails only) and blocked addresses
+
+- **Only these e-mails are sent:**
+  - meeting scheduled (invitation, instant invite), rescheduled, cancelled, removed from a meeting;
+  - the reminder 15 minutes before the start;
+  - password reset and sign-in code (and the admin test mail).
+- **Switched off:** recording ready / failed, all task e-mails, note sharing and everything else. `EmailOutboxWorker` marks them `CANCELLED`, with "Not sent: … switched off" in `EmailDeliveryLog`.
+- **Settings:** `EmailOptions.AllowedTemplates`, `ReminderEmailMinutes` (default 15) and `BlockedAddresses`.
+- **Reminders:** in-app reminders keep 24 h / 1 h / 15 min. E-mail reminder rows are now created only for 15 min, and older 24 h / 1 h e-mail rows are closed by `ReminderWorker`. In production, 324 pending 24 h / 1 h e-mail reminder rows were closed at deploy with the same reason.
+- **Blocked addresses:** the 3 addresses the user asked to remove (Naved) are blocked in `deploy\api\appsettings.Production.json` → `Email:BlockedAddresses`. They are kept out of source control on purpose. His login and history are unchanged.
+- **Website:** the "E-mail me about tasks" switch was removed from Task settings; the Assign footer no longer mentions an e-mail.
+- **Tests:**
+  - backend 153/153;
+  - new: switched-off kinds and blocked addresses never sent; allowed list; reminder e-mail only at 15 min; an old 1 h e-mail reminder is closed unsent;
+  - the reminder and RSVP tests were updated to the new counts.
+- **Deploy:**
+  - pre-check clear;
+  - backups: files in `deploy\_backup-20261122-231941` (incl. the previous `appsettings.Production.json`); database `Oneinsure_v_pre-emailpolicy-20261122-231941.bak` (63.1 MB, verified);
+  - API restart about 12 s, health Healthy; website `npm run build`.
+- **Undo:**
+  - copy back `api` (service stopped), `frontend-dist` and the old `appsettings.Production.json`;
+  - for the closed reminder rows, restore from the database backup if ever needed.
+
 ## 21 Nov 2026, 22:50 IST — DEPLOYED: call speaker button on every device; Android app 1.2.2 (versionCode 6)
 
 - **Bug fixed (phones):** the speaker chooser and "Add people" opened behind the full-screen call screen, so the buttons seemed to do nothing. Call dialogs now open above it (`Dialog` got an optional `layer`; the default z-[60] is unchanged for every other dialog).

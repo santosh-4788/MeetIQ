@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  AlarmClock, Bell, BellRing, CalendarClock, CheckCheck, ClipboardCheck, Flag, Inbox, ListTodo, Mail, MessageCircle, MessageSquare, Paperclip, Phone, Plus, Repeat,
+  AlarmClock, Bell, BellRing, CalendarClock, CheckCheck, ClipboardCheck, Flag, Inbox, ListTodo, MessageCircle, MessageSquare, Paperclip, Phone, Plus, Repeat,
   Search, Send, Settings2, ShieldCheck, Sparkles, Star, Sun, UserCheck, UserRound, Video, X,
 } from 'lucide-react'
 import { errorMessage } from '../../../api/types'
@@ -211,13 +211,7 @@ export function useBrowserNotifications() {
 }
 
 export function TaskSettingsSheet({ onClose }: { onClose: () => void }) {
-  const toast = useToast()
-  const [emails, setEmails] = useState<boolean | null>(null)
-  const [collab, setCollab] = useState(false)
   const { perm, ask, inApp } = useBrowserNotifications()
-  useEffect(() => {
-    workApi.settings().then((s) => (setEmails(s.taskEmails), setCollab(s.collab)), () => setEmails(true))
-  }, [])
   return (
     <Sheet title="Task settings" onClose={onClose} leftLabel="Close" testId="task-settings">
       <Group title="Notifications" footer={inApp ? 'In-app alerts and the bell are always on. Phone notifications appear while the app is open or in the background.' : 'In-app alerts and the bell are always on. Browser notifications appear while the portal is open in any tab.'}>
@@ -227,19 +221,8 @@ export function TaskSettingsSheet({ onClose }: { onClose: () => void }) {
               : perm === 'unsupported' ? <span className="text-[14px] text-[var(--ios-gray)]">Not supported here</span>
                 : <button type="button" onClick={() => void ask()} className="ios-btn-tinted h-[30px] px-3 text-[14px]" data-testid="enable-notifications">Turn on</button>}
         </Row>
-        {collab && (
-          <Row label="E-mail me about tasks" icon={<Mail className="size-4" />} tint="var(--ios-blue)">
-            <input type="checkbox" role="switch" className="ios-switch" checked={!!emails} disabled={emails === null}
-              onChange={(e) => {
-                const on = e.target.checked
-                setEmails(on)
-                workApi.saveSettings(on).then(() => toast.success(on ? 'Task e-mails on' : 'Task e-mails off'), (err) => (setEmails(!on), toast.error(errorMessage(err, 'That did not work.'))))
-              }}
-              aria-label="E-mail me about tasks" data-testid="task-emails" />
-          </Row>
-        )}
       </Group>
-      {collab && <p className="px-4 pt-2 text-[13px] text-[var(--ios-label2)]">E-mails: a task assigned to you, a task waiting for your review, a decision on your work, and overdue tasks.</p>}
+      {/* 22 Nov 2026: task e-mails are switched off company-wide (only meeting and sign-in e-mails are sent), so no e-mail switch here. */}
     </Sheet>
   )
 }

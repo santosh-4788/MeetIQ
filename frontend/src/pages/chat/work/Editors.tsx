@@ -407,7 +407,7 @@ export function TaskEditor({ task: initial, seed, onClose, onSaved, onDeleted }:
 
         {/* Assign to colleagues (new tasks) */}
         {canAssign && (
-          <Group title="Assign" footer={assigning ? 'They get a notification and an e-mail, and can accept, ask for a new date or decline.' : 'Leave empty to keep the task for yourself.'}>
+          <Group title="Assign" footer={assigning ? 'They get a notification, and can accept, ask for a new date or decline.' : 'Leave empty to keep the task for yourself.'}>
             <Row label="Assign to" icon={<UserPlus className="size-4" />} tint="var(--ios-indigo, #5856d6)" onClick={() => setPicker('assignees')} testId="task-assign">
               {assigning ? <AvatarStack names={assignees.map((a) => a.name)} /> : <span className="text-[16px] text-[var(--ios-gray)]">Only me</span>}
             </Row>

@@ -76,6 +76,7 @@ public sealed class ReminderWorker(Db db, IOptions<ReminderOptions> options, IOp
             : p.ResponseStatus == "DECLINED" ? "Participant declined."
             : r.Channel == "IN_APP" && p.UserId is null ? "Recipient has no active user account."
             : r.Channel == "EMAIL" && p.Email is null ? "Recipient has no e-mail address."
+            : r.Channel == "EMAIL" && !emailOptions.Value.ReminderEmailAllowed(r.OffsetMinutes) ? $"E-mail reminders are sent only {string.Join("/", emailOptions.Value.ReminderEmailMinutes)} minutes before."
             : r.Channel is not ("IN_APP" or "EMAIL") ? "Channel not supported." : null;
         if (skip is null)
         {

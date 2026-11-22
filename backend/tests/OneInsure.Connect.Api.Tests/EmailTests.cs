@@ -32,6 +32,49 @@ public sealed class EmailTests(ApiFixture fx)
     }
 
     [Fact]
+    public async Task Switched_off_kinds_and_blocked_addresses_are_never_sent()
+    {
+        var o = fx.Factory.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<EmailOptions>>().Value;
+        var before = o.BlockedAddresses;
+        o.BlockedAddresses = ["Blocked.Person@test.invalid"];
+        try
+        {
+            await fx.QueryAsync<int>("""
+                INSERT app.EmailOutbox (Template, ToAddress, Subject, BodyHtml) VALUES
+                  ('RECORDING_AVAILABLE', N'rec.policy@test.invalid', N'Recording ready', N'<p>x</p>'),
+                  ('TASK_ASSIGNED', N'task.policy@test.invalid', N'Task', N'<p>x</p>'),
+                  ('MEETING_INVITED', N'blocked.person@test.invalid', N'Invite', N'<p>x</p>'),
+                  ('MEETING_INVITED', N'allowed.policy@test.invalid', N'Invite', N'<p>x</p>');
+                SELECT 1;
+                """);
+            await RunWorker();
+            Assert.Equal(0, await fx.QueryAsync<int>("SELECT COUNT(*) FROM dbo.TestSentMail WHERE [To] IN ('rec.policy@test.invalid', 'task.policy@test.invalid', 'blocked.person@test.invalid')"));
+            Assert.Equal(3, await fx.QueryAsync<int>("SELECT COUNT(*) FROM app.EmailOutbox WHERE ToAddress IN (N'rec.policy@test.invalid', N'task.policy@test.invalid', N'blocked.person@test.invalid') AND [Status] = 'CANCELLED'"));
+            Assert.Equal(1, await fx.QueryAsync<int>("SELECT COUNT(*) FROM dbo.TestSentMail WHERE [To] = 'allowed.policy@test.invalid'"));
+            Assert.Contains("switched off", await fx.QueryAsync<string>("SELECT TOP (1) d.ErrorMessage FROM app.EmailDeliveryLog d JOIN app.EmailOutbox o ON o.OutboxId = d.OutboxId WHERE o.ToAddress = N'rec.policy@test.invalid'"));
+        }
+        finally { o.BlockedAddresses = before; }
+    }
+
+    [Theory]
+    [InlineData("MEETING_INVITED", true)]
+    [InlineData("MEETING_REMINDER", true)]
+    [InlineData("MEETING_RESCHEDULED", true)]
+    [InlineData("MEETING_CANCELLED", true)]
+    [InlineData("PASSWORD_RESET", true)]
+    [InlineData("MFA_EMAIL_OTP", true)]
+    [InlineData("RECORDING_AVAILABLE", false)]
+    [InlineData("RECORDING_FAILED", false)]
+    [InlineData("TASK_DUE", false)]
+    [InlineData("NOTE_SHARED", false)]
+    public void Only_meeting_and_sign_in_emails_are_allowed(string template, bool sent) =>
+        Assert.Equal(sent, new EmailOptions().NotSentReason(template, "someone@test.invalid") is null);
+
+    [Fact]
+    public void Reminder_emails_only_15_minutes_before() =>
+        Assert.Equal([false, false, true], new[] { 1440, 60, 15 }.Select(new EmailOptions().ReminderEmailAllowed));
+
+    [Fact]
     public async Task Failed_delivery_is_logged_and_retried_later_not_immediately()
     {
         await fx.QueryAsync<int>("""
