@@ -54,6 +54,7 @@ import org.json.JSONObject
  *   {type:"info"}                                   -> reply {type:"info", app:"android", versionName, versionCode, presenting}
  *   {type:"present", url, token, name}              -> asks Android's "Start recording or casting?" then presents
  *   {type:"stopPresent"}
+ *   {type:"speaker", on?}                          -> loudspeaker (true) / earpiece (false); replies {type:"speaker", on}
  *   {type:"inMeeting", on}                          -> keeps the microphone alive in the background, screen on
  *   {type:"saveFile", name, mime, base64}           -> saves a page-generated file (e.g. a report) to Downloads
  *   {type:"notify", title, body, link, tag}         -> phone notification for a task alert or reminder (1.2.0, [Alerts])
@@ -228,7 +229,7 @@ class MainActivity : AppCompatActivity() {
                     .put("type", "info").put("app", "android")
                     .put("versionName", BuildConfig.VERSION_NAME).put("versionCode", BuildConfig.VERSION_CODE)
                     .put("screenShare", true).put("presenting", ScreenShareSession.state != ScreenShareSession.State.IDLE)
-                    .put("notifications", true).put("notificationsGranted", Alerts.canPost(this))
+                    .put("notifications", true).put("notificationsGranted", Alerts.canPost(this)).put("speaker", true)
                     .toString())
                 "present" -> present(msg.optString("url"), msg.optString("token"), msg.optString("name"))
                 "stopPresent" -> ScreenShareSession.stop("user")
@@ -236,6 +237,10 @@ class MainActivity : AppCompatActivity() {
                 "saveFile" -> saveFromPage(msg.optString("name"), msg.optString("mime"), msg.optString("base64"))
                 "notify" -> Alerts.show(this, msg.optString("title"), msg.optString("body"), msg.optString("link"), msg.optString("tag"))
                 "notifyPermission" -> requestAlertPermission(reply)
+                "speaker" -> {
+                    val on = if (msg.has("on")) Speaker.set(this, msg.optBoolean("on")) else Speaker.isOn(this)
+                    reply.postMessage(JSONObject().put("type", "speaker").put("supported", true).put("on", on).toString())
+                }
             }
         }
         // Page-made files (blob: links, e.g. CSV/PDF reports): keep them readable long enough for the app to save them.
@@ -302,6 +307,7 @@ class MainActivity : AppCompatActivity() {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             MeetingService.stop(this)
             ScreenShareSession.stop("left_meeting")
+            Speaker.reset(this)
         }
     }
 

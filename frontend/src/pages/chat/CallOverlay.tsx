@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import {
-  Check, ChevronDown, Mic, MicOff, Minimize2, Phone, PhoneOff, Signal, SignalLow, SignalZero, UserPlus, Users, Volume2, Wifi, X,
+  Check, ChevronDown, Mic, MicOff, Minimize2, Phone, PhoneOff, Signal, SignalLow, SignalZero, UserPlus, Users, Volume1, Volume2, Wifi, X,
 } from 'lucide-react'
+import { appSpeaker } from '../room/androidBridge'
 import type { Call } from '../../api/calls'
 import { errorMessage } from '../../api/types'
 import { Avatar } from '../../components/ui/Avatar'
@@ -152,6 +153,14 @@ function ActivePanel({ a, meId, phone }: { a: ActiveCall; meId: string | null; p
   const [small, setSmall] = useState(false)
   const [adding, setAdding] = useState(false)
   const [settings, setSettings] = useState(false)
+  // Android app 1.2.2+: real loudspeaker / earpiece switch. null = no switch here (computers, browsers, older apps): the
+  // button opens the Microphone and speaker chooser instead.
+  const [speaker, setSpeaker] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (a.phase === 'connected') void appSpeaker().then(setSpeaker)
+  }, [a.phase])
+  const speakerLabel = speaker === null ? 'Microphone and speaker' : speaker ? 'Speaker on' : 'Speaker off'
+  const onSpeaker = () => (speaker === null ? setSettings(true) : void appSpeaker(!speaker).then((v) => setSpeaker(v ?? speaker)))
   const c = a.call
   const iStarted = c.startedBy?.id === meId
   const people = c.participants.filter((p) => p.id !== meId)
@@ -259,8 +268,8 @@ function ActivePanel({ a, meId, phone }: { a: ActiveCall; meId: string | null; p
               <CallKey label={a.muted ? 'Unmute' : 'Mute'} caption="mute" onClick={calls.toggleMute} active={a.muted} testId="call-mute">
                 {a.muted ? <MicOff className="size-7" /> : <Mic className="size-7" />}
               </CallKey>
-              <CallKey label="Microphone and speaker" caption="audio" onClick={() => setSettings(true)}>
-                <Volume2 className="size-7" />
+              <CallKey label={speakerLabel} caption="speaker" onClick={onSpeaker} active={!!speaker} testId="call-speaker">
+                {speaker === false ? <Volume1 className="size-7" /> : <Volume2 className="size-7" />}
               </CallKey>
               <CallKey label="Add people" caption="add" onClick={() => setAdding(true)} disabled={open >= calls.maxParticipants} testId="call-add">
                 <UserPlus className="size-7" />
@@ -314,8 +323,8 @@ function ActivePanel({ a, meId, phone }: { a: ActiveCall; meId: string | null; p
           <RoundButton label={a.muted ? 'Unmute' : 'Mute'} onClick={calls.toggleMute} active={a.muted} testId="call-mute">
             {a.muted ? <MicOff className="size-5" /> : <Mic className="size-5" />}
           </RoundButton>
-          <RoundButton label="Microphone and speaker" onClick={() => setSettings(true)}>
-            <Volume2 className="size-5" />
+          <RoundButton label={speakerLabel} onClick={onSpeaker} active={!!speaker} testId="call-speaker">
+            {speaker === false ? <Volume1 className="size-5" /> : <Volume2 className="size-5" />}
           </RoundButton>
           <RoundButton label="Add people" onClick={() => setAdding(true)} disabled={open >= calls.maxParticipants} testId="call-add">
             <UserPlus className="size-5" />
@@ -377,6 +386,7 @@ function AddPeopleDialog({ open, onClose, exclude, room }: { open: boolean; onCl
   }, [open])
   return (
     <Dialog
+      layer="z-[69]"
       open={open}
       onClose={onClose}
       title="Add people to the call"
@@ -440,6 +450,19 @@ function AddPeopleDialog({ open, onClose, exclude, room }: { open: boolean; onCl
   )
 }
 
+/** Chrome, Edge and Firefox on computers can send the call to a chosen speaker; Safari and phone browsers cannot. */
+const canPickSpeaker = () => typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+
+/** Where to change the speaker when the page cannot (said plainly for each kind of device). */
+function speakerHelp() {
+  const ua = navigator.userAgent
+  const iOS = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)
+  if (iOS) return 'On iPhone and iPad, Apple chooses where call sound plays. To change it, open Control Center and tap the audio output (AirPlay) button, or connect headphones.'
+  if (/Android/i.test(ua)) return 'Phone browsers play calls through the phone’s own speaker choice. For a Speaker on/off switch, use the OneInsure Connect Android app (version 1.2.2 or later), or connect headphones.'
+  if (/Macintosh/.test(ua)) return 'Safari plays calls through the Mac’s current sound output. Change it from the Sound icon in the menu bar or System Settings → Sound, or use Chrome or Edge to choose a speaker here.'
+  return 'This browser plays calls through the computer’s current sound output. Change it in the system sound settings, or use Chrome or Edge to choose a speaker here.'
+}
+
 function DeviceDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const calls = useCalls()
   const [d, setD] = useState<{ inputs: MediaDeviceInfo[]; outputs: MediaDeviceInfo[]; input: string; output: string } | null>(null)
@@ -448,7 +471,7 @@ function DeviceDialog({ open, onClose }: { open: boolean; onClose: () => void })
   }, [open, calls])
   const select = 'h-10 w-full rounded-md border border-line bg-surface px-3 text-[13.5px] outline-none focus:border-brand-500'
   return (
-    <Dialog open={open} onClose={onClose} title="Microphone and speaker" size="sm" footer={<Button onClick={onClose}>Done</Button>}>
+    <Dialog layer="z-[69]" open={open} onClose={onClose} title="Microphone and speaker" size="sm" footer={<Button onClick={onClose}>Done</Button>}>
       {!d ? (
         <p className="text-[13px] text-ink-muted">Loading devices…</p>
       ) : (
@@ -460,7 +483,7 @@ function DeviceDialog({ open, onClose }: { open: boolean; onClose: () => void })
               {d.inputs.map((x) => <option key={x.deviceId} value={x.deviceId}>{x.label || 'Microphone'}</option>)}
             </select>
           </label>
-          {d.outputs.length > 0 ? (
+          {d.outputs.length > 0 && canPickSpeaker() ? (
             <label className="flex flex-col gap-1 text-[13px] font-medium text-ink">
               Speaker
               <select className={select} value={d.output} onChange={(e) => (calls.setOutput(e.target.value), setD({ ...d, output: e.target.value }))}>
@@ -469,7 +492,7 @@ function DeviceDialog({ open, onClose }: { open: boolean; onClose: () => void })
               </select>
             </label>
           ) : (
-            <p className="text-[12.5px] text-ink-muted">This browser uses the system speaker (choosing another is not supported here).</p>
+            <p className="text-[12.5px] leading-[18px] text-ink-muted" data-testid="call-speaker-help">{speakerHelp()}</p>
           )}
         </div>
       )}

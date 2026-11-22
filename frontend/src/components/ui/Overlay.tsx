@@ -76,12 +76,14 @@ type DialogProps = {
   variant?: 'modal' | 'drawer'
   /** False while a request is running, or while a one-time secret must be acknowledged. */
   dismissible?: boolean
+  /** Stacking layer (Tailwind z class). Default z-[60]; call dialogs pass a higher one so they open above the full-screen call. */
+  layer?: string
 }
 
 const widths = { sm: 'sm:max-w-[420px]', md: 'sm:max-w-[520px]', lg: 'sm:max-w-[680px]', xl: 'sm:max-w-[960px]' }
 
 /** Accessible modal dialog / side drawer (role="dialog", aria-modal, labelled by its title). */
-export function Dialog({ open, onClose, title, description, children, footer, size = 'md', variant = 'modal', dismissible = true }: DialogProps) {
+export function Dialog({ open, onClose, title, description, children, footer, size = 'md', variant = 'modal', dismissible = true, layer = 'z-[60]' }: DialogProps) {
   const panel = useRef<HTMLDivElement>(null)
   const titleId = useId()
   const descId = useId()
@@ -91,7 +93,7 @@ export function Dialog({ open, onClose, title, description, children, footer, si
   return createPortal(
     <AnimatePresence>
       {open && (
-        <div className={cn('fixed inset-0 z-[60] flex', drawer ? 'justify-end' : 'items-end justify-center p-0 sm:items-center sm:p-6')}>
+        <div className={cn('fixed inset-0 flex', layer, drawer ? 'justify-end' : 'items-end justify-center p-0 sm:items-center sm:p-6')}>
           <motion.div
             className="absolute inset-0 bg-navy-950/50 backdrop-blur-[2px]"
             initial={{ opacity: 0 }}

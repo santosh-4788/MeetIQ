@@ -1,5 +1,21 @@
 # Changelog
 
+## 21 Nov 2026, 22:50 IST — DEPLOYED: call speaker button on every device; Android app 1.2.2 (versionCode 6)
+
+- **Bug fixed (phones):** the speaker chooser and "Add people" opened behind the full-screen call screen, so the buttons seemed to do nothing. Call dialogs now open above it (`Dialog` got an optional `layer`; the default z-[60] is unchanged for every other dialog).
+- **Speaker button per device:**
+  - Android app 1.2.2: real Speaker on/off switch (loudspeaker / earpiece), new `Speaker.kt` + bridge `{type:"speaker", on?}`; routing goes back to the system when the call ends;
+  - computers (Chrome, Edge, Firefox): speaker chooser;
+  - Safari on Mac, iPhone/iPad, Android browsers: the chooser explains where to change the output (menu-bar Sound, Control Center, or the app).
+- **Tests:**
+  - new `room/call-speaker.mjs` passes (app switch on → off → on; computer list; iPhone hint);
+  - calls 7/7, android-app-chat 3/3, ios-look 9/9;
+  - browsers 102/104: the two iPad failures did not repeat when iPad ran alone, 13/13;
+  - gradle tests, lint and assembleRelease passed;
+  - downloaded APK sha256 `f12d5336…96c4` = published.
+- **Not yet tried on a real phone:** the earpiece switch was tested with a simulated app bridge only.
+- **Backup:** website files in `deploy\_backup-20261121-225035` (the 1.2.1 APK is inside). Undo: copy back to `frontend\dist`. No API or database change.
+
 ## 21 Nov 2026, 18:42 IST — PUBLISHED: Android app 1.2.1 (versionCode 5); phone bottom bar without Meetings
 
 - **Bottom bar (phones and the Android app):** Meetings removed from the bar; it stays in the menu (top left). The bar is now Home, Chat (or Calendar while Chat is off), the + (new meeting) in the middle, My Day and Alerts. File: `frontend/src/layouts/MobileTabBar.tsx`.

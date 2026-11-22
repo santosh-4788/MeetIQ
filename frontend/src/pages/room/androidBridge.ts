@@ -58,3 +58,32 @@ export function appNotifyPermission(): Promise<boolean> {
     b.postMessage(JSON.stringify({ type: 'notifyPermission' }))
   })
 }
+
+/**
+ * Loudspeaker switch in the Android app (1.2.2+). on: true = loudspeaker, false = earpiece, undefined = only ask.
+ * Resolves with the phone's actual state afterwards, or null outside the app / on older apps (after 1.5 s).
+ */
+export function appSpeaker(on?: boolean): Promise<boolean | null> {
+  const b = bridge()
+  if (!b) return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const prev = b.onmessage
+    const finish = (v: boolean | null) => {
+      window.clearTimeout(t)
+      if (b.onmessage === handler) b.onmessage = prev ?? null
+      resolve(v)
+    }
+    const t = window.setTimeout(() => finish(null), 1500)
+    const handler = (e: { data: string }) => {
+      try {
+        const m = JSON.parse(e.data)
+        if (m.type === 'speaker') return finish(m.supported ? !!m.on : null)
+      } catch {
+        /* not JSON */
+      }
+      prev?.(e)
+    }
+    b.onmessage = handler
+    b.postMessage(JSON.stringify(on === undefined ? { type: 'speaker' } : { type: 'speaker', on }))
+  })
+}
