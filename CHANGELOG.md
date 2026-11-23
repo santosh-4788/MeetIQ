@@ -1,5 +1,34 @@
 # Changelog
 
+## 23 Nov 2026, 16:30–16:40 IST — DEPLOYED: employee logins from EmployeeDetails.xlsx; stay signed in until 23:30; live message, call and task popups
+
+- **Employees (production data):**
+  - 13 employees and accounts created from `EmployeeDetails.xlsx` in department IT. Designations come from the HR master (`MST_Employees`); 7 designations were created (Tech Lead, Senior Software Tester, Senior UI Developer, Senior Mobile Developer, Senior Executive - Company Secretary, Senior Web Developer, Junior Software Developer) and "Executive" is used where HR has none.
+  - Login ID = employee code (the e-mail also works). The shared default password from the sheet, stored only as a PBKDF2 hash with a unique salt; change required at first sign-in; role Employee; everything audited.
+  - Two people already had accounts and were not touched; the empty last row was skipped.
+  - User decision: two people whose HR record differs from the sheet (one inactive in HR, one with another code) were created as in the sheet.
+  - The script (re-runnable, hashes only) is kept with the backup, not in Git.
+- **Stay signed in:** with the daily logout on, the session cookie is always persistent until the next 23:30 IST cutoff, with or without "Remember me", so closing the browser no longer signs people out. The login page shows "You stay signed in until 11:30 PM" instead of the checkbox. The 23:30 logout itself and "no idle logout" were already in place.
+- **Chat message popups:** new `MessageAlerts` on every page shows the sender, the group and the text; tapping it opens the chat.
+  - Not shown for the open chat, for muted chats (unless mentioned), during Do not disturb or quiet hours, or while the chat list is on screen.
+  - In the background: a phone notification in the Android app (bridge `notify`) or a browser notification.
+- **Calls:** the incoming-call phone notification is now also sent through the Android app in the background.
+- **Task popup:** the `notification.new` push carries `task {title, assignedBy, dueUtc, hasDueTime, priority}`. The popup shows From / Due / priority, and the same details go into phone and browser notifications.
+- **Layout:** message and task banners share one stack (top, right on computers).
+- **Code changes:**
+  - the "Turn on notifications" prompt (now for messages, calls and tasks) moved to `pages/chat/NotifyPrompt.tsx` and is shown in Chat too;
+  - `ChatProvider` got `isOnScreen(id)`.
+- **Tests:**
+  - new `room/login-and-alerts.mjs` 7/7;
+  - backend 153/153 (cookie test updated to the persistent cookie);
+  - task-collab 15/15, chat 10/10, calls 7/7, android-app-chat 3/3, chat-phone-view 4/4, call-speaker OK.
+  - Production check: one new account with the default password → PASSWORD_CHANGE_REQUIRED, cookie expires 23:30 IST, then logged out.
+- **Deploy:**
+  - pre-check clear;
+  - backups: files in `deploy\_backup-20261123-163044`; database `Oneinsure_v_pre-employees-alerts-20261123-163044.bak` (65.1 MB, verified);
+  - API restart about 12 s, health Healthy; website `npm run build`.
+- **Undo:** copy back `api` and `frontend-dist`; the new accounts can be deactivated in User Management, or restored from the database backup.
+
 ## 22 Nov 2026, 23:19–23:25 IST — DEPLOYED: e-mail policy (meeting and sign-in mails only) and blocked addresses
 
 - **Only these e-mails are sent:**
@@ -205,7 +234,7 @@ Reported from an iPhone (Chrome): inside a chat, the portal header and the botto
 ## 20 Nov 2026 — One more IT user: Mukta Bansal (data only, production)
 
 - Ran a script on production `Oneinsure_v` built the same way as the two earlier IT users. It added employee **Mukta Bansal**: department IT, placeholder code `IT-TEMP-03` (edit it on Employee Management), sign-in `mukta.bansal@oneinsure.com`, role Employee.
-- Password `Pass@123` is stored as a hash only. She must change it at first sign-in. She has full access: no module blocks, so meetings (including scheduling, `meetings.create`), chat, audio calls, and notes and tasks.
+- The default password is stored as a hash only. She must change it at first sign-in. She has full access: no module blocks, so meetings (including scheduling, `meetings.create`), chat, audio calls, and notes and tasks.
 - **Checked:** her permissions on production; a real sign-in on the live site returns 200 with the password change required. Audit rows: EMPLOYEE_CREATED and USER_CREATED.
 - No code or schema change.
 
@@ -256,7 +285,7 @@ Deployed with approval. 0 live meetings and 0 calls; the next meeting was 68 min
 **Users created (script, 13:42 IST):**
 - **Ashit Shetty:** `ashit.shetty@oneinsure.com`, code `IT-TEMP-01`.
 - **Ramakrishna Rao:** `ramakrishna.rao@oneinsure.com`, code `IT-TEMP-02`.
-- **Both:** department IT, designation Sr. BA, role Employee, full access. Password Pass@123, which must be changed at first sign-in. Codes and designation can be edited on Employee Management › Edit employee.
+- **Both:** department IT, designation Sr. BA, role Employee, full access. The default password, which must be changed at first sign-in. Codes and designation can be edited on Employee Management › Edit employee.
 - Audited `EMPLOYEE_CREATED` and `USER_CREATED`.
 
 **Link fix (13:58 IST):**

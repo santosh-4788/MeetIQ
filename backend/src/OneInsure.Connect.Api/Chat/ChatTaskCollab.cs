@@ -175,7 +175,12 @@ public static partial class ChatWorkEndpoints
         await c.ExecuteAsync("""
             INSERT mtg.MeetingNotifications (RecipientUserId, MeetingId, [Type], Title, Body, LinkPath) VALUES (@userId, NULL, @type, @title, @body, @link)
             """, new { userId, type, title = Cut(title, 200), body = body is null ? null : Cut(body.Replace('\n', ' '), 1000), link });
-        await push.ToUsersAsync([userId], "notification.new", new { type, title = Cut(title, 200), body = body is null ? null : Cut(body, 200), link, taskId = t.Id });
+        // The live popup shows the task's details (23 Nov 2026): its title, who assigned it, the deadline and the priority.
+        await push.ToUsersAsync([userId], "notification.new", new
+        {
+            type, title = Cut(title, 200), body = body is null ? null : Cut(body, 200), link, taskId = t.Id,
+            task = new { title = Cut(t.Title, 200), assignedBy = t.AssignerName, dueUtc = t.DueUtc is { } d ? DateTime.SpecifyKind(d, DateTimeKind.Utc) : (DateTime?)null, t.HasDueTime, priority = t.Priority },
+        });
         if (email) await QueueTaskEmailAsync(c, emailOptions, webBaseUrl, userId, type, t, title, emailIntro ?? body);
     }
 

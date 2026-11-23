@@ -5,7 +5,7 @@ import { notifyNotificationsChanged } from '../../api/notifications'
 import { errorMessage } from '../../api/types'
 import { useToast } from '../../components/ui/Toast'
 import { useChat } from './ChatProvider'
-import { bridge } from '../room/androidBridge'
+import { appNotify, bridge } from '../room/androidBridge'
 import { silenced } from './quiet'
 // The call screen is its own chunk: loaded only for people who have calls.
 const CallOverlay = lazy(() => import('./CallOverlay').then((m) => ({ default: m.CallOverlay })))
@@ -381,8 +381,17 @@ export function CallProvider({ children }: { children: ReactNode }) {
         if (mine(c)?.state !== 'RINGING' || activeRef.current?.call.id === c.id) return
         setIncoming((list) => [c, ...list.filter((x) => x.id !== c.id)])
         try {
-          if (document.visibilityState !== 'visible' && 'Notification' in window && Notification.permission === 'granted')
-            new Notification(`Incoming call from ${c.startedBy?.name ?? 'a colleague'}`, { body: c.title ? `Group audio call · ${c.title}` : 'Audio call', tag: `call-${c.id}` })
+          const title = `Incoming call from ${c.startedBy?.name ?? 'a colleague'}`
+          const body = c.title ? `Group audio call · ${c.title}` : 'Audio call'
+          // Android app (1.2.0+) in the background: a phone notification that opens the app on the call (23 Nov 2026).
+          if (document.visibilityState !== 'visible' && appNotify(title, body, '/chat', `call-${c.id}`)) return
+          if (document.visibilityState !== 'visible' && 'Notification' in window && Notification.permission === 'granted') {
+            const n = new Notification(title, { body, tag: `call-${c.id}`, requireInteraction: true })
+            n.onclick = () => {
+              window.focus()
+              n.close()
+            }
+          }
         } catch {
           /* not available */
         }

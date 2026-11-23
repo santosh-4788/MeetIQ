@@ -26,6 +26,8 @@ type ChatContextValue = {
   setPreferences: (p: ChatPreferences) => void
   /** Conversation open on screen (no sound or badge bump for it). */
   setActiveConversation: (id: string | null) => void
+  /** True while this conversation is open and the tab is visible (no popup for it). */
+  isOnScreen: (conversationId: string) => boolean
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null)
@@ -215,6 +217,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const setActiveConversation = useCallback((id: string | null) => {
     active.current = id
   }, [])
+  const isOnScreen = useCallback((id: string) => active.current === id && document.visibilityState === 'visible', [])
 
   const value = useMemo<ChatContextValue>(
     () => ({
@@ -229,8 +232,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       refreshStatus,
       setPreferences,
       setActiveConversation,
+      isOnScreen,
     }),
-    [status, enabled, meId, connection, on, signal, refreshStatus, setPreferences, setActiveConversation],
+    [status, enabled, meId, connection, on, signal, refreshStatus, setPreferences, setActiveConversation, isOnScreen],
   )
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>
 }
@@ -256,6 +260,7 @@ const OFF: ChatContextValue = {
   refreshStatus: () => {},
   setPreferences: () => {},
   setActiveConversation: () => {},
+  isOnScreen: () => false,
 }
 
 /** Chat state for any component (outside the provider: Chat is simply off). */

@@ -1,17 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'motion/react'
-import { AlarmClock, Check, ClipboardCheck, ListTodo, MessageCircle, Share2, UserPlus, X } from 'lucide-react'
+import { AlarmClock, CalendarClock, Check, ClipboardCheck, Flag, ListTodo, MessageCircle, Share2, UserPlus, X } from 'lucide-react'
 import { errorMessage } from '../../../api/types'
 import { workApi } from '../../../api/work'
 import { useToast } from '../../../components/ui/Toast'
 import { useChat } from '../ChatProvider'
 import { appNotify } from '../../room/androidBridge'
 import { silenced } from '../quiet'
+import { PRIORITY, whenText } from './ui'
 import '../chat.css'
 
-type Alert = { key: string; type: string; title: string; body: string | null; link: string; taskId: string | null }
-type Payload = { type?: string; title?: string; body?: string | null; link?: string; taskId?: string }
+type TaskInfo = { title?: string; assignedBy?: string | null; dueUtc?: string | null; hasDueTime?: boolean; priority?: string | null }
+type Alert = { key: string; type: string; title: string; body: string | null; link: string; taskId: string | null; task: TaskInfo | null }
+type Payload = { type?: string; title?: string; body?: string | null; link?: string; taskId?: string; task?: TaskInfo }
+
+/** One line with the task's details for the popup and phone/browser notifications (23 Nov 2026). */
+function detailText(t: TaskInfo | null) {
+  if (!t) return null
+  const parts = [t.assignedBy && `From ${t.assignedBy}`, t.dueUtc && `Due ${whenText(t.dueUtc, !!t.hasDueTime)}`, t.priority && t.priority !== 'MEDIUM' && t.priority in PRIORITY && `${PRIORITY[t.priority as keyof typeof PRIORITY].label} priority`]
+  const line = parts.filter(Boolean).join(' · ')
+  return line || null
+}
 
 const META: Record<string, { label: string; tint: string; icon: typeof ListTodo }> = {
   TASK_ASSIGNED: { label: 'New task for you', tint: '#5856d6', icon: UserPlus },
@@ -65,15 +75,17 @@ export default function TaskAlerts() {
     const type = p.type ?? ''
     if (!META[type] || !p.title) return
     const link = p.link && p.link.startsWith('/') && !p.link.startsWith('//') ? p.link : '/tasks'
-    const a: Alert = { key: `${type}-${p.taskId ?? ''}-${Date.now()}`, type, title: p.title, body: p.body ?? null, link, taskId: p.taskId ?? null }
+    const a: Alert = { key: `${type}-${p.taskId ?? ''}-${Date.now()}`, type, title: p.title, body: p.body ?? null, link, taskId: p.taskId ?? null, task: p.task ?? null }
     setQueue((q) => [...q.filter((x) => !(x.taskId && x.taskId === a.taskId && x.type === a.type)), a].slice(-5))
     const quiet = silenced(prefs.current, 'reminder')
+    const detail = detailText(a.task)
+    const note = [p.body, detail].filter(Boolean).join('\n') || META[type].label
     if (prefs.current?.soundsOn !== false && prefs.current?.availability !== 'DND' && !quiet) ping()
     try {
       // Android app (1.2.0+): a phone notification while the app is in the background.
-      if (!quiet && document.visibilityState === 'hidden' && appNotify(p.title, p.body ?? META[type].label, link, `task-${p.taskId ?? type}`)) return
+      if (!quiet && document.visibilityState === 'hidden' && appNotify(p.title, note, link, `task-${p.taskId ?? type}`)) return
       if (!quiet && document.visibilityState === 'hidden' && 'Notification' in window && Notification.permission === 'granted') {
-        const n = new Notification(p.title, { body: p.body ?? META[type].label, tag: `oic-task-${p.taskId ?? type}` })
+        const n = new Notification(p.title, { body: note, tag: `oic-task-${p.taskId ?? type}` })
         n.onclick = () => {
           window.focus()
           navigate(link)
@@ -114,7 +126,7 @@ export default function TaskAlerts() {
   const btn = 'flex h-10 flex-1 items-center justify-center gap-1 rounded-[12px] bg-black/[0.05] text-[15px] font-semibold text-[var(--ios-blue)] active:bg-black/10 disabled:opacity-40'
 
   return (
-    <div className="ios pointer-events-none fixed inset-x-2 top-[max(0.5rem,env(safe-area-inset-top))] z-[67] flex justify-center sm:inset-x-auto sm:right-3 sm:justify-end" aria-live="polite">
+    <div className="flex w-full justify-center sm:justify-end" aria-live="polite">
       <AnimatePresence mode="wait">
         <motion.div
           key={a.key}
@@ -134,7 +146,16 @@ export default function TaskAlerts() {
             </button>
           </div>
           <p className="mt-2 text-[16px] leading-[21px] font-semibold break-words" data-testid="task-alert-title">{a.title}</p>
-          {a.body && <p className="mt-0.5 line-clamp-2 text-[14px] text-[var(--ios-label2)]">{a.body}</p>}
+          {a.task && (a.task.assignedBy || a.task.dueUtc || (a.task.priority && a.task.priority !== 'MEDIUM')) && (
+            <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[13px] text-[var(--ios-label2)]" data-testid="task-alert-details">
+              {a.task.assignedBy && <span className="inline-flex items-center gap-1"><UserPlus className="size-3.5" />From <b className="font-semibold text-[var(--ios-label)]">{a.task.assignedBy}</b></span>}
+              {a.task.dueUtc && <span className="inline-flex items-center gap-1"><CalendarClock className="size-3.5" />Due <b className="font-semibold text-[var(--ios-label)]">{whenText(a.task.dueUtc, !!a.task.hasDueTime)}</b></span>}
+              {a.task.priority && a.task.priority !== 'MEDIUM' && a.task.priority in PRIORITY && (
+                <span className="inline-flex items-center gap-1 font-semibold" style={{ color: PRIORITY[a.task.priority as keyof typeof PRIORITY].color }}><Flag className="size-3.5" />{PRIORITY[a.task.priority as keyof typeof PRIORITY].label}</span>
+              )}
+            </div>
+          )}
+          {a.body && <p className="mt-1 line-clamp-2 text-[14px] text-[var(--ios-label2)]">{a.body}</p>}
           <div className="mt-3 flex gap-2">
             {a.type === 'TASK_ASSIGNED' && a.taskId && (
               <button type="button" className={btn} disabled={busy} onClick={() => void act(workApi.accept(a.taskId!), 'Accepted')} data-testid="task-alert-accept"><Check className="size-4" />Accept</button>

@@ -10,7 +10,8 @@ import { useToast } from '../../../components/ui/Toast'
 import { cn } from '../../../lib/cn'
 import { parseUtc } from '../../../lib/format'
 import { useChat } from '../ChatProvider'
-import { appNotifyPermission, inAndroidApp } from '../../room/androidBridge'
+import { useBrowserNotifications } from '../NotifyPrompt'
+export { useBrowserNotifications }
 import { TaskEditor } from './Editors'
 import { parseQuickTask } from './quickAdd'
 import { CheckCircle, Empty, Group, PRIORITY, Pill, Row, STATUS, Sheet, whenText } from './ui'
@@ -169,45 +170,6 @@ export function useFocusToggle(onChanged: (t: Task) => void) {
       (e) => toast.error(errorMessage(e, 'That did not work.')),
     )
   }, [onChanged, toast])
-}
-
-const APP_NOTIFY_KEY = 'oic.app.notify'
-const readAppPerm = (): NotificationPermission => {
-  try {
-    return (localStorage.getItem(APP_NOTIFY_KEY) as NotificationPermission | null) ?? 'default'
-  } catch {
-    return 'default'
-  }
-}
-
-/**
- * Notification permission, asked only when the person taps the button (never on page load): the browser's, or inside
- * the Android app (1.2.0+) the app's phone notifications. inApp tells the screens which wording to use.
- */
-export function useBrowserNotifications() {
-  const inApp = inAndroidApp()
-  const supported = inApp || (typeof window !== 'undefined' && 'Notification' in window)
-  const [perm, setPerm] = useState<NotificationPermission | 'unsupported'>(inApp ? readAppPerm() : supported ? Notification.permission : 'unsupported')
-  const ask = useCallback(async () => {
-    if (!supported) return
-    if (inApp) {
-      const ok = await appNotifyPermission()
-      const v: NotificationPermission = ok ? 'granted' : 'denied'
-      setPerm(v)
-      try {
-        localStorage.setItem(APP_NOTIFY_KEY, v)
-      } catch {
-        /* private mode */
-      }
-      return
-    }
-    try {
-      setPerm(await Notification.requestPermission())
-    } catch {
-      /* older Safari: callback form only */
-    }
-  }, [supported, inApp])
-  return { perm, ask, inApp }
 }
 
 export function TaskSettingsSheet({ onClose }: { onClose: () => void }) {

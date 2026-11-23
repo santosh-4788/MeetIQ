@@ -35,7 +35,13 @@ public sealed class AuthApiTests(ApiFixture fx)
         var setCookie = string.Join("\n", r.Headers.GetValues("Set-Cookie"));
         Assert.Matches(new Regex("oic_session=[^;]+;.*httponly", RegexOptions.IgnoreCase), setCookie);
         Assert.Matches(new Regex("oic_session=[^;]+;.*samesite=strict", RegexOptions.IgnoreCase), setCookie);
-        Assert.DoesNotContain("expires", setCookie.Split('\n').First(l => l.StartsWith("oic_session")), StringComparison.OrdinalIgnoreCase); // not "remember me"
+        // 23 Nov 2026: even without "remember me" the sign-in survives closing the browser, but only until the next daily
+        // logout (23:30 IST), so the cookie expires within the next 24 hours.
+        var sessionLine = setCookie.Split('\n').First(l => l.StartsWith("oic_session"));
+        var expires = Regex.Match(sessionLine, "expires=([^;]+)", RegexOptions.IgnoreCase);
+        Assert.True(expires.Success, "session cookie must be persistent");
+        var until = DateTimeOffset.Parse(expires.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        Assert.InRange(until, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(24).AddMinutes(1));
 
         var me = await Json(await c.Http.GetAsync("/api/v1/auth/me"));
         var perms = me.GetProperty("permissions").EnumerateArray().Select(p => p.GetString()).ToList();

@@ -1,49 +1,17 @@
 import { useState, type ReactNode } from 'react'
-import { BellRing, Plus, X } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import type { Conversation } from '../../../api/chat'
 import type { Section } from '../ChatPage'
 import { NoteEditor, TaskEditor } from './Editors'
 import { MyDay } from './MyDay'
 import { NotesView } from './NotesView'
-import { TasksView, useBrowserNotifications } from './TasksView'
+import { TasksView } from './TasksView'
+import { NotifyPrompt } from '../NotifyPrompt'
 import { IosSegmented } from '../IosSegmented'
 import { useChat } from '../ChatProvider'
 import '../chat.css'
 
 const TITLE: Record<'myday' | 'notes' | 'tasks', string> = { myday: 'My Day', notes: 'Notes', tasks: 'Tasks' }
-const PROMPT_KEY = 'oic.tasks.notify-prompt'
-
-function readDismissed() {
-  try {
-    return localStorage.getItem(PROMPT_KEY) === 'no'
-  } catch {
-    return false
-  }
-}
-
-/** One-time, dismissible prompt to allow browser notifications (asked only when tapped, never on load). */
-function NotifyPrompt() {
-  const { perm, ask } = useBrowserNotifications()
-  const [hidden, setHidden] = useState(readDismissed)
-  if (perm !== 'default' || hidden) return null
-  const dismiss = () => {
-    setHidden(true)
-    try {
-      localStorage.setItem(PROMPT_KEY, 'no')
-    } catch {
-      /* private mode */
-    }
-  }
-  return (
-    <div className="mx-auto mb-3 flex max-w-[1100px] items-center gap-3 rounded-[14px] bg-white px-3.5 py-2.5 shadow-xs" data-testid="notify-prompt">
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-[9px] bg-[var(--ios-red)] text-white"><BellRing className="size-4" /></span>
-      <p className="min-w-0 flex-1 text-[14px] leading-[18px]"><b>Never miss a task.</b> <span className="text-[var(--ios-label2)]">Get a notification when someone assigns you a task or sends one for review.</span></p>
-      <button type="button" onClick={() => void ask()} className="ios-btn-filled h-[32px] shrink-0 px-3 text-[14px]" data-testid="notify-prompt-on">Turn on</button>
-      <button type="button" onClick={dismiss} aria-label="Not now" className="text-[var(--ios-gray2)]"><X className="size-4" /></button>
-    </div>
-  )
-}
-
 /** The productivity half of the Chat workspace (Phase 4): My Day, Notes and Tasks, in the iOS look. */
 export default function WorkSpace({
   section, tabs, params, setParams, onOpenChat, onSection, onNewChat, onNewGroup,

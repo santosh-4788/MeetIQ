@@ -6,7 +6,7 @@ import { ApiError } from '../../api/types'
 import { useAuth } from '../../auth/AuthContext'
 import { AuthCard } from '../../layouts/AuthLayout'
 import { Button } from '../../components/ui/Button'
-import { Checkbox, PasswordField, TextField } from '../../components/ui/Field'
+import { PasswordField, TextField } from '../../components/ui/Field'
 import { Alert } from '../../components/ui/Feedback'
 import { validateLoginId } from '../../lib/validation'
 import { DEMO_MODE } from '../../config'
@@ -20,7 +20,6 @@ export function LoginPage() {
 
   const [login, setLogin] = useState('')
   const [password, setPassword] = useState('')
-  const [remember, setRemember] = useState(false)
   const [errors, setErrors] = useState<{ login?: string; password?: string }>({})
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -41,7 +40,7 @@ export function LoginPage() {
     if (!validate()) return
     setSubmitting(true)
     try {
-      const result = await authApi.login({ login: login.trim(), password, rememberMe: remember })
+      const result = await authApi.login({ login: login.trim(), password, rememberMe: true })
       if (result.status === 'MFA_REQUIRED') {
         navigate('/mfa', { state: { mfaToken: result.mfaToken, methods: result.methods, maskedEmail: result.maskedEmail, from } })
       } else if (result.status === 'PASSWORD_CHANGE_REQUIRED') {
@@ -117,7 +116,7 @@ export function LoginPage() {
             error={errors.password}
           />
           <div className="flex items-center justify-between">
-            <Checkbox label="Remember me" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+            <span className="text-[12.5px] text-ink-muted" data-testid="login-stay-note">You stay signed in until 11:30 PM</span>
             <Link to="/forgot-password" className="text-[13px] font-semibold text-brand-700 hover:text-brand-500 hover:underline">
               Forgot password?
             </Link>

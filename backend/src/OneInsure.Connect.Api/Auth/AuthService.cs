@@ -183,7 +183,8 @@ public sealed class AuthService(Db db, Passwords passwords, IClock clock, IOptio
         var now = clock.UtcNow;
         // Session policy (12 Nov 2026): no idle sign-out during the working day; every employee session ends at the next daily
         // logout (23:30 IST). Only when the daily logout is switched off do the fixed absolute limits apply.
-        var absolute = daily.NextCutoffUtc(now) is { } cutoff ? cutoff
+        var nightly = daily.NextCutoffUtc(now);
+        var absolute = nightly is { } cutoff ? cutoff
             : rememberMe ? now.AddDays(Sec.RememberMeDays) : now.AddHours(Sec.SessionAbsoluteHours);
         var idle = Sec.SessionIdleMinutes > 0 ? now.AddMinutes(Sec.SessionIdleMinutes) : absolute;
         var token = Tokens.New();
@@ -191,7 +192,9 @@ public sealed class AuthService(Db db, Passwords passwords, IClock clock, IOptio
             INSERT auth.UserSessions (SessionId, TokenHash, UserId, CreatedUtc, LastSeenUtc, ExpiresUtc, AbsoluteExpiryUtc, IpAddress, UserAgent)
             VALUES (NEWID(), @hash, @userId, @now, @now, @exp, @abs, @ip, @ua)
             """, new { hash = Tokens.Hash(token), userId, now, exp = idle < absolute ? idle : absolute, abs = absolute, ip = client.Ip, ua = client.UserAgent });
-        return (token, rememberMe ? absolute : null);
+        // 23 Nov 2026: with the daily logout on, the sign-in survives closing the browser (persistent cookie) until the
+        // nightly cutoff or a manual logout, with or without "Remember me".
+        return (token, rememberMe || nightly is not null ? absolute : null);
     }
 
     public async Task LogoutAsync(long userId, Guid sessionId, ClientInfo client, CancellationToken ct)

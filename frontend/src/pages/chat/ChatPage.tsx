@@ -20,6 +20,7 @@ import { MentionsList, NO_FILTER, SavedList, SearchFiltersSheet, filterCount, ty
 import { FollowUpPanel, QuietHoursSheet } from './advanced/Settings'
 import { ScheduledListSheet } from './advanced/Scheduled'
 import { isQuietNow } from './quiet'
+import { NotifyPrompt } from './NotifyPrompt'
 import './chat.css'
 
 const WorkSpace = lazy(() => import('./work/WorkSpace'))
@@ -379,6 +380,7 @@ export default function ChatPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto scrollbar-thin" data-testid="chat-list">
+        {!searching && <NotifyPrompt className="mx-3 mt-1 mb-2" />}
         {/* Favourites scroll away with the list, so short laptop screens still show the chats. */}
         {!searching && filter === 'all' && advancedOn && favourites.length > 0 && (
           <div className="px-4 pb-1" data-testid="chat-favourites">
