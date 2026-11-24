@@ -1,10 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { AtSign, BellOff, Check, ChevronRight, Clock3, ListChecks, MessagesSquare, Moon, Pin, Search, ShieldCheck, SlidersHorizontal, SquarePen, Star, Users, X } from 'lucide-react'
+import { AtSign, BellOff, Camera, Check, ChevronRight, Clock3, ListChecks, MessagesSquare, Moon, Pin, Search, ShieldCheck, SlidersHorizontal, SquarePen, Star, Users, X } from 'lucide-react'
 import { advApi, chatApi, type Availability, type ChatMessage, type ChatPerson, type Conversation, type Favourite, type Presence } from '../../api/chat'
 import { errorMessage } from '../../api/types'
 import { Avatar } from '../../components/ui/Avatar'
+import { ProfilePhotoDialog } from '../../components/ProfilePhotoDialog'
 import { useToast } from '../../components/ui/Toast'
 import { cn } from '../../lib/cn'
 import { useChat } from './ChatProvider'
@@ -314,7 +315,7 @@ export default function ChatPage() {
   const page = (
     <div className={cn('oic-chat ios -mx-4 flex overflow-hidden bg-white sm:mx-0 sm:rounded-2xl sm:border sm:border-line sm:shadow-xs', fullScreen && 'oic-chat-full')} data-testid="chat-page">
       {/* Conversation list */}
-      <aside className={cn('flex h-full w-full flex-col bg-white md:w-[340px] md:shrink-0 md:shadow-[inset_-0.5px_0_0_var(--ios-sep)] lg:w-[370px]', active && 'max-md:hidden')} aria-label="Chats">
+      <aside className={cn('flex h-full w-full flex-col bg-white md:w-[340px] md:shrink-0 md:shadow-[inset_-0.5px_0_0_var(--ios-sep)] lg:w-[360px]', active && 'max-md:hidden')} aria-label="Chats">
         <div className="shrink-0 px-4 pt-2.5">
           <div className="flex h-9 items-center justify-between">
             <MeMenu />
@@ -389,7 +390,7 @@ export default function ChatPage() {
               {favourites.map((p) => (
                 <button key={p.id} type="button" onClick={() => void openDirect(p.id)} className="flex w-[58px] shrink-0 flex-col items-center gap-1" title={p.name} data-testid="chat-favourite-item">
                   <span className="relative">
-                    <Avatar name={p.name} size={52} />
+                    <Avatar name={p.name} userId={p.id} size={52} />
                     <PresenceDot presence={p.presence} className="absolute right-0 bottom-0.5 size-3.5 ring-[2.5px] ring-white" />
                   </span>
                   <span className="w-full truncate text-center text-[12px] text-[var(--ios-label2)]">{p.name.split(' ')[0]}</span>
@@ -531,20 +532,20 @@ function ConversationItem({ c, active, meId, onOpen }: { c: Conversation; active
         className={cn('ios-pressable flex w-full items-center gap-3 pl-4 text-left', active && 'bg-[var(--ios-gray5)] hover:bg-[var(--ios-gray5)]')}
         data-testid="chat-item"
       >
-        <span className="py-2"><ConversationAvatar c={c} size={52} /></span>
-        <span className="ios-sep-top flex min-w-0 flex-1 items-center gap-2 self-stretch py-2.5 pr-4">
+        <span className="py-2"><ConversationAvatar c={c} size={50} /></span>
+        <span className="ios-sep-top flex min-w-0 flex-1 items-center gap-2 self-stretch py-2 pr-3">
           <span className="min-w-0 flex-1">
-            <span className="flex items-center gap-2">
-              <span className={cn('min-w-0 flex-1 truncate text-[16px] leading-[21px]', unread ? 'font-bold' : 'font-semibold')} data-testid="chat-item-name">{c.name}</span>
+            <span className="flex items-center gap-1.5">
+              <span className={cn('min-w-0 flex-1 truncate text-[16px] leading-[21px] tracking-[-0.01em] text-[var(--ios-label)]', unread ? 'font-bold' : 'font-semibold')} data-testid="chat-item-name">{c.name}</span>
               {lm && (
-                <span className={cn('shrink-0 text-[14px]', unread ? 'text-[var(--ios-blue)]' : 'text-[var(--ios-gray)]')} title={fullTime(lm.createdUtc)}>
+                <span className={cn('shrink-0 text-[14px] tabular-nums', unread ? 'text-[var(--ios-blue)]' : 'text-[var(--ios-gray)]')} title={fullTime(lm.createdUtc)}>
                   {listTime(lm.createdUtc)}
                 </span>
               )}
-              <ChevronRight className="-mr-1 size-4 shrink-0 text-[var(--ios-gray4)]" aria-hidden />
+              <ChevronRight className="-mr-0.5 size-[15px] shrink-0 text-[var(--ios-gray3)]" strokeWidth={2.4} aria-hidden />
             </span>
             <span className="mt-0.5 flex items-start gap-1.5">
-              <span className={cn('line-clamp-2 min-w-0 flex-1 text-[15px] leading-[20px]', unread ? 'text-[var(--ios-label)]' : 'text-[var(--ios-gray)]')}>
+              <span className={cn('line-clamp-2 min-w-0 flex-1 text-[14.5px] leading-[19px]', unread ? 'text-[var(--ios-label)]' : 'text-[var(--ios-gray)]')}>
                 {lm ? prefix + previewOf(lm.kind, lm.preview, lm.fileName, lm.deleted) : c.type === 'GROUP' ? `${c.memberCount} members` : 'Say hello 👋'}
               </span>
               {(c.mentionsUnread ?? 0) > 0 && (
@@ -592,7 +593,7 @@ function SearchResults({
               <li key={p.id}>
                 <button type="button" onClick={() => onPerson(p)} className="ios-pressable flex w-full items-center gap-3 pl-4 text-left" data-testid="chat-search-person">
                   <span className="relative py-2">
-                    <Avatar name={p.name} size={40} />
+                    <Avatar name={p.name} userId={p.id} size={40} />
                     <PresenceDot presence={p.presence} className="absolute right-0 bottom-2 size-3 ring-2 ring-white" />
                   </span>
                   <span className="ios-sep-top min-w-0 flex-1 self-stretch py-2.5 pr-4">
@@ -634,7 +635,9 @@ const AVAILABILITY: { key: Availability; hint: string }[] = [
   { key: 'AVAILABLE', hint: 'Shown as online while you use the portal' },
   { key: 'BUSY', hint: 'Colleagues see that you are busy' },
   { key: 'DND', hint: 'Colleagues see "Do not disturb"; no chat sounds' },
+  { key: 'BRB', hint: 'Colleagues see that you will be right back' },
   { key: 'AWAY', hint: 'Colleagues see that you are away' },
+  { key: 'APPEAR_OFFLINE', hint: 'Colleagues see you as offline (no last seen); you can still chat' },
 ]
 
 /** My avatar with availability (Available / Busy / Do not disturb / Away), last-seen privacy and sounds. */
@@ -644,6 +647,26 @@ function MeMenu() {
   const [open, setOpen] = useState(false)
   const [quietSheet, setQuietSheet] = useState(false)
   const [scheduledSheet, setScheduledSheet] = useState(false)
+  const [photoDialog, setPhotoDialog] = useState(false)
+  // 24 Nov 2026: the menu opens in its own layer (portal) so the chat panel can no longer cut it off; below or above the
+  // button, whichever has more room, at most 70% of the screen high and scrolling inside.
+  const trigger = useRef<HTMLButtonElement>(null)
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; maxHeight: number } | null>(null)
+  const place = useCallback(() => {
+    const r = trigger.current?.getBoundingClientRect()
+    if (!r) return
+    const vh = window.innerHeight, gap = 6, margin = 12
+    const below = vh - r.bottom - gap - margin, above = r.top - gap - margin
+    const cap = Math.round(vh * 0.7)
+    const left = Math.max(margin, Math.min(r.left, window.innerWidth - 290 - margin))
+    setPos(below >= Math.min(cap, 420) || below >= above ? { left, top: r.bottom + gap, maxHeight: Math.min(cap, below) } : { left, bottom: vh - r.top + gap, maxHeight: Math.min(cap, above) })
+  }, [])
+  useEffect(() => {
+    if (!open) return
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
+  }, [open, place])
   const prefs = chat.preferences
   const name = chat.status?.enabled ? chat.status.me.name : ''
   const advancedOn = !!(chat.status?.enabled && chat.status.advanced)
@@ -659,9 +682,9 @@ function MeMenu() {
     chatApi.preferences(p).then(chat.setPreferences, (e) => toast.error(errorMessage(e, 'Your setting could not be saved.')))
   return (
     <div className="relative">
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-label={`Your status: ${presenceLabel[prefs.availability]}`} aria-expanded={open} className="flex items-center gap-1.5 rounded-full py-0.5 pr-2 pl-0.5 active:opacity-60" data-testid="chat-me">
+      <button ref={trigger} type="button" onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-label={`Your status: ${presenceLabel[prefs.availability]}`} aria-expanded={open} className="flex items-center gap-1.5 rounded-full py-0.5 pr-2 pl-0.5 active:opacity-60" data-testid="chat-me">
         <span className="relative">
-          <Avatar name={name || '?'} size={30} />
+          <Avatar name={name || '?'} userId={chat.meId} size={30} />
           <span className={cn('absolute -right-0.5 -bottom-0.5 size-3 rounded-full ring-2 ring-white', presenceColor[prefs.availability])} />
         </span>
         <span className="text-[15px] text-[var(--ios-blue)]">{presenceLabel[prefs.availability]}</span>
@@ -669,11 +692,22 @@ function MeMenu() {
       </button>
       {quietSheet && <QuietHoursSheet onClose={() => setQuietSheet(false)} />}
       {scheduledSheet && <ScheduledListSheet onClose={() => setScheduledSheet(false)} />}
-      {open && (
-        <>
-          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
-          <div role="menu" className="ios-menu absolute top-10 left-0 z-30 w-[290px]" data-testid="chat-me-menu">
-            <p className="px-4 pt-3 pb-2 text-[13px] text-[var(--ios-label2)]">{name}</p>
+      <ProfilePhotoDialog open={photoDialog} onClose={() => setPhotoDialog(false)} />
+      {open && pos && createPortal(
+        <div className="ios">
+          <div className="fixed inset-0 z-[70]" onClick={() => setOpen(false)} data-testid="chat-me-backdrop" />
+          <div role="menu" className="ios-menu fixed z-[71] w-[290px] overflow-y-auto overscroll-contain" style={{ left: pos.left, top: pos.top, bottom: pos.bottom, maxHeight: pos.maxHeight, overflowY: "auto" }} data-testid="chat-me-menu">
+            <button type="button" className="ios-menu-item" onClick={() => (setOpen(false), setPhotoDialog(true))} data-testid="chat-me-photo">
+              <span className="flex min-w-0 items-center gap-2.5">
+                <Avatar name={name || '?'} userId={chat.meId} size={36} />
+                <span className="min-w-0">
+                  <span className="block truncate font-semibold">{name}</span>
+                  <span className="block text-[12.5px] text-[var(--ios-blue)]">Change profile picture</span>
+                </span>
+              </span>
+              <Camera className="size-[18px] text-[var(--ios-gray)]" />
+            </button>
+            <div className="h-2 bg-black/[0.04]" />
             {AVAILABILITY.map((a) => (
               <button
                 key={a.key}
@@ -720,7 +754,8 @@ function MeMenu() {
               <input type="checkbox" role="switch" checked={prefs.soundsOn} onChange={(e) => void save({ soundsOn: e.target.checked })} className="ios-switch" />
             </label>
           </div>
-        </>
+        </div>,
+        document.body,
       )}
     </div>
   )

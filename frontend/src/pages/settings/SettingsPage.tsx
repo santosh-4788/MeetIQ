@@ -1,10 +1,11 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { motion } from 'motion/react'
-import { Building2, IdCard, KeyRound, Laptop, Lock, LogOut, Mail, MapPin, ShieldCheck, ShieldOff, Smartphone, UserRound } from 'lucide-react'
+import { Building2, Camera, IdCard, KeyRound, Laptop, Lock, LogOut, Mail, MapPin, ShieldCheck, ShieldOff, Smartphone, UserRound } from 'lucide-react'
 import { accountApi, type SessionInfo, type TotpSetup } from '../../api/account'
 import { ApiError } from '../../api/types'
 import { useAuth } from '../../auth/AuthContext'
 import { Avatar } from '../../components/ui/Avatar'
+import { ProfilePhotoDialog } from '../../components/ProfilePhotoDialog'
 import { Button, ButtonLink } from '../../components/ui/Button'
 import { Card, CardHeader } from '../../components/ui/Card'
 import { PageHeader } from '../../components/ui/Data'
@@ -47,6 +48,7 @@ export function SettingsPage() {
 
 function ProfileCard() {
   const { user } = useAuth()
+  const [photo, setPhoto] = useState(false)
   if (!user) return null
   const rows: { icon: ReactNode; label: string; value: string }[] = [
     { icon: <Mail className="size-4" />, label: 'Official email', value: user.email },
@@ -58,7 +60,11 @@ function ProfileCard() {
   return (
     <Card>
       <div className="flex items-center gap-4 border-b border-line px-5 py-5">
-        <Avatar name={user.displayName} src={user.photoUrl} size={56} />
+        <button type="button" onClick={() => setPhoto(true)} className="group relative shrink-0 rounded-full" aria-label="Change profile picture" data-testid="profile-photo-edit">
+          <Avatar name={user.displayName} src={user.photoUrl} userId={user.id} size={64} />
+          <span className="absolute -right-0.5 -bottom-0.5 flex size-6 items-center justify-center rounded-full bg-brand-500 text-white ring-2 ring-surface group-hover:bg-brand-600"><Camera className="size-3.5" /></span>
+        </button>
+        <ProfilePhotoDialog open={photo} onClose={() => setPhoto(false)} />
         <div className="min-w-0">
           <p className="truncate text-[17px] leading-[26px] font-semibold text-ink">{user.displayName}</p>
           <p className="truncate text-[13px] text-ink-secondary">{user.designation}</p>

@@ -178,7 +178,7 @@ function UsersCard() {
                   <tr key={u.id} className={table.row}>
                     <td className={table.td}>
                       <div className="flex items-center gap-3">
-                        <Avatar name={u.displayName} size={34} />
+                        <Avatar name={u.displayName} userId={u.id} size={34} />
                         <div className="min-w-0">
                           <p className="max-w-60 truncate font-semibold text-ink">
                             {u.displayName}
@@ -208,7 +208,7 @@ function UsersCard() {
           <ul className="flex flex-col lg:hidden">
             {data.items.map((u) => (
               <li key={u.id} className="flex items-start gap-3 border-b border-line px-4 py-3.5 last:border-b-0">
-                <Avatar name={u.displayName} size={38} />
+                <Avatar name={u.displayName} userId={u.id} size={38} />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[14px] font-semibold text-ink">
                     {u.displayName}

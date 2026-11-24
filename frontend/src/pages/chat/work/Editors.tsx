@@ -206,7 +206,7 @@ export function PersonPicker({ onPick, onClose }: { onPick: (p: ChatPerson) => v
         {items?.length === 0 && <p className="px-4 py-3 text-[15px] text-[var(--ios-gray)]">No colleagues found.</p>}
         {items?.slice(0, 30).map((p) => (
           <button key={p.id} type="button" onClick={() => onPick(p)} className="ios-pressable flex w-full items-center gap-3 px-4 py-2 text-left" data-testid="person-option">
-            <Avatar name={p.name} size={34} />
+            <Avatar name={p.name} userId={p.id} size={34} />
             <span className="min-w-0">
               <span className="block truncate text-[16px]">{p.name}</span>
               <span className="block truncate text-[13px] text-[var(--ios-gray)]">{[p.code, p.designation].filter(Boolean).join(' · ')}</span>

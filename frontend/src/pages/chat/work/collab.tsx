@@ -50,7 +50,7 @@ export function AssigneePicker({ title = 'Assign to', selected, onDone, onClose,
         <div className="mt-3 flex flex-wrap gap-1.5">
           {picked.map((p) => (
             <button key={p.id} type="button" onClick={() => toggle(p)} className="inline-flex h-8 items-center gap-1.5 rounded-full bg-white pr-2.5 pl-1 text-[14px] shadow-xs active:opacity-60" aria-label={`Remove ${p.name}`}>
-              <Avatar name={p.name} size={24} />{p.name.split(' ')[0]}<X className="size-3.5 text-[var(--ios-gray)]" />
+              <Avatar name={p.name} userId={p.id} size={24} />{p.name.split(' ')[0]}<X className="size-3.5 text-[var(--ios-gray)]" />
             </button>
           ))}
         </div>
@@ -62,7 +62,7 @@ export function AssigneePicker({ title = 'Assign to', selected, onDone, onClose,
           const on = picked.some((x) => x.id === p.id)
           return (
             <button key={p.id} type="button" onClick={() => toggle(p)} className="ios-pressable flex w-full items-center gap-3 px-4 py-2 text-left" aria-pressed={on} data-testid="assignee-option">
-              <Avatar name={p.name} size={36} />
+              <Avatar name={p.name} userId={p.id} size={36} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[16px]">{p.name}</span>
                 <span className="block truncate text-[13px] text-[var(--ios-gray)]">{[p.designation, p.department].filter(Boolean).join(' · ') || p.code}</span>
@@ -440,7 +440,7 @@ function ActivityLine({ a }: { a: Activity }) {
   if (a.kind === 'COMMENT')
     return (
       <li className={cn('flex gap-2', a.actor?.isMe && 'flex-row-reverse')} data-testid="activity-comment">
-        <Avatar name={a.actor?.name ?? '?'} size={26} />
+        <Avatar name={a.actor?.name ?? '?'} userId={a.actor?.id} size={26} />
         <div className={cn('max-w-[80%] rounded-[16px] px-3 py-1.5', a.actor?.isMe ? 'bg-[var(--ios-blue)] text-white' : 'bg-[var(--ios-gray6)]')}>
           {!a.actor?.isMe && <p className="text-[12px] font-semibold text-[var(--ios-label2)]">{a.actor?.name}</p>}
           <p className="text-[15px] leading-[20px] break-words whitespace-pre-wrap">{a.body}</p>

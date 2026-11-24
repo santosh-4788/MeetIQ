@@ -154,7 +154,7 @@ export function EmployeesPage() {
                     <tr key={e.id} className={cn(table.row, 'cursor-pointer')} onClick={() => setViewing(e.id)}>
                       <td className={table.td}>
                         <div className="flex items-center gap-3">
-                          <Avatar name={e.displayName} size={34} />
+                          <Avatar name={e.displayName} userId={e.id} size={34} />
                           <div className="min-w-0">
                             <button type="button" onClick={(ev) => (ev.stopPropagation(), setViewing(e.id))} className="block max-w-56 truncate text-left font-semibold text-ink hover:text-brand-700 hover:underline">
                               {e.displayName}
@@ -187,7 +187,7 @@ export function EmployeesPage() {
               {data.items.map((e) => (
                 <li key={e.id} className="border-b border-line last:border-b-0">
                   <button type="button" onClick={() => setViewing(e.id)} className="flex w-full items-start gap-3 px-4 py-3.5 text-left transition-colors hover:bg-surface-muted">
-                    <Avatar name={e.displayName} size={38} />
+                    <Avatar name={e.displayName} userId={e.id} size={38} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-[14px] font-semibold text-ink">{e.displayName}</span>
                       <span className="block truncate text-[12px] text-ink-secondary">{e.employeeCode} · {e.designation}</span>

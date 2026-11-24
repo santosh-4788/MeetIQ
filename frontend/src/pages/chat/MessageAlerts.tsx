@@ -10,7 +10,7 @@ import { silenced } from './quiet'
 import './chat.css'
 
 type Info = { name: string; group: boolean; muted: boolean; at: number }
-type Banner = { key: string; conversationId: string; sender: string; group: string | null; text: string; file: boolean; count: number }
+type Banner = { key: string; conversationId: string; senderId: string | null; sender: string; group: string | null; text: string; file: boolean; count: number }
 
 /** What the banner says about a message (text, or the file's name). */
 function preview(m: ChatMessage) {
@@ -93,7 +93,7 @@ export default function MessageAlerts() {
           setQueue((q) => {
             // One banner per chat: a newer message replaces the older one and counts it.
             const prev = q.find((b) => b.conversationId === m.conversationId)
-            const b: Banner = { key: `${m.conversationId}-${m.id}`, conversationId: m.conversationId, sender, group, text, file, count: (prev?.count ?? 0) + 1 }
+            const b: Banner = { key: `${m.conversationId}-${m.id}`, conversationId: m.conversationId, senderId: m.senderId, sender, group, text, file, count: (prev?.count ?? 0) + 1 }
             return [b, ...q.filter((x) => x.conversationId !== m.conversationId)].slice(0, 3)
           })
         })
@@ -130,7 +130,7 @@ export default function MessageAlerts() {
         >
           <div className="flex items-start gap-3 p-3.5">
             <button type="button" onClick={open} className="flex min-w-0 flex-1 items-start gap-3 text-left" data-testid="message-alert-open" aria-label={`Open chat with ${top.sender}`}>
-              <Avatar name={top.sender} size={40} />
+              <Avatar name={top.sender} userId={top.senderId} size={40} />
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-1.5 text-[12px] font-medium tracking-wide text-[var(--ios-label2)] uppercase">
                   <MessageCircle className="size-3.5 text-[var(--ios-green)]" />

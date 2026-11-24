@@ -495,7 +495,7 @@ function ParticipantsCard({ m, tz, reload }: { m: MeetingDetail; tz: string; rel
           const removable = editable && p.role !== 'HOST' && p.type !== 'CUSTOMER'
           return (
             <li key={p.id} className="flex items-start gap-3 px-5 py-3">
-              <Avatar name={p.name} size={34} />
+              <Avatar name={p.name} userId={p.employeeId} size={34} />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13.5px] font-semibold text-ink">
                   {p.name}

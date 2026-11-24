@@ -1,4 +1,4 @@
-import type { ChatMember, ChatMessage, Presence, PresenceState } from '../../api/chat'
+import type { Availability, ChatMember, ChatMessage, Presence, PresenceState } from '../../api/chat'
 import { DEFAULT_TIME_ZONE } from '../../config'
 import { parseUtc } from '../../lib/format'
 
@@ -37,21 +37,25 @@ export function fullTime(iso: string) {
   return new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: tz }).format(parseUtc(iso))
 }
 
-export const presenceLabel: Record<PresenceState, string> = {
+export const presenceLabel: Record<PresenceState | Availability, string> = {
   AVAILABLE: 'Available',
   BUSY: 'Busy',
   DND: 'Do not disturb',
   AWAY: 'Away',
+  BRB: 'Be right back',
+  APPEAR_OFFLINE: 'Appear offline',
   IN_MEETING: 'In a meeting',
   IN_CALL: 'In a call',
   OFFLINE: 'Offline',
 }
 
-export const presenceColor: Record<PresenceState, string> = {
+export const presenceColor: Record<PresenceState | Availability, string> = {
   AVAILABLE: 'bg-success',
   BUSY: 'bg-danger',
   DND: 'bg-danger',
   AWAY: 'bg-warning',
+  BRB: 'bg-warning',
+  APPEAR_OFFLINE: 'bg-ink-muted/50',
   IN_MEETING: 'bg-brand-500',
   IN_CALL: 'bg-brand-500',
   OFFLINE: 'bg-ink-muted/50',

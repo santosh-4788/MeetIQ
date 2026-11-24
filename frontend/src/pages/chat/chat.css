@@ -422,3 +422,10 @@ html.oic-chat-locked body {
   .ios-sheet-up, .ios-pop, .ios-fade, .ios-push, .ios-check-pop { animation: none; }
 }
 }
+
+/* 24 Nov 2026: on computers the Chat page fills the window (header 4rem + 2 x 10 px margin). */
+@media (min-width: 768px) {
+  .oic-main-chat .oic-chat {
+    height: calc(100dvh - 4rem - 20px);
+  }
+}

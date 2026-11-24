@@ -1,5 +1,41 @@
 # Changelog
 
+## 24 Nov 2026, 15:21–15:30 IST — DEPLOYED: chat enhancement (approved after screenshot review)
+
+- **Bug fixes:**
+  - Chats always open at the latest message. The list follows every size change (box, each block, each picture as it loads), browser scroll anchoring is off, and "stop following" happens only on a real scroll up. Pictures keep a placeholder until loaded.
+  - The availability menu opens in a portal: below or above the button, at most 70 vh, scrolling inside.
+- **Look:**
+  - Chat uses the whole window on computers (10 px margin).
+  - iOS-style chat list: 50 px picture, name, time, chevron, two-line preview, unread badge.
+  - Designations are no longer shown in the chat list or header (user decision); they stay in contact info and people search.
+- **New:**
+  - Statuses "Be right back" and "Appear offline" (others see Offline, no last seen).
+  - Own profile picture (`Auth/ProfilePhotoEndpoints.cs`): upload, preview, replace, remove.
+    - Checks: JPG/PNG/WEBP by content, 2 MB, shrunk to 256 px in the browser.
+    - Storage: private chat storage, recorded in `org.Employees.PhotoPath`.
+    - Live push `photo.changed`; pictures shown on every avatar.
+  - Shared media and documents per chat (search, paging).
+  - "Call back" on missed calls (only for the person who missed it).
+  - "Start a video meeting" from a chat: instant meeting, link posted in the chat.
+- **Database:** V034 (`Availability` VARCHAR(10)→(20) + BRB/APPEAR_OFFLINE in the CHECK), applied alone. Rollback script tested.
+- **Data:**
+  - two employees got the requested designations (Sr Project Manager and Tech Head). They are new designations, because "Sr. BA" is shared; matched by e-mail and PublicId.
+  - The other Sr. BA employees and the similarly named colleague are unchanged (verified).
+  - The script is kept with the backup.
+- **Tests:**
+  - new `room/chat-premium.mjs` 15/15 (screenshots in `Chat_UI_Review/`);
+  - backend 160/160 (new `ChatProfileTests`);
+  - chat 10/10, calls 7/7, advanced 8/8, task-collab 15/15, login-and-alerts 7/7, android-app-chat 3/3, chat-phone-view 4/4, ios-look 9/9, call-speaker OK, tasks 7/7.
+- **Deploy:**
+  - pre-check clear;
+  - backups: files in `deploy\_backup-20261124-152124`; database `Oneinsure_v_pre-chatpremium-20261124-152124.bak` (68.1 MB, verified);
+  - V034 applied alone; API restart 7 s, health Healthy; website `npm run build`; `/people/photos` answers 401 without sign-in.
+- **Undo:**
+  - copy back `api` (service stopped) and `frontend-dist`;
+  - run `database/rollback/V034…`;
+  - designations: point the two employees back to "Sr. BA", or restore from the backup.
+
 ## 23 Nov 2026, 16:30–16:40 IST — DEPLOYED: employee logins from EmployeeDetails.xlsx; stay signed in until 23:30; live message, call and task popups
 
 - **Employees (production data):**

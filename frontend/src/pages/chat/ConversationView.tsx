@@ -3,8 +3,11 @@ import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useM
 import {
   Archive, ArchiveRestore, ArrowDown, ArrowUp, Ban, Bell, BellOff, Check, CheckCheck, Clock, Copy, CornerUpLeft, Download, ExternalLink, File as FileIcon, FileSpreadsheet,
   ChevronLeft, FileText, Forward, Image as ImageIcon, Info, ListTodo, LoaderCircle, MailWarning, MoreHorizontal, Paperclip, Pencil, Phone, Pin, PinOff, Plus, Presentation, RotateCw, Search,
-  ShieldAlert, Smile, SmilePlus, Star, StarOff, Trash2, X, CalendarClock, Clock3,
+  ShieldAlert, Smile, SmilePlus, Star, StarOff, Trash2, X, CalendarClock, Clock3, Video,
 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { useAuth } from '../../auth/AuthContext'
+import { meetingsApi } from '../../api/meetings'
 import {
   chatApi, fileUrl, newClientId, uploadFile, type ChatMember, type ChatMessage, type ChatStatus, type Conversation, type Presence, type ReplyRef,
 } from '../../api/chat'
@@ -80,6 +83,20 @@ export function ConversationView({
 }) {
   const chat = useChat()
   const calls = useCalls()
+  const { can } = useAuth()
+  const navigate = useNavigate()
+  const canMeet = can('meetings.create')
+  // Message-to-meeting (24 Nov 2026): an instant video meeting for this chat; its join link is posted here, then I join.
+  async function startMeeting() {
+    try {
+      const title = conversation.type === 'GROUP' ? conversation.name : 'Meeting with ' + conversation.name
+      const r = await meetingsApi.instant({ title, category: 'GROUP' })
+      await chatApi.send(id, `🎥 Video meeting started: ${title}\nJoin: ${r.link.url}`, newClientId())
+      navigate('/meetings/' + r.id + '/room', { state: { video: true, invite: false, customer: null, guests: [], noCustomer: true } })
+    } catch (e) {
+      toast.error(errorMessage(e, 'The meeting could not be started.'))
+    }
+  }
   const toast = useToast()
   const meId = chat.meId!
   const id = conversation.id
@@ -139,6 +156,7 @@ export function ConversationView({
   const fileInput = useRef<HTMLInputElement>(null)
   const keepScroll = useRef<number | null>(null)
   const stickBottom = useRef(true)
+  const lastTop = useRef(0) // last scroll position: tells a real scroll up from content growing
   const lastRead = useRef(conversation.readSeq)
   const firstUnread = useRef<number | null>(null)
   const lastTypingSent = useRef(0)
@@ -281,36 +299,65 @@ export function ConversationView({
     if (!el) return
     if (keepScroll.current !== null) {
       el.scrollTop = el.scrollHeight - keepScroll.current
+      lastTop.current = el.scrollTop
       keepScroll.current = null
       return
     }
     if (highlight !== null) {
       const target = el.querySelector<HTMLElement>(`[data-seq="${highlight}"]`)
       if (target) {
+        stickBottom.current = false // a jump to a found message must not be pulled back to the bottom by late images
         target.scrollIntoView({ block: 'center' })
         const t = window.setTimeout(() => setHighlight(null), 2200)
         return () => window.clearTimeout(t)
       }
     }
-    if (stickBottom.current) el.scrollTop = el.scrollHeight
+    if (stickBottom.current) {
+      el.scrollTop = el.scrollHeight
+      lastTop.current = el.scrollTop
+    }
   }, [messages, uploads.length, highlight, typing])
 
-  // The keyboard opening (or the window shrinking) makes the list shorter: stay on the newest message when we were there.
+  // Stay on the newest message while we are there (24 Nov 2026 fix: a chat sometimes opened above its latest messages).
+  // The first scroll happens before images, reply previews, receipts and the pinned bar have their final height, so the
+  // content keeps growing afterwards. Follow every change in size: the scroll box itself (keyboard, window), each block
+  // inside it (watched as they are added), and every image or file preview as it finishes loading.
   useEffect(() => {
     const el = scroller.current
-    if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => {
-      if (stickBottom.current) el.scrollTop = el.scrollHeight
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
+    if (!el) return
+    const follow = () => {
+      if (stickBottom.current) {
+        el.scrollTop = el.scrollHeight
+        lastTop.current = el.scrollTop
+      }
+    }
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(follow) : null
+    const watch = () => {
+      if (!ro) return
+      ro.disconnect()
+      ro.observe(el)
+      for (const child of Array.from(el.children)) ro.observe(child)
+    }
+    watch()
+    const mo = typeof MutationObserver !== 'undefined' ? new MutationObserver(() => (watch(), follow())) : null
+    mo?.observe(el, { childList: true })
+    el.addEventListener('load', follow, true) // images (load does not bubble: capture it)
+    return () => {
+      ro?.disconnect()
+      mo?.disconnect()
+      el.removeEventListener('load', follow, true)
+    }
   }, [id])
 
   const onScroll = () => {
     const el = scroller.current
     if (!el) return
     const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
-    stickBottom.current = bottom && !hasNewer
+    // Stop following the bottom only when the person really scrolled up (the position went up), not when a picture or
+    // a preview above made the content taller (24 Nov 2026 fix).
+    if (el.scrollTop < lastTop.current - 2) stickBottom.current = bottom && !hasNewer
+    else if (bottom) stickBottom.current = !hasNewer
+    lastTop.current = el.scrollTop
     setAtBottom(bottom)
     if (bottom) setNewBelow(0)
     if (el.scrollTop < 120 && hasOlder && !loadingOlder) void loadOlder()
@@ -640,7 +687,7 @@ export function ConversationView({
         data-testid="chat-view"
       >
         {/* Header */}
-        <header className="ios-bar ios-hairline-b relative z-10 flex h-[60px] shrink-0 items-center gap-1 px-1.5 max-md:h-[74px] sm:px-3">
+        <header className="ios-bar ios-hairline-b relative z-10 flex h-[56px] shrink-0 items-center gap-1 px-1.5 max-md:h-[74px] sm:px-3">
           <button type="button" onClick={onBack} aria-label="Back to chats" className="flex h-11 shrink-0 items-center pr-1 text-[17px] text-[var(--ios-blue)] active:opacity-50 md:hidden" data-testid="chat-back">
             <ChevronLeft className="size-[30px]" strokeWidth={2.2} /> <span className="-ml-1 max-[380px]:hidden">Chats</span>
           </button>
@@ -666,6 +713,7 @@ export function ConversationView({
                 onClose={() => setMenuOpen(false)}
                 onLeaveView={onBack}
                 onSearch={phone ? () => setShowSearch(true) : undefined}
+                onMeeting={canMeet && canSend ? () => void startMeeting() : undefined}
                 onFollowUp={tasksOn ? () => setFollowUp({ kind: 'conversation', conversationId: id, title: conversation.name }) : undefined}
                 favourite={advancedOn && conversation.type === 'DIRECT' && onToggleFavourite ? { on: isFavourite, toggle: onToggleFavourite } : undefined}
                 onScheduled={advancedOn ? () => setScheduledList(true) : undefined}
@@ -684,7 +732,7 @@ export function ConversationView({
         {advancedOn && <PinnedBar conversationId={id} onJump={(seq) => void jumpTo(seq)} canUnpin={(p: PinItem) => p.pinnedBy.id === meId || conversation.type === 'DIRECT' || conversation.role === 'ADMIN'} />}
 
         {/* Messages */}
-        <div ref={scroller} onScroll={onScroll} className="flex-1 overflow-x-hidden overflow-y-auto px-3 py-3 scrollbar-thin sm:px-6" data-testid="chat-messages" role="log" aria-live="polite" aria-relevant="additions">
+        <div ref={scroller} onScroll={onScroll} className="flex-1 overflow-x-hidden overflow-y-auto px-3 py-3 scrollbar-thin [overflow-anchor:none] sm:px-6" data-testid="chat-messages" role="log" aria-live="polite" aria-relevant="additions">
           {loading && (
             <div className="flex h-full items-center justify-center text-ink-muted">
               <LoaderCircle className="size-6 animate-spin" aria-label="Loading messages" />
@@ -731,6 +779,7 @@ export function ConversationView({
                     )}
                     <MessageRow
                       m={m}
+                      onCallBack={conversation.type === 'DIRECT' && calls.enabled && canSend && !calls.active ? () => calls.start(id) : undefined}
                       mine={m.senderId === meId}
                       isGroup={conversation.type === 'GROUP'}
                       groupedWithPrev={grouped}
@@ -1078,7 +1127,7 @@ function fileIcon(category: string) {
 
 function MessageRow({
   m, mine, isGroup, groupedWithPrev, groupedWithNext, phone, fresh, tick, highlighted, selected, reacting, meId,
-  onSelect, onReact, onOpenReactions, onCloseReactions, onReply, onCopy, onForward, onEdit, onDelete, onRetry, onDiscard, onJumpToReply, onOpenImage, onFollowUp, onSave, onPin, meName, receipt,
+  onSelect, onReact, onOpenReactions, onCloseReactions, onReply, onCopy, onForward, onEdit, onDelete, onRetry, onDiscard, onJumpToReply, onOpenImage, onFollowUp, onSave, onPin, meName, receipt, onCallBack,
 }: {
   m: ViewMessage
   mine: boolean
@@ -1110,12 +1159,19 @@ function MessageRow({
   onPin?: () => void
   meName?: string | null
   receipt?: { tone: 'read' | 'delivered' | 'sent'; text: string } | null
+  /** Direct chat with calls on: a missed / unanswered call line gets a Call back button (24 Nov 2026). */
+  onCallBack?: () => void
 }) {
   const [morePicker, setMorePicker] = useState(false)
   if (m.kind === 'SYSTEM')
     return (
-      <div className="my-2.5 flex justify-center" data-seq={m.seq}>
+      <div className="my-2.5 flex flex-wrap items-center justify-center gap-y-1" data-seq={m.seq}>
         <span className="max-w-[85%] text-center text-[12.5px] font-medium text-[var(--ios-gray)]" data-testid="chat-system">{m.body}</span>
+        {onCallBack && /^📞 (Missed|.* not answered|.* declined)/.test(m.body ?? '') && !(meName && (m.body ?? '').includes(`from ${meName}`)) && (
+          <button type="button" onClick={onCallBack} className="ml-2 inline-flex items-center gap-1 rounded-full bg-[var(--ios-green)] px-2.5 py-0.5 text-[12px] font-semibold text-white active:opacity-70" data-testid="chat-call-back">
+            <Phone className="size-3" /> Call back
+          </button>
+        )}
       </div>
     )
   const f = m.file
@@ -1131,7 +1187,7 @@ function MessageRow({
       data-mine={mine || undefined}
     >
       {!mine && isGroup && (
-        <span className="mr-2 w-7 shrink-0 self-end">{!groupedWithNext && <Avatar name={m.senderName ?? '?'} size={28} />}</span>
+        <span className="mr-2 w-7 shrink-0 self-end">{!groupedWithNext && <Avatar name={m.senderName ?? '?'} userId={m.senderId} size={28} />}</span>
       )}
       <div className={cn('relative flex min-w-0 flex-col', f && !imageOnly ? 'max-w-[min(86%,560px)]' : 'max-w-[min(76%,560px)]', mine ? 'items-end' : 'items-start')}>
         {!mine && isGroup && !groupedWithPrev && <p className="mb-0.5 ml-3 text-[12px] text-[var(--ios-gray)]">{m.senderName}</p>}
@@ -1378,7 +1434,7 @@ function FileBlock({ f, mine, onOpenImage, imageOnly }: { f: NonNullable<ChatMes
   if (f.category === 'IMAGE')
     return (
       <button type="button" onClick={onOpenImage} className={cn('block overflow-hidden', imageOnly ? 'rounded-[18px]' : '-mx-1.5 mt-0.5 mb-1 rounded-[14px]')} aria-label={`Open image ${f.name}`}>
-        <img src={fileUrl(f.id, true)} alt={f.name} loading="lazy" className="max-h-[300px] max-w-[min(260px,100%)] object-cover" data-testid="chat-image" />
+        <ChatImage src={fileUrl(f.id, true)} alt={f.name} />
       </button>
     )
   return (
@@ -1445,7 +1501,7 @@ function InChatSearch({ conversationId, onPick, onClose }: { conversationId: str
   )
 }
 
-function ConversationMenu({ c, onClose, onLeaveView, onSearch, onFollowUp, favourite, onScheduled }: {
+function ConversationMenu({ c, onClose, onLeaveView, onSearch, onFollowUp, favourite, onScheduled, onMeeting }: {
   c: Conversation
   onClose: () => void
   onLeaveView: () => void
@@ -1453,6 +1509,7 @@ function ConversationMenu({ c, onClose, onLeaveView, onSearch, onFollowUp, favou
   onFollowUp?: () => void
   favourite?: { on: boolean; toggle: () => void }
   onScheduled?: () => void
+  onMeeting?: () => void
 }) {
   const toast = useToast()
   const ref = useRef<HTMLDivElement>(null)
@@ -1488,6 +1545,11 @@ function ConversationMenu({ c, onClose, onLeaveView, onSearch, onFollowUp, favou
           Scheduled messages <Clock3 className={icon} />
         </button>
       )}
+      {onMeeting && (
+        <button role="menuitem" type="button" className="ios-menu-item" onClick={() => (onClose(), onMeeting())} data-testid="chat-start-meeting">
+          Start a video meeting <Video className={icon} />
+        </button>
+      )}
       {onFollowUp && (
         <button role="menuitem" type="button" className="ios-menu-item" onClick={() => (onClose(), onFollowUp())} data-testid="chat-follow-up">
           Follow-up task <ListTodo className={icon} />
@@ -1521,5 +1583,21 @@ function ConversationMenu({ c, onClose, onLeaveView, onSearch, onFollowUp, favou
         {c.archived ? 'Unarchive' : 'Archive chat'} {c.archived ? <ArchiveRestore className={icon} /> : <Archive className={icon} />}
       </button>
     </div>
+  )
+}
+
+/** A chat picture that keeps a placeholder box until it has loaded (24 Nov 2026), so a lazily loaded picture never has zero
+ *  height and the list does not jump when it appears. */
+function ChatImage({ src, alt }: { src: string; alt: string }) {
+  const [loaded, setLoaded] = useState(false)
+  return (
+    <img
+      src={src}
+      alt={alt}
+      loading="lazy"
+      onLoad={() => setLoaded(true)}
+      className={cn('max-h-[300px] max-w-[min(260px,100%)] object-cover', !loaded && 'h-[180px] w-[240px] max-w-full animate-pulse bg-[var(--ios-gray5)]')}
+      data-testid="chat-image"
+    />
   )
 }

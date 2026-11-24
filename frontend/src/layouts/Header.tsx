@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'motion/react'
-import { Bell, CalendarClock, CheckCheck, ChevronDown, ChevronRight, KeyRound, LoaderCircle, LogOut, Menu, Plus, Search, UserRound } from 'lucide-react'
+import { Bell, CalendarClock, Camera, CheckCheck, ChevronDown, ChevronRight, KeyRound, LoaderCircle, LogOut, Menu, Plus, Search, UserRound } from 'lucide-react'
 import { NOTIFICATIONS_CHANGED, notificationsApi, type AppNotification } from '../api/notifications'
 import { useAuth } from '../auth/AuthContext'
 import { Avatar } from '../components/ui/Avatar'
+import { ProfilePhotoDialog } from '../components/ProfilePhotoDialog'
 import { ButtonLink, IconButton } from '../components/ui/Button'
 import { Badge } from '../components/ui/Feedback'
 import { DEFAULT_TIME_ZONE, DEMO_MODE } from '../config'
@@ -365,17 +366,19 @@ function BellDropdown({ items, unread, onItem, onMarkAll, onOpen, loading, error
 function ProfileMenu() {
   const { user, signOut } = useAuth()
   const [open, setOpen] = useState(false)
+  const [photoOpen, setPhotoOpen] = useState(false)
   const ref = useOutsideClose<HTMLDivElement>(open, () => setOpen(false))
   if (!user) return null
   return (
     <div ref={ref} className="relative">
+      <ProfilePhotoDialog open={photoOpen} onClose={() => setPhotoOpen(false)} />
       <button
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-haspopup="menu"
         className="flex items-center gap-2.5 rounded-md py-1 pr-1.5 pl-1 transition-colors hover:bg-navy-900/5 sm:pr-2"
       >
-        <Avatar name={user.displayName} src={user.photoUrl} size={34} />
+        <Avatar name={user.displayName} src={user.photoUrl} userId={user.id} size={34} />
         <span className="hidden min-w-0 text-left lg:block">
           <span className="block max-w-36 truncate text-[13px] leading-[18px] font-semibold text-ink">{user.displayName}</span>
           <span className="block max-w-36 truncate text-[11.5px] leading-4 text-ink-secondary">{user.department}</span>
@@ -386,7 +389,7 @@ function ProfileMenu() {
         {open && (
           <motion.div {...dropdownMotion} role="menu" className="absolute right-0 mt-2 w-64 overflow-hidden rounded-lg border border-line bg-surface shadow-overlay">
             <div className="flex items-center gap-3 border-b border-line p-4">
-              <Avatar name={user.displayName} size={40} />
+              <Avatar name={user.displayName} userId={user.id} size={40} />
               <div className="min-w-0">
                 <p className="truncate text-[13.5px] font-semibold">{user.displayName}</p>
                 <p className="truncate text-[12px] text-ink-secondary">{user.designation}</p>
@@ -395,6 +398,9 @@ function ProfileMenu() {
             </div>
             <div className="p-1.5">
               <MenuLink to="/settings" icon={<UserRound className="size-4" />} onClick={() => setOpen(false)}>My profile &amp; settings</MenuLink>
+              <button role="menuitem" type="button" onClick={() => (setOpen(false), setPhotoOpen(true))} className="flex w-full items-center gap-2.5 rounded-sm px-2.5 py-2 text-[13px] font-medium text-ink hover:bg-canvas" data-testid="menu-profile-photo">
+                <Camera className="size-4" /> Change profile picture
+              </button>
               <MenuLink to="/change-password" icon={<KeyRound className="size-4" />} onClick={() => setOpen(false)}>Change password</MenuLink>
             </div>
             <div className="border-t border-line p-1.5">

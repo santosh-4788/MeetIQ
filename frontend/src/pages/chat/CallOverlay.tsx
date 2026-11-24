@@ -76,7 +76,7 @@ export function CallOverlay() {
                 <div className="flex items-center gap-3 p-3.5">
                   <span className="relative flex size-[52px] shrink-0 items-center justify-center">
                     <span className="absolute inset-0 animate-ping rounded-full bg-white/15" />
-                    <Avatar name={c.startedBy?.name ?? '?'} size={52} className="ring-2 ring-white/30" />
+                    <Avatar name={c.startedBy?.name ?? '?'} userId={c.startedBy?.id} size={52} className="ring-2 ring-white/30" />
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="text-[13px] text-white/65">{c.type === 'GROUP' || c.title ? 'Group audio call' : 'OneInsure audio call'}</p>
@@ -126,7 +126,7 @@ function IncomingPhone({ c, more }: { c: Call; more: number }) {
       <p className="mt-0.5 max-w-full truncate text-[15px] text-white/60">{c.title ? c.title : c.startedBy?.code ? `Employee code ${c.startedBy.code}` : 'is calling you'}</p>
       <span className="relative mt-10 flex size-[112px] items-center justify-center">
         <span className="absolute inset-0 animate-ping rounded-full bg-white/10" />
-        <Avatar name={c.startedBy?.name ?? '?'} size={112} className="ring-4 ring-white/15" />
+        <Avatar name={c.startedBy?.name ?? '?'} userId={c.startedBy?.id} size={112} className="ring-4 ring-white/15" />
       </span>
       {more > 0 && <p className="mt-6 text-[13px] text-white/60">+{more} more call{more > 1 ? 's' : ''} waiting</p>}
       <div className="flex-1" />
@@ -196,7 +196,7 @@ function ActivePanel({ a, meId, phone }: { a: ActiveCall; meId: string | null; p
         return phone ? (
           <li key={p.id} className="flex w-[72px] flex-col items-center gap-1">
             <span className={cn('rounded-full ring-[3px] transition-[box-shadow]', speaking ? 'ring-[#34c759] shadow-[0_0_0_6px_rgb(52_199_89/0.25)]' : 'ring-transparent')}>
-              <Avatar name={p.name} size={52} className="ring-1 ring-white/25" />
+              <Avatar name={p.name} userId={p.id} size={52} className="ring-1 ring-white/25" />
             </span>
             <span className="w-full truncate text-[12px]">{me ? 'You' : p.name.split(' ')[0]}</span>
             <span className="h-3.5 text-[11px] text-white/55">{state}</span>
@@ -204,7 +204,7 @@ function ActivePanel({ a, meId, phone }: { a: ActiveCall; meId: string | null; p
         ) : (
           <li key={p.id} className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
             <span className={cn('rounded-full ring-2 transition-[box-shadow]', speaking ? 'ring-[#34c759] shadow-[0_0_0_4px_rgb(52_199_89/0.25)]' : 'ring-transparent')}>
-              <Avatar name={p.name} size={30} className="ring-1 ring-white/25" />
+              <Avatar name={p.name} userId={p.id} size={30} className="ring-1 ring-white/25" />
             </span>
             <span className="min-w-0 flex-1 truncate text-[14px]">{me ? 'You' : p.name}</span>
             <span className="shrink-0 text-[12px] text-white/60">{state}</span>
@@ -254,7 +254,7 @@ function ActivePanel({ a, meId, phone }: { a: ActiveCall; meId: string | null; p
           {group ? (
             <span className="flex size-[96px] items-center justify-center rounded-full bg-white/15"><Users className="size-11" /></span>
           ) : (
-            <Avatar name={people[0]?.name ?? '?'} size={96} className="ring-4 ring-white/15" />
+            <Avatar name={people[0]?.name ?? '?'} userId={people.length === 1 ? people[0]?.id : null} size={96} className="ring-4 ring-white/15" />
           )}
         </span>
         <p className="mt-4 max-w-full truncate text-[30px] leading-[38px] font-normal tracking-[-0.02em]" data-testid="call-title">{callName(c, meId)}</p>
@@ -303,7 +303,7 @@ function ActivePanel({ a, meId, phone }: { a: ActiveCall; meId: string | null; p
         {group ? (
           <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-white/15"><Users className="size-5" /></span>
         ) : (
-          <Avatar name={people[0]?.name ?? '?'} size={44} className="ring-2 ring-white/20" />
+          <Avatar name={people[0]?.name ?? '?'} userId={people.length === 1 ? people[0]?.id : null} size={44} className="ring-2 ring-white/20" />
         )}
         <div className="min-w-0 flex-1">
           <p className="truncate text-[17px] font-semibold" data-testid="call-title">{callName(c, meId)}</p>
@@ -434,7 +434,7 @@ function AddPeopleDialog({ open, onClose, exclude, room }: { open: boolean; onCl
               data-testid="call-add-person"
             >
               <span className="relative">
-                <Avatar name={p.name} size={34} />
+                <Avatar name={p.name} userId={p.id} size={34} />
                 <PresenceDot presence={p.presence} className="absolute -right-0.5 -bottom-0.5 size-2.5" />
               </span>
               <span className="min-w-0 flex-1">

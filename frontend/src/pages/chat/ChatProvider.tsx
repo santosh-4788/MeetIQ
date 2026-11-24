@@ -4,6 +4,7 @@ import { API_BASE } from '../../config'
 import { useAuth } from '../../auth/AuthContext'
 import { chatApi, type ChatMessage, type ChatPreferences, type ChatStatus } from '../../api/chat'
 import { silenced } from './quiet'
+import { loadPhotos, setPhoto } from '../../lib/photos'
 
 // One live connection per tab for Chat (SignalR, /api/v1/hubs/chat), mounted in the app layout so the menu badge and pushes work
 // on every page. Does nothing at all unless the user has chat.use and the CHAT switch is on (the API answers enabled:false).
@@ -32,7 +33,7 @@ type ChatContextValue = {
 
 const ChatContext = createContext<ChatContextValue | null>(null)
 
-const EVENTS = ['message.new', 'message.updated', 'conversation.added', 'conversation.updated', 'conversation.removed', 'conversation.changed',
+const EVENTS = ['photo.changed', 'message.new', 'message.updated', 'conversation.added', 'conversation.updated', 'conversation.removed', 'conversation.changed',
   'receipt', 'presence', 'typing', 'preferences', 'call.incoming', 'call.updated', 'call.ended', 'notification.new', 'reminder.due', 'reminder.updated',
   'scheduled.updated', 'pins.updated', 'task.changed', 'note.changed']
 
@@ -209,6 +210,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [enabled, meId, refreshStatus])
 
   const on = useCallback(<T,>(event: string, handler: (payload: T) => void) => onEvent(handlers.current, event, handler), [])
+  // Profile pictures (24 Nov 2026): someone changed theirs; after a reconnect, reload the list (a change may have been missed).
+  useEffect(() => {
+    const offs = [
+      onEvent<{ id: string; emp: string | null; v: string | null }>(handlers.current, 'photo.changed', (p) => p?.id && setPhoto(p.id, p.emp, p.v ?? null)),
+      onEvent(handlers.current, 'reconnected', () => void loadPhotos(true)),
+    ]
+    return () => offs.forEach((o) => o())
+  }, [])
   const signal = useCallback((method: 'Typing' | 'Delivered', ...args: unknown[]) => {
     const c = hub.current
     if (c?.state === 'Connected') void c.invoke(method, ...args).catch(() => {})

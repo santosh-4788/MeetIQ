@@ -83,7 +83,7 @@ export function MentionsList({ onOpen }: { onOpen: (conversationId: string, seq:
         {items?.map((m) => (
           <li key={m.id} className="pl-4">
             <button type="button" onClick={() => onOpen(m.conversationId, m.seq)} className="ios-pressable flex w-full items-center gap-3 text-left" data-testid="mention-item">
-              <span className="py-2"><Avatar name={m.senderName ?? '?'} size={40} /></span>
+              <span className="py-2"><Avatar name={m.senderName ?? '?'} userId={m.senderId} size={40} /></span>
               <span className="ios-sep-top flex min-w-0 flex-1 flex-col self-stretch py-2.5 pr-4">
                 <span className="flex justify-between gap-2 text-[13px] text-[var(--ios-gray)]">
                   <span className="truncate font-semibold text-[var(--ios-label)]">{m.senderName} · {m.conversationTitle}</span>

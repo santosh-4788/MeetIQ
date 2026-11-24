@@ -227,7 +227,10 @@ public sealed class PresenceService(PresenceTracker tracker)
         foreach (var id in ids)
         {
             prefs.TryGetValue(id, out var p);
-            if (tracker.IsOnline(id))
+            // "Appear offline" (V034): everyone else sees plain Offline, with no last seen and no in-call / in-meeting.
+            if (p?.Availability == "APPEAR_OFFLINE" && id != viewerUserId)
+                result[id] = new PresenceDto("OFFLINE", null);
+            else if (tracker.IsOnline(id))
                 result[id] = new PresenceDto(inCall.Contains(id) ? "IN_CALL" : inMeeting.Contains(id) ? "IN_MEETING" : p?.Availability ?? "AVAILABLE", null);
             else
                 result[id] = new PresenceDto("OFFLINE", viewerShows && (p?.ShowLastSeen ?? true) ? p?.LastSeenUtc : null);
@@ -241,6 +244,7 @@ public sealed class PresenceService(PresenceTracker tracker)
         var p = await c.QuerySingleOrDefaultAsync<PrefRow>(
             "SELECT UserId, Availability, ShowLastSeen, LastSeenUtc FROM chat.MST_ChatUserPreference WHERE UserId = @userId", new { userId });
         var online = tracker.IsOnline(userId);
+        if (p?.Availability == "APPEAR_OFFLINE") return new { userId = publicId, state = "OFFLINE", lastSeenUtc = (DateTime?)null };
         return new
         {
             userId = publicId,

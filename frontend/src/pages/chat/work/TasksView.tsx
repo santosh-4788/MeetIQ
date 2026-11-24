@@ -84,7 +84,7 @@ export function TaskRow({ t, onToggle, onOpen, compact, onFocus }: { t: Task; on
     <div className={cn('flex items-start gap-3 pl-4 transition-opacity', (done || t.status === 'CANCELLED') && 'opacity-60')} data-testid="task-row">
       <span className="pt-[11px]">
         {assigner ? (
-          <button type="button" onClick={onOpen} aria-label={`Open ${t.title}`} className="block rounded-full"><Avatar name={t.owner.name ?? '?'} size={26} /></button>
+          <button type="button" onClick={onOpen} aria-label={`Open ${t.title}`} className="block rounded-full"><Avatar name={t.owner.name ?? '?'} userId={t.owner.id} size={26} /></button>
         ) : t.status === 'IN_REVIEW' ? (
           <button type="button" onClick={onOpen} aria-label={`${t.title}: waiting for review`} className="flex size-[26px] items-center justify-center rounded-full bg-[var(--ios-purple)]/12 text-[var(--ios-purple)]"><ShieldCheck className="size-[15px]" /></button>
         ) : (

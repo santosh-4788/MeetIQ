@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Camera, Check, Crown, FileText, LogOut, Pencil, Search, ShieldMinus, ShieldPlus, Trash2, UserMinus, UserPlus, Users, X } from 'lucide-react'
+import { Camera, Check, Crown, LogOut, Pencil, Search, ShieldMinus, ShieldPlus, Trash2, UserMinus, UserPlus, Users, X } from 'lucide-react'
+import { SharedFiles } from './SharedFiles'
 import { chatApi, fileUrl, uploadFile, type ChatMember, type ChatMessage, type ChatPerson, type Conversation, type Presence } from '../../api/chat'
 import { errorMessage } from '../../api/types'
 import { Avatar } from '../../components/ui/Avatar'
@@ -7,7 +8,7 @@ import { Button } from '../../components/ui/Button'
 import { ConfirmDialog, Dialog } from '../../components/ui/Overlay'
 import { useToast } from '../../components/ui/Toast'
 import { cn } from '../../lib/cn'
-import { fileSize, listTime, presenceColor, presenceLabel, presenceText } from './chatUtils'
+import { presenceColor, presenceLabel, presenceText } from './chatUtils'
 
 export function PresenceDot({ presence, className }: { presence: Presence | null | undefined; className?: string }) {
   if (!presence) return null
@@ -34,7 +35,7 @@ export function ConversationAvatar({ c, size = 44 }: { c: Pick<Conversation, 'ty
     )
   return (
     <span className="relative inline-flex shrink-0">
-      <Avatar name={c.name || '?'} size={size} />
+      <Avatar name={c.name || '?'} userId={c.type === 'DIRECT' ? c.other?.id : null} size={size} />
       <PresenceDot presence={c.other?.presence} className="absolute right-0 bottom-0" />
     </span>
   )
@@ -71,7 +72,7 @@ function PersonRow({ p, onClick, selected, right }: { p: ChatPerson; onClick: ()
       data-testid="chat-person"
     >
       <span className="relative">
-        <Avatar name={p.name} size={36} />
+        <Avatar name={p.name} userId={p.id} size={36} />
         <PresenceDot presence={p.presence} className="absolute -right-0.5 -bottom-0.5 size-2.5" />
       </span>
       <span className="min-w-0 flex-1">
@@ -310,7 +311,6 @@ export function InfoPanel({
   const [adding, setAdding] = useState(false)
   const [toAdd, setToAdd] = useState<ChatPerson[]>([])
   const [confirm, setConfirm] = useState<{ kind: 'remove' | 'leave'; member?: ChatMember } | null>(null)
-  const [files, setFiles] = useState<ChatMessage[] | null>(null)
   const imageInput = useRef<HTMLInputElement>(null)
   const other = conversation.other
 
@@ -318,13 +318,6 @@ export function InfoPanel({
     setName(conversation.name)
     setDescription(conversation.description ?? '')
   }, [conversation.name, conversation.description])
-  useEffect(() => {
-    let cancelled = false
-    chatApi.search({ conversationId: conversation.id, files: true }).then((r) => !cancelled && setFiles(r.items), () => !cancelled && setFiles([]))
-    return () => {
-      cancelled = true
-    }
-  }, [conversation.id, conversation.lastMessage?.seq])
 
   const sorted = useMemo(() => [...members].sort((a, b) => (a.me ? -1 : b.me ? 1 : 0)), [members])
   const act = (p: Promise<unknown>, ok?: string) =>
@@ -427,7 +420,7 @@ export function InfoPanel({
               {sorted.map((m) => (
                 <li key={m.id} className="group/m flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-surface-muted">
                   <button type="button" className="relative" onClick={() => !m.me && onOpenDirect(m.id)} aria-label={m.me ? 'You' : `Message ${m.name}`}>
-                    <Avatar name={m.name} size={34} />
+                    <Avatar name={m.name} userId={m.id} size={34} />
                     <PresenceDot presence={m.presence} className="absolute -right-0.5 -bottom-0.5 size-2.5" />
                   </button>
                   <span className="min-w-0 flex-1">
@@ -459,28 +452,7 @@ export function InfoPanel({
           </section>
         )}
 
-        <section className="mx-4 mb-4 rounded-xl bg-white px-2 py-2">
-          <p className="mb-1 px-2 text-[13px] tracking-[0.01em] text-[var(--ios-label2)] uppercase">Files</p>
-          {files === null ? (
-            <p className="px-2 py-2 text-[12.5px] text-ink-muted">Loading…</p>
-          ) : files.length === 0 ? (
-            <p className="px-2 py-2 text-[12.5px] text-ink-muted">No files shared yet.</p>
-          ) : (
-            <ul>
-              {files.slice(0, 12).map((f) => (
-                <li key={f.id}>
-                  <button type="button" onClick={() => onJump(f.seq)} className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-surface-muted">
-                    <FileText className="size-4 shrink-0 text-brand-600" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px] text-ink">{f.file?.name}</span>
-                      <span className="block text-[11.5px] text-ink-muted">{f.file ? fileSize(f.file.size) : ''} · {f.senderName} · {listTime(f.createdUtc)}</span>
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        <SharedFiles conversationId={conversation.id} refreshKey={conversation.lastMessage?.seq} onJump={onJump} />
 
         {isGroup && me && (
           <section className="border-t border-line p-3">

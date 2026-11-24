@@ -103,7 +103,7 @@ export function EmployeePicker({
       </label>
       {value && !clearOnSelect ? (
         <div className={cn('flex h-11 items-center gap-2.5 rounded-sm border bg-surface pr-1.5 pl-2.5', error ? 'border-danger/70' : 'border-line')}>
-          <Avatar name={value.displayName} size={26} />
+          <Avatar name={value.displayName} userId={value.id} size={26} />
           <span className="min-w-0 flex-1 truncate text-sm text-ink">
             {value.displayName}
             {value.employeeCode && <span className="ml-1.5 text-[12px] text-ink-secondary">{value.employeeCode}</span>}
@@ -172,7 +172,7 @@ export function EmployeePicker({
                 onPointerEnter={() => setActive(i)}
                 className={cn('flex cursor-pointer items-center gap-2.5 rounded-sm px-2.5 py-2', i === active && 'bg-canvas')}
               >
-                <Avatar name={e.displayName} size={28} />
+                <Avatar name={e.displayName} userId={e.id} size={28} />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[13px] font-semibold text-ink">{e.displayName}</span>
                   <span className="block truncate text-[11.5px] text-ink-secondary">

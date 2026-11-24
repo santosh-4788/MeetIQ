@@ -201,6 +201,7 @@ var api = app.MapGroup("/api/v1");
 api.MapAuthEndpoints();
 api.MapDailyLogoutEndpoints();
 api.MapAccountEndpoints();
+api.MapProfilePhotoEndpoints();
 api.MapOrgEndpoints();
 api.MapEmployeeEndpoints();
 api.MapUserAdminEndpoints();

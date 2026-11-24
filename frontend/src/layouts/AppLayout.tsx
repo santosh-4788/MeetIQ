@@ -6,6 +6,7 @@ import { Header } from './Header'
 import { MobileTabBar } from './MobileTabBar'
 import { Sidebar } from './Sidebar'
 import { ChatProvider } from '../pages/chat/ChatProvider'
+import { loadPhotos } from '../lib/photos'
 import { CallProvider } from '../pages/chat/CallProvider'
 import { ReminderGate } from '../pages/chat/ReminderGate'
 
@@ -21,8 +22,10 @@ export function AppLayout() {
   })
   const [drawer, setDrawer] = useState(false)
   const { pathname } = useLocation()
+  const chatWide = pathname === '/chat'
 
   useEffect(() => setDrawer(false), [pathname])
+  useEffect(() => void loadPhotos(), []) // profile pictures for every avatar (24 Nov 2026)
   useEffect(() => {
     try {
       localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0')
@@ -77,8 +80,9 @@ export function AppLayout() {
       <div className="flex min-w-0 flex-1 flex-col">
         <Header onOpenMenu={() => setDrawer(true)} />
         {/* Phones: room at the bottom for the tab bar (+ the iOS home indicator). */}
-        <main className="oic-main flex-1 px-4 py-5 sm:px-6 sm:py-6">
-          <motion.div key={pathname} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }} className="mx-auto max-w-[1440px]">
+        {/* Chat (24 Nov 2026): on computers the workspace uses the whole window with a 10 px margin. */}
+        <main className={cn('oic-main flex-1 px-4 py-5 sm:px-6 sm:py-6', chatWide && 'oic-main-chat md:!p-2.5')}>
+          <motion.div key={pathname} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }} className={cn('mx-auto max-w-[1440px]', chatWide && 'md:max-w-none')}>
             <Outlet />
           </motion.div>
         </main>

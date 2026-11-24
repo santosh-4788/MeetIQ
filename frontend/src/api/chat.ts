@@ -4,9 +4,9 @@ import { ApiError } from './types'
 
 // Chat (V028, documentation/CHAT_MODULE_PHASE1.md). Ids are the server's public ids; `seq` orders messages within a conversation.
 
-export type PresenceState = 'OFFLINE' | 'AVAILABLE' | 'BUSY' | 'DND' | 'AWAY' | 'IN_MEETING' | 'IN_CALL'
+export type PresenceState = 'OFFLINE' | 'AVAILABLE' | 'BUSY' | 'DND' | 'AWAY' | 'BRB' | 'IN_MEETING' | 'IN_CALL'
 export type Presence = { state: PresenceState; lastSeenUtc: string | null }
-export type Availability = 'AVAILABLE' | 'BUSY' | 'DND' | 'AWAY'
+export type Availability = 'AVAILABLE' | 'BUSY' | 'DND' | 'AWAY' | 'BRB' | 'APPEAR_OFFLINE'
 
 export type ChatPerson = { id: string; name: string; code: string | null; department: string | null; designation: string | null; presence: Presence | null }
 

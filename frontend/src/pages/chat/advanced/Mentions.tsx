@@ -42,7 +42,7 @@ export function MentionPicker({ options, onPick, active }: { options: MentionOpt
           {o.all ? (
             <span className="flex size-8 items-center justify-center rounded-full bg-[var(--ios-blue)] text-white"><Users className="size-4" /></span>
           ) : (
-            <Avatar name={o.name} size={32} />
+            <Avatar name={o.name} userId={o.id} size={32} />
           )}
           <span className="min-w-0 text-left">
             <span className="block truncate text-[15px] font-medium">{o.all ? '@all' : o.name}</span>

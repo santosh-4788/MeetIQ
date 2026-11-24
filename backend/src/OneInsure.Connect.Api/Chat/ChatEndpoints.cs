@@ -422,8 +422,8 @@ public static class ChatEndpoints
         if (me is null) return error!;
         var availability = input.Availability?.Trim().ToUpperInvariant();
         var pv = new Validator();
-        if (availability is not null and not ("AVAILABLE" or "BUSY" or "DND" or "AWAY"))
-            pv.Add("availability", "Choose Available, Busy, Do not disturb or Away.");
+        if (availability is not null and not ("AVAILABLE" or "BUSY" or "DND" or "AWAY" or "BRB" or "APPEAR_OFFLINE"))
+            pv.Add("availability", "Choose Available, Busy, Do not disturb, Be right back, Away or Appear offline.");
         var quiet = await ChatAdvancedEndpoints.AdvancedEnabledAsync(c, s.Cache) ? ChatAdvancedEndpoints.ParseQuiet(input, pv) : null;
         if (!pv.IsValid) return pv.Problem();
         await c.ExecuteAsync("""

@@ -32,7 +32,7 @@ function describe(c: Call, meId: string | null) {
       : declined ? 'Declined'
         : outgoing && !c.answeredUtc ? (c.endReason === 'BUSY' ? 'Busy' : c.status === 'DECLINED' ? 'Declined' : 'No answer')
           : d ?? 'Ended'
-  return { name, outgoing, missed: missed || declined, what, group: c.type === 'GROUP' || !!c.title }
+  return { name, id: others.length === 1 && !c.title ? others[0].id : null, outgoing, missed: missed || declined, what, group: c.type === 'GROUP' || !!c.title }
 }
 
 /** Calls tab of the Chat workspace: history, search, call again, open the chat. */
@@ -96,7 +96,7 @@ export function CallHistory({ onOpenChat }: { onOpenChat: (conversationId: strin
                   {d.group ? (
                     <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-b from-[#5ac8fa] to-[#007aff] text-white"><Users className="size-5" /></span>
                   ) : (
-                    <Avatar name={d.name} size={40} />
+                    <Avatar name={d.name} userId={d.id} size={40} />
                   )}
                 </span>
                 <span className="ios-sep-top flex min-w-0 flex-1 items-center gap-1 self-stretch py-2 pr-2">

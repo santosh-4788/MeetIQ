@@ -130,7 +130,7 @@ export function EmployeeDetailDrawer({
       ) : (
         <div className="flex flex-col gap-6">
           <div className="flex items-start gap-4">
-            <Avatar name={e.displayName} size={56} />
+            <Avatar name={e.displayName} userId={e.id} size={56} />
             <div className="min-w-0">
               <p className="text-[18px] leading-[26px] font-semibold text-ink">{e.displayName}</p>
               <p className="text-[13px] text-ink-secondary">{e.designation} · {e.department}</p>
